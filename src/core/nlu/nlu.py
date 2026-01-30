@@ -52,7 +52,7 @@ class ReceiptData:
     expected_pay_date: Optional[str] = None
     penalty_rate: Optional[str] = None
 
-class LebeNLUSystem:
+class AubobusNLUSystem:
     def __init__(self):
         self.intent_detector = IntentDetector()
         self.slot_manager = SlotManager()

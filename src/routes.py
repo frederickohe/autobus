@@ -28,8 +28,8 @@ def validate_token(authjwt: AuthJWT = Depends()):
 @base_routes.get("/")
 def home():
     return {
-        "message": "Welcome to Lebe Backend!",
-        "description": "API backend for Lebe Financial Assistant Platform.",
+        "message": "Welcome to Aubobus Backend!",
+        "description": "API backend for Aubobus Financial Assistant Platform.",
         "default endpoints": [
             "Authentication",
             "File / Document Management",

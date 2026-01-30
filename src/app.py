@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.SERVICE_NAME,
     version="1.0",
-    description="""**Lebe Core API** An AI focused app infrastructure deployed with python.
+    description="""**Aubobus Core API** An AI focused app infrastructure deployed with python.
 
     Default Endpoints:
     - Authentication
@@ -64,8 +64,8 @@ app = FastAPI(
     """,
     contact={
         "name": "API Support",
-        "url": "http://support@lebe.com",
-        "email": "mail@lebe.com",
+        "url": "http://support@aubobus.com",
+        "email": "mail@aubobus.com",
     },
     license_info={
         "name": "MIT",

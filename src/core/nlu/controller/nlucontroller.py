@@ -5,7 +5,7 @@ from typing import Dict, Any
 import logging
 from core.auth.service.authservice import AuthService
 from core.nlu.dto.reponse.nluresponse import NLUResponse
-from core.nlu.nlu import LebeNLUSystem
+from core.nlu.nlu import AubobusNLUSystem
 from core.nlu.dto.request.nlurequest import NLURequest
 from core.subscription.dto import request
 from core.subscription.service.subscription_service import SubscriptionService
@@ -23,7 +23,7 @@ def get_db():
         db.close()
 
 # Initialize NLU system
-nlu_system = LebeNLUSystem()
+nlu_system = AubobusNLUSystem()
 
 nlu_routes = APIRouter()
 
@@ -141,6 +141,6 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "service": "Lebe NLU System",
+        "service": "Aubobus NLU System",
         "timestamp": f"{datetime.datetime.utcnow().isoformat()}Z"
     }

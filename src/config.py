@@ -4,7 +4,7 @@ import os
 
 
 class Settings(BaseSettings):
-    SERVICE_NAME: str = "Lebe Backend"
+    SERVICE_NAME: str = "Aubobus Backend"
     DEBUG: bool = True
 
     DB_DRIVER: str = "postgresql+asyncpg"

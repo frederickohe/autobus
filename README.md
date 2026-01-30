@@ -11,8 +11,8 @@ This project is a project aimed at [brief project description]. This README prov
 
 1. **Clone the repository:**
     ```sh
-    git clone git clone git@bitbucket.org:LogicielEngineer/lebe-backend.git
-    cd lebe-backend
+    git clone git clone git@bitbucket.org:LogicielEngineer/autobus-backend.git
+    cd autobus-backend
     ```
 
 2. **Create a virtual environment:**
