@@ -95,7 +95,7 @@ services:
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
 
       # Language Model API Key
-      LANGUAGE_MODEL_API_KEY: ${LANGUAGE_MODEL_API_KEY:-your-api-key-here}
+      OPEN_API_KEY: ${OPEN_API_KEY:-your-api-key-here}
       
     
     ports:
