@@ -35,7 +35,8 @@ if not url:
 	sys.exit(2)
 
 try:
-	create_engine(url, connect_args={'timeout': 5}).connect()
+	# Use libpq/psycopg2's connect_timeout (seconds) for a short TCP connect timeout
+	create_engine(url, connect_args={'connect_timeout': 5}).connect()
 	print('✓ Database is ready')
 	sys.exit(0)
 except Exception as e:
