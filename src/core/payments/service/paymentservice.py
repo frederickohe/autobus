@@ -1223,7 +1223,7 @@ class PaymentService:
         """
         import os
         from core.webhooks.service.whatsapp_service import WhatsAppService
-        from core.nlu.nlu import AubobusNLUSystem
+        from core.nlu.nlu import AutobusNLUSystem
         from utilities.phone_utils import normalize_ghana_phone_number
 
         try:
@@ -1249,7 +1249,7 @@ class PaymentService:
                 if should_send_receipt_image:
                     try:
                         # Use NLU's receipt generation method
-                        nlu_system = AubobusNLUSystem()
+                        nlu_system = AutobusNLUSystem()
                         receipt_url = nlu_system.generate_receipt_after_payment(
                             transaction_id=payment.transaction_id,
                             user_id=payment.sender_phone,

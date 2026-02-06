@@ -17,7 +17,7 @@ class ReceiptGenerator:
             os.makedirs(self.assets_dir)
             logger.warning(f"Created assets directory at: {self.assets_dir}")
 
-        self.logo = self._load_icon("aubobus_logo.png")
+        self.logo = self._load_icon("autobus_logo.png")
         self.success_icon = self._load_icon("success_icon.png")
         self.failed_icon = self._load_icon("failed_icon.png")
 
@@ -259,7 +259,7 @@ class ReceiptGenerator:
         #   BOTTOM FOOTER TEXT
         # -----------------------------------------
         draw.text((WIDTH // 2, HEIGHT - 80),
-                  "This payment was made with Aubobus",
+                  "This payment was made with Autobus",
                   anchor="mm",
                   fill=label,
                   font=small_fnt)
@@ -450,7 +450,7 @@ class ReceiptGenerator:
         #   BOTTOM FOOTER TEXT
         # -----------------------------------------
         draw.text((width // 2, height - 80),
-                  "Manage your loan in the Aubobus app!",
+                  "Manage your loan in the Autobus app!",
                   anchor="mm",
                   fill=gray_text,
                   font=small_font)

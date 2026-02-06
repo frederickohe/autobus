@@ -93,6 +93,10 @@ services:
       
       # Auto Migration Flag
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+
+      # Language Model API Key
+      LANGUAGE_MODEL_API_KEY: ${LANGUAGE_MODEL_API_KEY:-your-api-key-here}
+      
     
     ports:
       - "8000:8000"

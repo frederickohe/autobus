@@ -1,5 +1,5 @@
 from pydantic import BaseModel
 
 
-class AubobusResponse(BaseModel):
+class AutobusResponse(BaseModel):
     message: str

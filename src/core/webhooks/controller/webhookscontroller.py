@@ -12,14 +12,14 @@ from sqlalchemy.orm import Session
 import logging
 import os
 from core.user.model.User import User
-from core.nlu.nlu import AubobusNLUSystem
+from core.nlu.nlu import AutobusNLUSystem
 from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
 from utilities.phone_utils import normalize_ghana_phone_number
 
 # DTO Models
 from core.notification.dto.response.message_response import MessageResponse
-from core.webhooks.dto.response.message_response import AubobusResponse
+from core.webhooks.dto.response.message_response import AutobusResponse
 
 from fastapi_jwt_auth.exceptions import MissingTokenError
 from core.auth.service.authservice import AuthService
@@ -258,7 +258,7 @@ def handle_text_message(message: dict, phone: str, phone_number_id: str, db: Ses
         logger.info(f"Existing user detected: {phone}. Processing message through NLU.")
 
         # Initialize NLU system and subscription service
-        nlu_system = AubobusNLUSystem()
+        nlu_system = AutobusNLUSystem()
         subscription_service = SubscriptionService(db)
 
         # Get user subscription status
@@ -390,7 +390,7 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
             whatsapp_service.send_message(
                 phone_number_id=phone_number_id,
                 recipient_phone=phone,
-                message_text=f"🎉 Welcome {first_name}! Your registration is complete. You can now start using Aubobus."
+                message_text=f"🎉 Welcome {first_name}! Your registration is complete. You can now start using Autobus."
             )
 
         except Exception as e:
@@ -512,7 +512,7 @@ def handle_image_message(message: dict, phone: str, phone_number_id: str, db: Se
             logger.info(f"Processing image for existing user: {phone}")
             
             # Initialize NLU system
-            nlu_system = AubobusNLUSystem()
+            nlu_system = AutobusNLUSystem()
             subscription_service = SubscriptionService(db)
             
             # Get user subscription status
@@ -602,7 +602,7 @@ def handle_audio_message(message: dict, phone: str, phone_number_id: str, db: Se
             logger.info(f"Processing audio for existing user: {phone}")
             
             # Initialize NLU system
-            nlu_system = AubobusNLUSystem()
+            nlu_system = AutobusNLUSystem()
             subscription_service = SubscriptionService(db)
             
             # Get user subscription status
