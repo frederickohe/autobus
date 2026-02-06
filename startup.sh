@@ -15,7 +15,7 @@ import os,sys
 from sqlalchemy import create_engine
 
 # Build database URL from environment variables
-db_driver = os.environ.get('DB_DRIVER', 'postgresql+asyncpg')
+db_driver = os.environ.get('DB_DRIVER', 'postgresql+psycopg2')
 db_user = os.environ.get('PGUSER', 'autobusadmin')
 db_password = os.environ.get('PGPASSWORD', 'autobus098')
 db_host = os.environ.get('PGHOST', 'db')
@@ -24,16 +24,18 @@ db_name = os.environ.get('PGDATABASE', 'autobus')
 
 url = f'{db_driver}://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}'
 
-# Fallback to SQLALCHEMY_DATABASE_URL if available
+# Fallback to SQLALCHEMY_DATABASE_URL if available - but convert to sync driver for health check
 if os.environ.get('SQLALCHEMY_DATABASE_URL'):
 	url = os.environ.get('SQLALCHEMY_DATABASE_URL')
+	# Replace async drivers with sync equivalents for the health check
+	url = url.replace('postgresql+asyncpg', 'postgresql+psycopg2')
 
 if not url:
 	print('ERROR: No database URL configured')
 	sys.exit(2)
 
 try:
-	create_engine(url).connect()
+	create_engine(url, connect_args={'timeout': 5}).connect()
 	print('✓ Database is ready')
 	sys.exit(0)
 except Exception as e:

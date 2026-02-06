@@ -892,16 +892,21 @@ class AubobusNLUSystem:
             date_str = timestamp.strftime("%Y%m%d_%H%M%S")
             filename = f"receipts/{date_str}_{user_id}_{transaction_id}.png"
             
-            # Upload to Azure Blob Storage
+            # Upload to Azure Blob Storage (if enabled)
             storage_service = StorageService()
-            blob_url = storage_service.upload_file(
-                file_obj=image_file,
-                file_name=filename,
-                content_type="image/png"
-            )
+            if storage_service.enabled:
+                blob_url = storage_service.upload_file(
+                    file_obj=image_file,
+                    file_name=filename,
+                    content_type="image/png"
+                )
+                if blob_url:
+                    logger.info(f"[RECEIPT] Receipt saved to Azure Storage: {blob_url}")
+                    return blob_url
             
-            logger.info(f"[RECEIPT] Receipt saved to Azure Storage: {blob_url}")
-            return blob_url
+            # If storage is disabled or upload failed, return empty string
+            logger.info(f"[RECEIPT] Receipt generation complete, but storage is not available")
+            return ""
 
         except Exception as e:
             logger.error(f"[RECEIPT] Error generating/saving receipt: {str(e)}")

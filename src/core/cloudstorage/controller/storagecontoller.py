@@ -43,6 +43,8 @@ async def upload_file(file: UploadFile, authjwt: AuthJWT = Depends(validate_toke
         file.filename,
         content_type=file.content_type
     )
+    if not url:
+        raise HTTPException(status_code=503, detail="Storage service is not available")
     return FileDTO(file_name=file.filename, file_url=url)
 
 @storage_routes.get("/download/{file_name}")
