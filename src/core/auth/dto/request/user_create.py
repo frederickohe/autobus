@@ -1,18 +1,38 @@
-from datetime import datetime
-from typing import Optional
+from datetime import date, datetime
+from typing import List, Optional
 from pydantic import BaseModel, EmailStr, Field, validator
 
-class UserCreateRequest(BaseModel):
-    email: EmailStr
-    pin: str = Field(..., min_length=1, max_length=5)
-    first_name: str = Field(..., min_length=1, max_length=50)
-    last_name: str = Field(..., min_length=1, max_length=50)
-    username: str = Field(..., min_length=1, max_length=50)
-    phone: Optional[str] = Field(None, min_length=10, max_length=15)
-    age: Optional[int] = Field(None, ge=0)
-    income_level: Optional[str] = Field(None, max_length=100)
-    occupation: Optional[str] = Field(None, max_length=100)
-    location: Optional[str] = Field(None, max_length=100)
-    financial_goals: Optional[str] = Field(None, max_length=255)
-    risk_tolerance: Optional[str] = Field(None, max_length=100)
+class UserCreateRequest(BaseModel):  
+    fullname: str
+    email: str
+    phone_number: Optional[str] = None
+    profile_picture_url: Optional[str] = None
+    password: str = Field(..., min_length=8)
+    
+    # Personal Information
+    nationality: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
+    
+    # Membership Information
+    company: Optional[str] = None
+    current_branch: Optional[str] = None
+    staff_id: Optional[str] = None
+    
+    # Connection Information
+    facebook_url: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    twitter_url: Optional[str] = None
+    instagram_url: Optional[str] = None
+    
+    # Notification Preferences
+    profile_sharing: Optional[bool] = None
+    in_app_notification: Optional[bool] = None
+    sms_notification: Optional[bool] = None
+    
+    # Timestamps
+    created_at: datetime
+
     

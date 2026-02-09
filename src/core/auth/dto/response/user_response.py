@@ -1,18 +1,18 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 
-
 class UserResponse(BaseModel):
-    id: int
-    email: EmailStr
-    first_name: str
-    last_name: str
-    phone: Optional[str]
-    profile_picture: Optional[str]
-    bio: Optional[str]
-    created_at: datetime
-    status: str
+    id: str
+    fullname: str
+    email: str
+    phone_number: Optional[str] = None
+    
+    # Personal Information
+    nationality: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[str] = None
+    address: Optional[str] = None
     
     class Config:
         from_attributes = True  # For ORM compatibility

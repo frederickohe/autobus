@@ -154,7 +154,6 @@ def upgrade():
     sa.Column('date_of_birth', sa.DateTime(), nullable=True),
     sa.Column('age', sa.Integer(), nullable=True),
     sa.Column('income_level', sa.String(), nullable=True),
-    sa.Column('occupation', sa.String(), nullable=True),
     sa.Column('location', sa.String(), nullable=True),
     sa.Column('financial_goals', sa.String(), nullable=True),
     sa.Column('risk_tolerance', sa.String(), nullable=True),
