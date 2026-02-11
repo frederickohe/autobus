@@ -1,14 +1,16 @@
-from sqlalchemy import Column, String, DateTime, Text, Float, JSON
+from sqlalchemy import Column, String, DateTime, Text, Float, JSON, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship, Mapped
 import uuid
 from datetime import datetime
+from typing import Optional
 from utilities.dbconfig import Base
 
 class History(Base):
     __tablename__ = "histories"
     
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(String, nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     intent = Column(String, nullable=False)  # e.g., "send_money", "buy_airtime"
     transaction_type = Column(String, nullable=False)  # "debit", "credit"
     amount = Column(Float, nullable=True)
@@ -22,6 +24,9 @@ class History(Base):
     transaction_metadata = Column(JSON, nullable=True)  # Additional transaction data
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship back to User
+    user = relationship("User", back_populates="financial_records")
     
     def to_dict(self):
         return {

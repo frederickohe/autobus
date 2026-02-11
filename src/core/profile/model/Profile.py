@@ -35,8 +35,5 @@ class Profile(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     
-    # Relationship back to User
-    user: Mapped["User"] = relationship("User", back_populates="profile")
-    
     def __repr__(self):
         return f"<Profile(id={self.id}, name={self.name}, category={self.category})>"

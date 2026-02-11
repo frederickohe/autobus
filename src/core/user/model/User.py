@@ -116,57 +116,6 @@ class User(Base):
         lazy="dynamic"  # Using dynamic loading for potentially large collections
     )
     
-    # News Posts relationship (one-to-many) - for admins who post news
-    news_posts: Mapped[List["News"]] = relationship(
-        "News",
-        back_populates="admin",
-        cascade="all, delete-orphan",
-        lazy="dynamic"  # Using dynamic loading for potentially large collections
-    )
-    
-    # Forms created by admin (one-to-many)
-    created_forms: Mapped[List["Form"]] = relationship(
-        "Form",
-        foreign_keys="Form.admin_id",
-        back_populates="admin",
-        cascade="all, delete-orphan",
-        lazy="dynamic"
-    )
-    
-    # Forms assigned to user (one-to-many)
-    assigned_forms: Mapped[List["Form"]] = relationship(
-        "Form",
-        foreign_keys="Form.assigned_user_id",
-        back_populates="assigned_user",
-        cascade="all, delete-orphan",
-        lazy="dynamic"
-    )
-    
-    # Form responses submitted by user (one-to-many)
-    form_responses: Mapped[List["FormResponse"]] = relationship(
-        "FormResponse",
-        back_populates="user",
-        cascade="all, delete-orphan",
-        lazy="dynamic"
-    )
-    
-    # Programs created by user (admin) (one-to-many)
-    created_programs: Mapped[List["Program"]] = relationship(
-        "Program",
-        foreign_keys="Program.created_by",
-        back_populates="creator",
-        cascade="all, delete-orphan",
-        lazy="dynamic"
-    )
-    
-    # Programs user is participating in (many-to-many)
-    participating_programs: Mapped[List["Program"]] = relationship(
-        "Program",
-        secondary="program_participants",
-        back_populates="participants",
-        lazy="dynamic"
-    )
-
     # For security/authentication purposes
     @property
     def password(self):
