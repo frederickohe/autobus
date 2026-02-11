@@ -55,7 +55,7 @@ services:
       PGDATABASE: ${PGDATABASE:-autobus}
       
       # SQLAlchemy Database URL (legacy support)
-      SQLALCHEMY_DATABASE_URL: ${SQLALCHEMY_DATABASE_URL:-postgresql+asyncpg://autobusadmin:autobus098@db:5432/autobus}
+      SQLALCHEMY_DATABASE_URL: "postgresql://autobusadmin:autobus098@db:5432/autobus"
       
       # Redis Configuration
       REDIS_HOST: ${REDIS_HOST:-redis}
