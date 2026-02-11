@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-revision = '07a18bded9e1'
+revision = '09a616ada284'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -177,7 +177,7 @@ def upgrade():
     op.create_index(op.f('ix_beneficiaries_id'), 'beneficiaries', ['id'], unique=False)
     op.create_table('histories',
     sa.Column('id', sa.UUID(), nullable=False),
-    sa.Column('user_id', sa.String(length=20), nullable=False),
+    sa.Column('user_id', sa.String(), nullable=False),
     sa.Column('intent', sa.String(), nullable=False),
     sa.Column('transaction_type', sa.String(), nullable=False),
     sa.Column('amount', sa.Float(), nullable=True),
@@ -191,7 +191,7 @@ def upgrade():
     sa.Column('transaction_metadata', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.DateTime(), nullable=True),
     sa.Column('updated_at', sa.DateTime(), nullable=True),
-    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_histories_user_id'), 'histories', ['user_id'], unique=False)
