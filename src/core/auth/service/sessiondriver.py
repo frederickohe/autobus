@@ -18,15 +18,19 @@ class TokenData(BaseModel):
 
 class SessionDriver:
     def __init__(self):
-        # Get Redis host from environment variables (default to 'redis' if not set)
-        redis_host = os.getenv("REDIS_HOST", "redis-1")
+        # Get Redis host/port/password from environment variables (defaults suited for docker-compose)
+        redis_host = os.getenv("REDIS_HOST", "redis")
         redis_port = int(os.getenv("REDIS_PORT", 6379))
-        
+        redis_password = os.getenv("REDIS_PASSWORD", None)
+
+        # Initialize Redis client using environment settings (not localhost)
         self.redis_client = redis.Redis(
-            host='localhost',
-            port=6379,
+            host=redis_host,
+            port=redis_port,
+            password=redis_password if redis_password else None,
             db=0,
-            decode_responses=True
+            decode_responses=True,
+            socket_connect_timeout=5,
         )
         
         # Token configuration (use central settings with sensible fallbacks)
