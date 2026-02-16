@@ -31,8 +31,3 @@ class UserCreateRequest(BaseModel):
     profile_sharing: Optional[bool] = None
     in_app_notification: Optional[bool] = None
     sms_notification: Optional[bool] = None
-    
-    # Timestamps
-    created_at: datetime
-
-    
