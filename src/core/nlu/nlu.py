@@ -802,30 +802,6 @@ class AutobusNLUSystem:
                 slots,
                 user_data
             )
-        elif intent in financial_tips_intents:
-            return self.intent_processor.process_financial_tips_intent(
-                intent,
-                user_message, 
-                conversation_history, 
-                slots,
-                user_data
-            )
-        elif intent in expense_report_intents:
-            return self.intent_processor.process_expense_report_intent(
-                intent,
-                user_message,
-                conversation_history, 
-                slots,
-                user_data
-            )
-        elif intent in beneficiaries_intents:
-            return self.intent_processor.process_beneficiaries_intent(
-                intent,
-                user_message,
-                conversation_history,
-                slots,
-                user_data
-            )
         else:
             # Fallback for unhandled intents
             return self.response_formatter.format_response(intent, "error", message="Intent not supported")
