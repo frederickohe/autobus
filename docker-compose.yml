@@ -18,7 +18,7 @@ services:
       retries: 5
     networks:
       - autobus_network
-
+  
   redis:
     image: redis:7-alpine
     container_name: autobus_redis

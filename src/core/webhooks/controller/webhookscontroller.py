@@ -7,6 +7,8 @@ from core.auth.service.sessiondriver import SessionDriver, TokenData
 from fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from core.webhooks.dto.request.dialogrequest import DialogRequest
+from core.webhooks.dto.request.simple_chat_request import SimpleChatRequest
+from core.webhooks.dto.response.simple_chat_response import SimpleChatResponse
 from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
 import logging
@@ -61,7 +63,10 @@ async def start_dialog(
     db: Session = Depends(get_db)
 ):
     """
-    Handles incoming WhatsApp webhooks from Meta.
+    Handles incoming webhooks from either:
+    1. Meta (Facebook/WhatsApp) webhooks - with 'object' and 'entry' fields
+    2. Simple chat requests from Flutter app - with 'userid' and 'message' fields
+    
     Routes to appropriate handler based on webhook type.
     """
     # Parse the incoming payload as generic dict
@@ -71,7 +76,18 @@ async def start_dialog(
     logger.info(f"Received webhook payload: {json.dumps(payload, indent=2)}")
 
     try:
-        # Check if this is a valid webhook payload
+        # Detect if this is a simple chat request (Flutter app)
+        if "userid" in payload and "message" in payload:
+            # This is a simple direct chat request from Flutter app
+            logger.info("Detected simple chat request from Flutter app")
+            return await handle_simple_chat(
+                userid=payload.get("userid"),
+                message=payload.get("message"),
+                db=db
+            )
+        
+        # Otherwise, treat as Meta WhatsApp webhook
+        # Check if this is a valid Meta webhook payload
         if "object" not in payload or "entry" not in payload:
             logger.warning("Invalid webhook payload structure")
             return {"status": "ok", "message": "Invalid payload structure"}
@@ -123,6 +139,50 @@ async def start_dialog(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error processing webhook"
+        )
+
+
+async def handle_simple_chat(userid: str, message: str, db: Session):
+    """
+    Handles simple chat requests from Flutter app or other direct clients.
+    Processes the message through NLU and returns the response directly.
+    """
+    try:
+        logger.info(f"Processing simple chat message from userid: {userid}")
+        
+        # Check if user exists in database
+        existing_user = db.query(User).filter(User.phone_number == userid).first()
+        
+        if not existing_user:
+            logger.warning(f"User not found: {userid}")
+            return SimpleChatResponse(
+                message="User not found. Please ensure you are registered."
+            )
+        
+        logger.info(f"User found: {userid}. Processing message through NLU.")
+        
+        # Initialize NLU system and subscription service
+        nlu_system = AutobusNLUSystem()
+        subscription_service = SubscriptionService(db)
+        
+        # Get user subscription status
+        result = subscription_service.get_user_subscription_status(userid)
+        
+        # Process the message
+        response_message = nlu_system.process_message(
+            userid,
+            message,
+            result.get("has_active_subscription", False)
+        )
+        
+        logger.info(f"Generated response: {response_message}")
+        
+        return SimpleChatResponse(message=response_message)
+    
+    except Exception as e:
+        logger.error(f"Error handling simple chat: {e}", exc_info=True)
+        return SimpleChatResponse(
+            message="An error occurred while processing your message. Please try again."
         )
 
 

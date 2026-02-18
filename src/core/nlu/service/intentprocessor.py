@@ -2,7 +2,7 @@
 from typing import Dict, List, Any, Optional
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
 from core.nlu.service.llmclient import LLMClient
-from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, INTENT_CATEGORIES
+from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, AGENT_CATEGORIES
 from core.nlu.service.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
@@ -47,7 +47,7 @@ class IntentProcessor:
             temperature=0.7
         )
         
-        return self._format_conversational_response(intent, response, slots)
+        return self._format_conversational_response(intent, response, slots, user_data)
     
     def process_financial_tips_intent(
         self,
@@ -76,7 +76,7 @@ class IntentProcessor:
             temperature=0.4
         )
         
-        return self._format_financial_tips_response(intent, response, slots)
+        return self._format_financial_tips_response(intent, response, slots, user_data)
 
     def process_expense_report_intent(
         self,
@@ -195,8 +195,8 @@ class IntentProcessor:
         """
         Build enhanced system prompt with user context RAG
         """
-        # Add user context if available
-        user_context_section = ""
+        # Initialize user context
+        user_context = ""
         if user_data:
             # user_data produced by NLU uses the key 'user_id' (not 'id')
             # Ensure we pass a string user_id to the RAG manager so it matches
@@ -223,24 +223,65 @@ class IntentProcessor:
         
         return enhanced_prompt
 
-    def _format_conversational_response(self, intent: str, response: str, slots: Dict) -> str:
-        """Format conversational responses using templates"""
+    def _format_conversational_response(self, intent: str, response: str, slots: Dict, user_data: Optional[Dict] = None) -> str:
+        """Format conversational responses using templates.
+
+        Uses a safe mapping that falls back to `user_data` for common keys
+        (e.g. `user_name`) and returns an empty string for missing keys
+        to avoid KeyError when templates reference optional slots.
+        """
+        from collections import defaultdict
+
         template_data = RESPONSE_TEMPLATES["conversational"]
-        
+
         if intent in template_data:
             template = template_data[intent]
-            return template.format(response=response, **slots)
-        
+
+            # Build a mapping that prefers slots, then user_data, then empty string
+            mapping = dict(slots or {})
+            if user_data:
+                # normalize common user name keys
+                if 'user_name' not in mapping:
+                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone_number') or ''
+
+            # Use defaultdict so missing keys return empty string instead of raising
+            safe_map = defaultdict(str, mapping)
+
+            try:
+                return template.format_map(safe_map, response=response) if hasattr(template, 'format_map') else template.format(response=response, **safe_map)
+            except Exception:
+                # Last-resort: attempt to format with response only
+                try:
+                    return template.format(response=response)
+                except Exception:
+                    return response
+
         return response
 
-    def _format_financial_tips_response(self, intent: str, response: str, slots: Dict) -> str:
-        """Format financial tips responses using templates"""
+    def _format_financial_tips_response(self, intent: str, response: str, slots: Dict, user_data: Optional[Dict] = None) -> str:
+        """Format financial tips responses using templates with safe mapping."""
+        from collections import defaultdict
+
         template_data = RESPONSE_TEMPLATES["financial_tips"]
-        
+
         if intent in template_data:
             template = template_data[intent]
-            return template.format(response=response, **slots)
-        
+
+            mapping = dict(slots or {})
+            if user_data:
+                if 'user_name' not in mapping:
+                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone_number') or ''
+
+            safe_map = defaultdict(str, mapping)
+
+            try:
+                return template.format_map(safe_map, response=response) if hasattr(template, 'format_map') else template.format(response=response, **safe_map)
+            except Exception:
+                try:
+                    return template.format(response=response)
+                except Exception:
+                    return response
+
         return response
 
     def _prepare_conversation_context(self, conversation_history: List[Dict]) -> str:

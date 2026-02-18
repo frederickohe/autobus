@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
 from core.auth.service.authservice import AuthService
-from core.nlu.config import INTENT_CATEGORIES
+from core.nlu.config import AGENT_CATEGORIES
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
@@ -790,10 +790,7 @@ class AutobusNLUSystem:
     def _process_non_payment_intent(self, user_id: str, intent: str, user_message: str, conversation_history: List[Dict], slots: Dict) -> str:
         """Process non-payment intents"""
         """Route intent to the appropriate processor"""
-        conversational_intents = INTENT_CATEGORIES["conversational"]
-        financial_tips_intents = INTENT_CATEGORIES["financial_tips"]
-        expense_report_intents = INTENT_CATEGORIES["expense_report"]
-        beneficiaries_intents = INTENT_CATEGORIES["beneficiaries"]
+        conversational_intents = AGENT_CATEGORIES["conversational"]
 
         user_data = self._get_user_data(user_id)
         
@@ -956,15 +953,15 @@ class AutobusNLUSystem:
                 # Convert user data to dictionary format expected by RAG manager
                 user_data = {
                     # `user_id` is used across NLU as the conversation/history key (phone-based).
-                    "user_id": user.phone,
+                    "user_id": user.phone_number,
                     # `db_user_id` is the internal primary key used for relational FK lookups.
                     "db_user_id": user.id,
-                    "username": user.username,
+                    "fullname": user.fullname,
                     "email": user.email,
-                    "first_name": user.first_name,
-                    "last_name": user.last_name,
-                    "is_active": user.is_active,
-                    "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "phone_number": user.phone_number,
+                    "nationality": user.nationality,
+                    "gender": user.gender,
+                    "address": user.address,
                     # Add any additional user fields you need
                 }
                 
