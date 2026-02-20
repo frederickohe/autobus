@@ -15,6 +15,7 @@ import logging
 import os
 from core.user.model.User import User
 from core.nlu.nlu import AutobusNLUSystem
+from core.agent.agent import process_user_message
 from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
 from utilities.phone_utils import normalize_ghana_phone_number
@@ -161,15 +162,13 @@ async def handle_simple_chat(userid: str, message: str, db: Session):
         
         logger.info(f"User found: {userid}. Processing message through NLU.")
         
-        # Initialize NLU system and subscription service
-        nlu_system = AutobusNLUSystem()
+        # Use smolagent to process the message instead of AutobusNLUSystem
         subscription_service = SubscriptionService(db)
-        
         # Get user subscription status
         result = subscription_service.get_user_subscription_status(userid)
-        
-        # Process the message
-        response_message = nlu_system.process_message(
+
+        # Delegate to smolagent
+        response_message = process_user_message(
             userid,
             message,
             result.get("has_active_subscription", False)

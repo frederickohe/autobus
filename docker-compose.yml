@@ -96,6 +96,11 @@ services:
 
       # Language Model API Key
       OPENAI_API_KEY: ${OPENAI_API_KEY:-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}
+      # Hugging Face API keys (set these in .env or your environment)
+      HUGGINGFACE_API_KEY: ${HUGGINGFACE_API_KEY:-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}
+      HUGGINGFACEHUB_API_TOKEN: ${HUGGINGFACEHUB_API_TOKEN:-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}
+      HF_TOKEN: ${HF_TOKEN:-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}
+      HF_API_KEY: ${HF_API_KEY:-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}
       
     
     ports:

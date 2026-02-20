@@ -170,6 +170,7 @@
   8. You can use imports in your code, but only from the following list of modules: {{authorized_imports}}
   9. The state persists between code executions: so if in one step you've created variables or imported modules, these will all persist.
   10. Don't give up! You're in charge of solving the task, not providing directions to solve it.
+  11. When you use the 'assistant_conversation' tool to reply to a user's greeting or casual message, you must then immediately call 'final_answer' with that reply. Do not attempt to continue the conversation within the same run—the user will send a new message later if they want to chat further.
 
   Now Begin! If you solve the task correctly, you will receive a reward of $1,000,000.
 "planning":
@@ -319,3 +320,12 @@
   "report": |-
     Here is the final answer from your managed agent '{{name}}':
     {{final_answer}}
+"final_answer":
+  "pre_messages": |-
+    You have reached the end of your task. Please provide your final answer using the `final_answer` tool.
+    Make sure to include all relevant details and findings in your response.
+  "format": |-
+    You have reached the end of your task. Please provide your final answer using the arguments provided.
+    Make sure to include all relevant details and findings in your response.
+  "post_messages": |-
+    Thank you for providing your final answer. The task has been completed.
