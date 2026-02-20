@@ -11,8 +11,8 @@ class ResponseFormatter:
         elif message_type == "confirm_action":
             action_descriptions = {
                 "send_money": f"send GHS {kwargs.get('amount')} to {kwargs.get('recipient')}",
-                "buy_airtime": f"buy GHS {kwargs.get('amount')} airtime for {kwargs.get('phone_number')}",
-                "buy_data": f"buy {kwargs.get('data_plan')} data for {kwargs.get('phone_number')}",
+                "buy_airtime": f"buy GHS {kwargs.get('amount')} airtime for {kwargs.get('phone')}",
+                "buy_data": f"buy {kwargs.get('data_plan')} data for {kwargs.get('phone')}",
                 "pay_bill": f"pay {kwargs.get('bill_type')} bill of GHS {kwargs.get('amount')}",
                 "get_loan": f"apply for a GHS {kwargs.get('loan_amount')} loan"
             }

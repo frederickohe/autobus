@@ -16,7 +16,7 @@ class History(Base):
     amount = Column(Float, nullable=True)
     currency = Column(String, default="GHS")
     recipient = Column(String, nullable=True)
-    phone_number = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
     data_plan = Column(String, nullable=True)
     category = Column(String, nullable=True)  # For budgets, expenses
     status = Column(String, default="completed")  # "completed", "failed", "pending"
@@ -37,7 +37,7 @@ class History(Base):
             "amount": self.amount,
             "currency": self.currency,
             "recipient": self.recipient,
-            "phone_number": self.phone_number,
+            "phone": self.phone,
             "data_plan": self.data_plan,
             "category": self.category,
             "status": self.status,

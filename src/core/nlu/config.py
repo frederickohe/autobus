@@ -111,7 +111,7 @@ INTENTS = {
     # ===== FINANCE AGENT INTENTS =====
     "process_payment": {
         "description": "Process payments via mobile money or other methods",
-        "slots": ["payment_method", "amount", "customer_id", "invoice_id", "phone_number"],
+        "slots": ["payment_method", "amount", "customer_id", "invoice_id", "phone"],
         "required_slots": ["amount", "payment_method"],
         "category": "finance"
     },

@@ -80,6 +80,14 @@ services:
       EMAIL_MQ_QUEUE: ${EMAIL_MQ_QUEUE:-}
       BATCH_CUSTOMER_UPLOAD_QUEUE: ${BATCH_CUSTOMER_UPLOAD_QUEUE:-}
       COMPANY_QUEUE: ${COMPANY_QUEUE:-}
+
+      # Wirepick SMS Configuration
+      WIREPICK_API_URL: "https://api.wirepick.com/httpsms"
+      WIREPICK_CLIENT_ID: ${WIREPICK_CLIENT_ID:-gbsms}
+      WIREPICK_PASSWORD: ${WIREPICK_PASSWORD:-Trinity@098}
+      WIREPICK_PUBLIC_KEY: ${WIREPICK_PUBLIC_KEY:-your_public_key}
+      WIREPICK_SENDER_ID: ${WIREPICK_SENDER_ID:-mumcycle}
+      USE_WIREPICK_API_KEY: ${USE_WIREPICK_API_KEY:-false}
       
       # Frontend and Other URLs
       BASE_FRONTEND_URL: ${BASE_FRONTEND_URL:-http://localhost:3000}

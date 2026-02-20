@@ -1,12 +1,15 @@
 from datetime import datetime, timedelta
 from sqlalchemy import Column, String, DateTime, Boolean, ForeignKey
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from sqlalchemy import Column, String, DateTime
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 from utilities.dbconfig import Base
 from sqlalchemy.sql import func
+
+if TYPE_CHECKING:
+    from core.user.model.User import User
 
 class PasswordResetToken(Base):
     __tablename__ = "password_reset_tokens"
@@ -14,7 +17,7 @@ class PasswordResetToken(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     token: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     user: Mapped["User"] = relationship("User", back_populates="password_reset_tokens")
     
     expiry_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)

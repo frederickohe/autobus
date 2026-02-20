@@ -1,18 +1,26 @@
 from sqlalchemy import JSON, Column, Integer, String, DateTime, ForeignKey, Boolean, Date, Enum as SQLEnum
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
-from core.notification.model.Notification import Notification
-from core.histories.model.history import History
 from utilities.dbconfig import Base
 from datetime import datetime, date
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from enum import Enum as PyEnum
 
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer
+from sqlalchemy import String, Boolean, DateTime
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
+# At the top of core/user/model/User.py
 from core.auth.model.password_reset_token import PasswordResetToken
 from core.auth.model.refreshtoken import RefreshToken
+from core.notification.model.Notification import Notification
+from core.histories.model.history import History
+
+# Add this TYPE_CHECKING block
+if TYPE_CHECKING:
+    from core.auth.model.password_reset_token import PasswordResetToken
+    from core.auth.model.refreshtoken import RefreshToken
+    from core.notification.model.Notification import Notification
+    from core.histories.model.history import History
 
 
 class UserStatus(str, PyEnum):
@@ -42,7 +50,7 @@ class User(Base):
     fullname: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     hashed_password: Mapped[str] = mapped_column(String, nullable=False)
-    phone_number: Mapped[Optional[str]] = mapped_column(String)
+    phone: Mapped[Optional[str]] = mapped_column(String)
     
     # Personal Information
     nationality: Mapped[Optional[str]] = mapped_column(String(100))
@@ -93,8 +101,6 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan"
     )
-
-    # Removed custom __init__; SQLAlchemy handles defaults and values automatically
 
     def __repr__(self):
         return f"<User(id={self.id}, email={self.email})>"

@@ -5,6 +5,7 @@ from core.subscription.model.subscription_plan import SubscriptionPlan
 from core.subscription.model.user_subscription import UserSubscription, SubscriptionStatus
 from core.user.model.User import User
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -346,8 +347,9 @@ class SubscriptionService:
         if not subscription:
             return False
 
-        # Simple string check in features (you can make this more sophisticated)
-        return feature.lower() in subscription.plan.features.lower()
+        # Get features as list and check if feature is in the list
+        features_list = subscription.plan.get_features_list()
+        return feature.lower() in [f.lower() for f in features_list]
 
     def get_user_subscription_status_by_phone(self, phone: str) -> dict:
         """Get user's subscription status using phone number"""
@@ -401,7 +403,7 @@ class SubscriptionService:
             "has_active_subscription": subscription.is_active,
             "subscription_id": subscription.id,
             "plan_name": subscription.plan.name,
-            "features": subscription.plan.features,
+            "features": subscription.plan.get_features_list(),
             "amount_paid": subscription.amount_paid,
             "expires_at": subscription.expires_at.isoformat(),
             "days_remaining": subscription.days_remaining,
@@ -437,7 +439,7 @@ class SubscriptionService:
                     "id": plan.id,
                     "name": plan.name,
                     "price": plan.price,
-                    "features": plan.features,
+                    "features": plan.get_features_list(),
                     "description": plan.description,
                     "is_active": plan.is_active
                 }

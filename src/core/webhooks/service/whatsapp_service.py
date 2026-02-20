@@ -16,12 +16,12 @@ class WhatsAppService:
         self.api_key = os.getenv("META_API_KEY")
         self.base_url = "https://graph.facebook.com/v24.0"
 
-    def create_registration_flow(self, phone_number_id: str) -> Optional[str]:
+    def create_registration_flow(self, phone_id: str) -> Optional[str]:
         """
         Create the registration Flow template in Meta using the local JSON definition.
 
         Args:
-            phone_number_id: Meta phone number ID to associate with the Flow
+            phone_id: Meta phone number ID to associate with the Flow
 
         Returns:
             Optional[str]: The created flow_id, if successful
@@ -43,13 +43,13 @@ class WhatsAppService:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
         }
-        url = f"{self.base_url}/{phone_number_id}/flows"
+        url = f"{self.base_url}/{phone_id}/flows"
         payload = {
             "flow": flow_definition
         }
 
         try:
-            logger.info(f"Creating WhatsApp registration Flow for {phone_number_id}")
+            logger.info(f"Creating WhatsApp registration Flow for {phone_id}")
             response = requests.post(url, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -65,7 +65,7 @@ class WhatsAppService:
 
     def send_message(
         self,
-        phone_number_id: str,
+        phone_id: str,
         recipient_phone: str,
         message_text: str,
         preview_url: bool = False
@@ -74,7 +74,7 @@ class WhatsAppService:
         Send a text message via WhatsApp Cloud API
 
         Args:
-            phone_number_id: The phone number ID from Meta webhook metadata
+            phone_id: The phone number ID from Meta webhook metadata
             recipient_phone: The recipient's WhatsApp ID (phone number)
             message_text: The message to send
             preview_url: Whether to show URL preview in the message
@@ -82,7 +82,7 @@ class WhatsAppService:
         Returns:
             bool: True if message sent successfully, False otherwise
         """
-        url = f"{self.base_url}/{phone_number_id}/messages"
+        url = f"{self.base_url}/{phone_id}/messages"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -116,18 +116,18 @@ class WhatsAppService:
 
     def send_registration_template(
         self,
-        phone_number_id: str,
+        phone_id: str,
         recipient_phone: str
     ) -> bool:
         """
         Send registration template via WhatsApp Cloud API
         Args:
-            phone_number_id: The phone number ID from Meta webhook metadata
+            phone_id: The phone number ID from Meta webhook metadata
             recipient_phone: The recipient's WhatsApp ID (phone number)
         Returns:
             bool: True if template sent successfully, False otherwise
         """
-        url = f"{self.base_url}/{phone_number_id}/messages"
+        url = f"{self.base_url}/{phone_id}/messages"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -178,7 +178,7 @@ class WhatsAppService:
 
     def send_message_receipt(
         self,
-        phone_number_id: str,
+        phone_id: str,
         recipient_phone: str,
         image_url: str,
         caption: Optional[str] = None
@@ -187,7 +187,7 @@ class WhatsAppService:
         Send a receipt image via WhatsApp Cloud API
 
         Args:
-            phone_number_id: The phone number ID from Meta webhook metadata
+            phone_id: The phone number ID from Meta webhook metadata
             recipient_phone: The recipient's WhatsApp ID (phone number)
             image_url: The URL of the receipt image to send (must be publicly accessible)
             caption: Optional caption for the receipt
@@ -195,7 +195,7 @@ class WhatsAppService:
         Returns:
             bool: True if receipt sent successfully, False otherwise
         """
-        url = f"{self.base_url}/{phone_number_id}/messages"
+        url = f"{self.base_url}/{phone_id}/messages"
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",

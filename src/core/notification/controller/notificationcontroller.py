@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
 from fastapi_jwt_auth import AuthJWT
@@ -175,3 +175,86 @@ def mark_all_notifications_as_read(
     notification_service = NotificationService(db)
     notification_service.mark_all_notifications_as_read(user.id)
     return {"message": "All notifications marked as read"}
+
+# Add these endpoints to your existing notification_routes
+
+@notification_routes.post("/send-sms", response_model=NotificationResponse)
+def send_sms_notification(
+    phone: str = Query(..., description="Phone number with country code"),
+    message: str = Query(..., max_length=160, description="SMS message"),
+    notification_type: NotificationType = Query(NotificationType.INFO),
+    user_id: Optional[str] = Query(None, description="User ID (optional)"),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db)
+):
+    """Send an SMS notification to a phone number"""
+    current_user_email = authjwt.get_jwt_subject()
+    
+    # If user_id not provided, use current user
+    if not user_id:
+        user = db.query(User).filter(User.email == current_user_email).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user_id = user.id
+    
+    notification_service = NotificationService(db)
+    
+    # Create notification data
+    notification_data = {
+        "message": message,
+        "source": "sms_direct"
+    }
+    
+    return notification_service.create_notification(
+        user_id=user_id,
+        notification_type=notification_type,
+        data=notification_data,
+        send_sms=True,
+        sms_phone=phone
+    )
+
+
+@notification_routes.post("/bulk-sms", response_model=Dict[str, Any])
+def send_bulk_sms_notifications(
+    user_ids: List[str] = Query(..., description="List of user IDs"),
+    message: str = Query(..., max_length=160, description="SMS message"),
+    notification_type: NotificationType = Query(NotificationType.INFO),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db)
+):
+    """Send bulk SMS notifications to multiple users"""
+    # Verify admin or appropriate permissions here
+    current_user_email = authjwt.get_jwt_subject()
+    
+    notification_service = NotificationService(db)
+    
+    result = notification_service.send_bulk_sms_notifications(
+        user_ids=user_ids,
+        message=message,
+        notification_type=notification_type
+    )
+    
+    return result
+
+
+@notification_routes.get("/{notification_id}/sms-status", response_model=Dict[str, Any])
+def check_notification_sms_status(
+    notification_id: str,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db)
+):
+    """Check SMS delivery status for a notification"""
+    current_user_email = authjwt.get_jwt_subject()
+    user = db.query(User).filter(User.email == current_user_email).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    notification_service = NotificationService(db)
+    notification = notification_service.get_notification(notification_id)
+    
+    # Verify the notification belongs to the user
+    if notification.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this notification")
+    
+    return notification_service.check_sms_delivery_status(notification_id)

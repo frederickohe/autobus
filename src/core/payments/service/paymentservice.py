@@ -1224,18 +1224,18 @@ class PaymentService:
         import os
         from core.webhooks.service.whatsapp_service import WhatsAppService
         from core.nlu.nlu import AutobusNLUSystem
-        from utilities.phone_utils import normalize_ghana_phone_number
+        from utilities.phone_utils import normalize_ghana_phone
 
         try:
             # Get WhatsApp phone number ID from environment
-            phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-            if not phone_number_id:
-                logger.warning("WHATSAPP_PHONE_NUMBER_ID not set in environment variables")
+            phone_id = os.getenv("WHATSAPP_phone_ID")
+            if not phone_id:
+                logger.warning("WHATSAPP_phone_ID not set in environment variables")
                 return
 
             # Normalize phone number for WhatsApp (must be in format 233XXXXXXXXX)
             # Use sender_phone since we're notifying the person who initiated the payment
-            normalized_phone = normalize_ghana_phone_number(payment.sender_phone)
+            normalized_phone = normalize_ghana_phone(payment.sender_phone)
 
             # Initialize WhatsApp service
             whatsapp_service = WhatsAppService()
@@ -1280,7 +1280,7 @@ class PaymentService:
                 # Send receipt with image if available, otherwise send text-only
                 if receipt_url:
                     whatsapp_service.send_message_receipt(
-                        phone_number_id=phone_number_id,
+                        phone_id=phone_id,
                         recipient_phone=normalized_phone,
                         image_url=receipt_url,
                         caption=success_caption
@@ -1289,7 +1289,7 @@ class PaymentService:
                 else:
                     # Fallback to text-only message if receipt generation failed
                     whatsapp_service.send_message(
-                        phone_number_id=phone_number_id,
+                        phone_id=phone_id,
                         recipient_phone=normalized_phone,
                         message_text=success_caption
                     )
@@ -1308,7 +1308,7 @@ class PaymentService:
                 )
 
                 sent = whatsapp_service.send_message(
-                    phone_number_id=phone_number_id,
+                    phone_id=phone_id,
                     recipient_phone=normalized_phone,
                     message_text=failure_caption,
                     preview_url=False

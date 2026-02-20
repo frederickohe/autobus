@@ -6,7 +6,7 @@ from pydantic import BaseModel
 class UserUpdateRequest(BaseModel):
     fullname: Optional[str] = None
     email: Optional[str] = None
-    phone_number: Optional[str] = None
+    phone: Optional[str] = None
     profile_picture_url: Optional[str] = None
 
     # Personal Information

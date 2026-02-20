@@ -36,7 +36,7 @@ class UserService:
             id=user.id,
             fullname=user.fullname,
             email=user.email,
-            phone_number=user.phone_number,
+            phone=user.phone,
             
             nationality=user.nationality,
             date_of_birth=user.date_of_birth,
@@ -71,7 +71,7 @@ class UserService:
             id=user.id,
             fullname=user.fullname,
             email=user.email,
-            phone_number=user.phone_number,
+            phone=user.phone,
             
             nationality=user.nationality,
             date_of_birth=user.date_of_birth,
@@ -99,15 +99,15 @@ class UserService:
         )
 
     # get user by phone number
-    def get_user_by_phone(self, phone_number: str) -> UserResponse:
-        user = self.db.query(User).filter(User.phone_number == phone_number).first()
+    def get_user_by_phone(self, phone: str) -> UserResponse:
+        user = self.db.query(User).filter(User.phone == phone).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         return UserResponse(
             id=user.id,
             fullname=user.fullname,
             email=user.email,
-            phone_number=user.phone_number,
+            phone=user.phone,
             
             nationality=user.nationality,
             date_of_birth=user.date_of_birth,
@@ -165,7 +165,7 @@ class UserService:
                     id=user.id,
                     fullname=user.fullname,
                     email=user.email,
-                    phone_number=user.phone_number,
+                    phone=user.phone,
                     enabled=user.enabled,
                     status=user.status,
                     created_at=user.created_at,

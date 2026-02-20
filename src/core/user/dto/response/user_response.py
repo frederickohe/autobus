@@ -7,7 +7,7 @@ class UserResponse(BaseModel):
     id: str
     fullname: str
     email: str
-    phone_number: Optional[str] = None
+    phone: Optional[str] = None
     
     # Personal Information
     nationality: Optional[str] = None

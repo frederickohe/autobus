@@ -32,7 +32,7 @@ class SlotManager:
                     # Account numbers should not be validated - they can be in any format
                     validated_slots[slot] = str(value).strip()
                 elif "phone" in slot or "recipient" in slot or "number" in slot:
-                    validated_slots[slot] = self._validate_phone_number(value)
+                    validated_slots[slot] = self._validate_phone(value)
                 else:
                     validated_slots[slot] = str(value).strip()
 
@@ -49,7 +49,7 @@ class SlotManager:
             pass
         return None
     
-    def _validate_phone_number(self, phone: str) -> Optional[str]:
+    def _validate_phone(self, phone: str) -> Optional[str]:
         """Validate Ghana phone number format"""
         # Remove spaces, dashes, etc.
         clean_phone = ''.join(c for c in str(phone) if c.isdigit())
@@ -86,7 +86,7 @@ class SlotManager:
             "amount": "How much would you like to send?",
             "network": "Which mobile network? (MTN, Vodafone, AirtelTigo)",
             "reason": "What's the reason for this transfer?",
-            "phone_number": "Which phone number should I top up?",
+            "phone": "Which phone number should I top up?",
             "data_plan": "Which data plan would you like?",
             "bill_type": self._generate_bill_type_prompt(bill_providers),
             "account_number": "What's your account number (smart card number)?",

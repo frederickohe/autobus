@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, validator
 class UserCreateRequest(BaseModel):  
     fullname: str
     email: str
-    phone_number: Optional[str] = None
+    phone: Optional[str] = None
     profile_picture_url: Optional[str] = None
     password: str = Field(..., min_length=8)
     

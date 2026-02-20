@@ -88,12 +88,12 @@ class NetworkDetector:
     }
 
     @staticmethod
-    def detect_network_from_phone(phone_number: str) -> tuple:
+    def detect_network_from_phone(phone: str) -> tuple:
         """
         Detect network from Ghana phone number.
 
         Args:
-            phone_number: Phone number to detect network from
+            phone: Phone number to detect network from
 
         Returns:
             Tuple of (detected_network, message)
@@ -104,15 +104,15 @@ class NetworkDetector:
             - 023x, 026x, 027x, 056x, 057x, 058x -> AIR (AirtelTigo, includes former Glo)
         """
         # Input validation
-        if not phone_number:
+        if not phone:
             logger.warning("[NETWORK_DETECTOR] Empty phone number provided")
             return None, "Phone number cannot be empty"
 
         # Remove any non-digit characters
-        cleaned = re.sub(r'\D', '', phone_number)
+        cleaned = re.sub(r'\D', '', phone)
 
         if not cleaned:
-            logger.warning(f"[NETWORK_DETECTOR] No valid digits in phone number: {phone_number}")
+            logger.warning(f"[NETWORK_DETECTOR] No valid digits in phone number: {phone}")
             return None, "No valid digits in phone number"
 
         # Handle country code (if present)
@@ -123,13 +123,13 @@ class NetworkDetector:
 
         # Validate length before extracting prefix
         if len(cleaned) < 3:
-            logger.warning(f"[NETWORK_DETECTOR] Phone number too short: {phone_number}")
-            return None, f"Phone number too short: {phone_number}"
+            logger.warning(f"[NETWORK_DETECTOR] Phone number too short: {phone}")
+            return None, f"Phone number too short: {phone}"
 
         # Extract first 3 digits (0XX)
         prefix = cleaned[:3]
 
-        logger.info(f"[NETWORK_DETECTOR] Detecting network from phone: {phone_number} -> prefix: {prefix}")
+        logger.info(f"[NETWORK_DETECTOR] Detecting network from phone: {phone} -> prefix: {prefix}")
 
         # Check against all network prefixes
         for network, prefixes in NetworkDetector.NETWORK_PREFIXES.items():
@@ -145,7 +145,7 @@ class NetworkDetector:
 
         # Unknown prefix
         logger.warning(f"[NETWORK_DETECTOR] Unknown network prefix: {prefix}")
-        return None, f"Unknown network for phone: {phone_number} (prefix: {prefix})"
+        return None, f"Unknown network for phone: {phone} (prefix: {prefix})"
 
     @staticmethod
     def validate_customer_number(customer_number: str, network: Network) -> tuple:
@@ -276,15 +276,15 @@ class NetworkDetector:
         return NetworkDetector.NETWORK_PREFIXES.copy()
 
     @staticmethod
-    def is_valid_ghana_phone(phone_number: str) -> bool:
+    def is_valid_ghana_phone(phone: str) -> bool:
         """
         Quick check if a phone number is a valid Ghana mobile number.
 
         Args:
-            phone_number: Phone number to validate
+            phone: Phone number to validate
 
         Returns:
             True if valid Ghana mobile number, False otherwise
         """
-        network, _ = NetworkDetector.detect_network_from_phone(phone_number)
+        network, _ = NetworkDetector.detect_network_from_phone(phone)
         return network is not None

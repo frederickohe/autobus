@@ -410,7 +410,7 @@ class AutobusNLUSystem:
                     beneficiary_info = self._resolve_beneficiary(user_id, beneficiary_name, db)
                     if beneficiary_info:
                         # Update slots with resolved beneficiary information
-                        slots['phone_number'] = beneficiary_info['customer_number']
+                        slots['phone'] = beneficiary_info['customer_number']
                         slots['network'] = beneficiary_info['network']
                         slots['beneficiary_matched'] = beneficiary_info['name']
                         logger.info(f"[BENEFICIARY_RESOLUTION] Beneficiary resolved: {beneficiary_info['name']} → {beneficiary_info['customer_number']}")
@@ -421,7 +421,7 @@ class AutobusNLUSystem:
             if intent == "buy_airtime":
                 payment_dto = PaymentDto(
                     senderPhone=user_id,  # User initiating the payment
-                    receiverPhone=slots.get('phone_number', user_id),  # Use extracted phone number (supports buying airtime for others)
+                    receiverPhone=slots.get('phone', user_id),  # Use extracted phone number (supports buying airtime for others)
                     network=network_map.get(slots.get('network', 'MTN'), Network.MTN),
                     paymentMethod=PaymentMethod.MOBILE_MONEY,
                     serviceName="Airtime Top-Up",
@@ -766,8 +766,8 @@ class AutobusNLUSystem:
                     intent=intent,
                     transaction_type=transaction_type,
                     amount=amount,
-                    recipient=slots.get('recipient') or slots.get('phone_number'),
-                    phone_number=user_id,
+                    recipient=slots.get('recipient') or slots.get('phone'),
+                    phone=user_id,
                     description=f"{intent.replace('_', ' ').title()} - Transaction ID: {payment_dto.transactionId}",
                     metadata={"slots": slots, "payment_status": result.status}
                 )
@@ -895,7 +895,7 @@ class AutobusNLUSystem:
             return f"Your Transfer to {recipient_phone} ({receiver_name}) on {receiver_provider} is being processed. Transaction ID: {result.transactionId}"
 
         processing_messages = {
-            "buy_airtime": f"Airtime purchase of GHS {slots.get('amount')} for {slots.get('phone_number')} is being processed. Transaction ID: {result.transactionId}",
+            "buy_airtime": f"Airtime purchase of GHS {slots.get('amount')} for {slots.get('phone')} is being processed. Transaction ID: {result.transactionId}",
             "pay_bill": f"Bill payment of GHS {slots.get('amount')} is being processed. Transaction ID: {result.transactionId}",
             "get_loan": f"Loan application for GHS {slots.get('loan_amount')} is being processed. Transaction ID: {result.transactionId}"
         }
@@ -910,7 +910,7 @@ class AutobusNLUSystem:
             return f"Your Transfer to {recipient_phone} ({receiver_name}) on {receiver_provider} has been successfully completed"
 
         success_messages = {
-            "buy_airtime": f"✅ Airtime of GHS {slots.get('amount')} sent to {slots.get('phone_number')}. Transaction ID: {result.transactionId}",
+            "buy_airtime": f"✅ Airtime of GHS {slots.get('amount')} sent to {slots.get('phone')}. Transaction ID: {result.transactionId}",
             "pay_bill": f"✅ Bill payment of GHS {slots.get('amount')} processed. Transaction ID: {result.transactionId}",
             "get_loan": f"✅ Loan of GHS {slots.get('loan_amount')} application submitted. Transaction ID: {result.transactionId}"
         }
@@ -929,12 +929,12 @@ class AutobusNLUSystem:
                 # Convert user data to dictionary format expected by RAG manager
                 user_data = {
                     # `user_id` is used across NLU as the conversation/history key (phone-based).
-                    "user_id": user.phone_number,
+                    "user_id": user.phone,
                     # `db_user_id` is the internal primary key used for relational FK lookups.
                     "db_user_id": user.id,
                     "fullname": user.fullname,
                     "email": user.email,
-                    "phone_number": user.phone_number,
+                    "phone": user.phone,
                     "nationality": user.nationality,
                     "gender": user.gender,
                     "address": user.address,

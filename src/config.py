@@ -39,6 +39,14 @@ class Settings(BaseSettings):
     BASE_FRONTEND_URL: str = os.environ.get('BASE_FRONTEND_URL', 'http://localhost:3000')
     BATCH_CUSTOMER_UPLOAD_QUEUE: str = os.environ.get('BATCH_CUSTOMER_UPLOAD_QUEUE', '')
     COMPANY_QUEUE: str = os.environ.get('COMPANY_QUEUE', '')
+
+    # Wirepick SMS Configuration
+    WIREPICK_API_URL = "https://api.wirepick.com/httpsms"
+    WIREPICK_CLIENT_ID = "your_client_id"  # Replace with actual client ID
+    WIREPICK_PASSWORD = "your_password"    # Replace with actual password
+    WIREPICK_PUBLIC_KEY = "your_public_key" # Replace with actual public key (wpkKey)
+    WIREPICK_SENDER_ID = "YourSenderID"     # Your approved sender ID
+    USE_WIREPICK_API_KEY = False  # Set to True to use API key authentication, False to use client/password
     
     # OTP Configuration
     OTP_EXPIRE_MINUTES: int = int(os.environ.get('OTP_EXPIRE_MINUTES', 5))

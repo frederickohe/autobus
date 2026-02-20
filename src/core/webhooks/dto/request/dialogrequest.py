@@ -24,8 +24,8 @@ class Contact(BaseModel):
     wa_id: str
 
 class Metadata(BaseModel):
-    display_phone_number: str
-    phone_number_id: str
+    display_phone: str
+    phone_id: str
 
 class Value(BaseModel):
     messaging_product: str

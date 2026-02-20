@@ -3,7 +3,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def normalize_ghana_phone_number(phone: str) -> str:
+def normalize_ghana_phone(phone: str) -> str:
     """
     Normalize Ghanaian phone numbers to international format (233XXXXXXXXX).
 

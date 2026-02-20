@@ -242,7 +242,7 @@ class IntentProcessor:
             if user_data:
                 # normalize common user name keys
                 if 'user_name' not in mapping:
-                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone_number') or ''
+                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone') or ''
 
             # Use defaultdict so missing keys return empty string instead of raising
             safe_map = defaultdict(str, mapping)
@@ -270,7 +270,7 @@ class IntentProcessor:
             mapping = dict(slots or {})
             if user_data:
                 if 'user_name' not in mapping:
-                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone_number') or ''
+                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone') or ''
 
             safe_map = defaultdict(str, mapping)
 

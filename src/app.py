@@ -13,7 +13,6 @@ from routes import base_routes
 from core.auth.controller.authcontroller import auth_routes
 from core.user.controller.usercontroller import user_routes
 from core.cloudstorage.controller.storagecontoller import storage_routes
-from core.profile.controller.profilecontroller import profile_routes
 from core.notification.controller.notificationcontroller import notification_routes
 from core.payments.controller.billcontroller import bill_routes
 from core.payments.controller.invoicecontroller import invoice_routes
@@ -100,7 +99,6 @@ app.include_router(base_routes, prefix="/api/v1", tags=["Base Routes"])
 app.include_router(storage_routes, prefix="/api/v1/storage", tags=["Storage Routes"])
 app.include_router(auth_routes, prefix="/api/v1/auth", tags=["Auth Routes"])
 app.include_router(user_routes, prefix="/api/v1/user", tags=["User Routes"])
-app.include_router(profile_routes, prefix="/api/v1/profile", tags=["Profile Routes"])
 app.include_router(notification_routes, prefix="/api/v1/notification", tags=["Notification Routes"])
 app.include_router(payment_routes, prefix="/api/v1/payment", tags=["Payment Routes"])
 app.include_router(bill_routes, prefix="/api/v1/bill", tags=["Billing Routes"])

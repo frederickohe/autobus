@@ -14,7 +14,7 @@
                     "type": "string",
                     "__example__": "Doe"
                 },
-                "Phone_Number": {
+                "phone": {
                     "type": "string",
                     "__example__": "+237600000000"
                 },
@@ -56,7 +56,7 @@
                     },
                     {
                         "type": "TextInput",
-                        "name": "Phone_Number",
+                        "name": "phone",
                         "label": "Phone Number",
                         "input-type": "phone",
                         "required": true,
@@ -92,7 +92,7 @@
                             "payload": {
                                 "First_Name": "${form.First_Name}",
                                 "Last_Name": "${form.Last_Name}",
-                                "Phone_Number": "${form.Phone_Number}",
+                                "phone": "${form.phone}",
                                 "Email": "${form.Email}",
                                 "PIN": "${form.PIN}"
                             }
@@ -115,7 +115,7 @@
                     "type": "string",
                     "__example__": "Doe"
                 },
-                "Phone_Number": {
+                "phone": {
                     "type": "string",
                     "__example__": "+237600000000"
                 },
@@ -145,7 +145,7 @@
                     },
                     {
                         "type": "TextCaption",
-                        "text": "Phone: ${data.Phone_Number}"
+                        "text": "Phone: ${data.phone}"
                     },
                     {
                         "type": "Footer",
@@ -155,7 +155,7 @@
                             "payload": {
                                 "First_Name": "${data.First_Name}",
                                 "Last_Name": "${data.Last_Name}",
-                                "Phone_Number": "${data.Phone_Number}",
+                                "phone": "${data.phone}",
                                 "Email": "${data.Email}",
                                 "PIN": "${data.PIN}"
                             }

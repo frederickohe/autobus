@@ -62,7 +62,7 @@ class AuthService:
         db_user = User(
             id=user_id,
             fullname=request.fullname,
-            phone_number=request.phone_number,
+            phone=request.phone,
             email=request.email,
             hashed_password=self.hash_password(request.password),
             profile_picture_url=request.profile_picture_url,
@@ -93,7 +93,7 @@ class AuthService:
         self.db.refresh(db_user)
 
         # Send OTP to phone for verification
-        otp_result = self.otp_service.send_otp_phone(request.phone_number)
+        otp_result = self.otp_service.send_otp_phone(request.phone)
         
         return {
             "message": "User account created successfully. Please verify your phone number with the OTP sent to you.",
@@ -114,7 +114,7 @@ class AuthService:
             }
         
         # Find user by phone
-        user = self.db.query(User).filter(User.phone_number == phone).first()
+        user = self.db.query(User).filter(User.phone == phone).first()
         
         if not user:
             return {

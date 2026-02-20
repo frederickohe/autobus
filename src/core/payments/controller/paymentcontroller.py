@@ -174,7 +174,7 @@ def get_payment_status(
 @payment_routes.post("/send-money")
 def send_money_direct(
     amount: Decimal = Query(..., description="Amount in GHS to send"),
-    phone_number: str = Query(..., description="Receiver phone number (0XXXXXXXXX or 233XXXXXXXXX)"),
+    phone: str = Query(..., description="Receiver phone number (0XXXXXXXXX or 233XXXXXXXXX)"),
     reference: str = Query("Direct Payout", description="Optional reference description"),
     db: Session = Depends(get_db)
 ):
@@ -185,7 +185,7 @@ def send_money_direct(
 
     Args:
         amount: Amount in GHS to send
-        phone_number: Receiver phone number (0XXXXXXXXX or 233XXXXXXXXX format)
+        phone: Receiver phone number (0XXXXXXXXX or 233XXXXXXXXX format)
         reference: Optional reference description
 
     Returns:
@@ -207,26 +207,26 @@ def send_money_direct(
                 detail="Amount must be greater than 0"
             )
 
-        if not phone_number:
+        if not phone:
             raise HTTPException(
                 status_code=400,
                 detail="Phone number is required"
             )
 
-        logger.info(f"[SEND_MONEY_DIRECT] Direct MTC payout: Amount={amount}, Phone={phone_number}, Reference={reference}")
+        logger.info(f"[SEND_MONEY_DIRECT] Direct MTC payout: Amount={amount}, Phone={phone}, Reference={reference}")
 
         # Generate transaction ID
         mtc_transaction_id = str(UniqueIdGenerator.generate())
 
         # Detect network from phone
-        detected_network, network_message = NetworkDetector.detect_network_from_phone(phone_number)
-        logger.info(f"[SEND_MONEY_DIRECT_NETWORK] Phone: {phone_number} -> Network: {detected_network} ({network_message})")
+        detected_network, network_message = NetworkDetector.detect_network_from_phone(phone)
+        logger.info(f"[SEND_MONEY_DIRECT_NETWORK] Phone: {phone} -> Network: {detected_network} ({network_message})")
 
         # Build MTC request
         amount_decimal = Decimal(str(amount))
         mtc_request = {
             "amount": str(amount_decimal.quantize(Decimal('0.00'))),
-            "customer_number": convert_to_local_ghana_format(phone_number),
+            "customer_number": convert_to_local_ghana_format(phone),
             "exttrid": mtc_transaction_id,
             "nw": detected_network,
             "reference": reference,
@@ -255,7 +255,7 @@ def send_money_direct(
                 "resp_code": resp_code,
                 "resp_desc": response_data.get("resp_desc"),
                 "amount": str(amount),
-                "receiver_phone": convert_to_local_ghana_format(phone_number),
+                "receiver_phone": convert_to_local_ghana_format(phone),
                 "network": detected_network,
                 "reference": reference,
                 "timestamp": datetime.now().isoformat()

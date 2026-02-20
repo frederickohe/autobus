@@ -18,7 +18,7 @@ from core.nlu.nlu import AutobusNLUSystem
 from core.agent.agent import process_user_message
 from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
-from utilities.phone_utils import normalize_ghana_phone_number
+from utilities.phone_utils import normalize_ghana_phone
 
 # DTO Models
 from core.notification.dto.response.message_response import MessageResponse
@@ -152,7 +152,7 @@ async def handle_simple_chat(userid: str, message: str, db: Session):
         logger.info(f"Processing simple chat message from userid: {userid}")
         
         # Check if user exists in database
-        existing_user = db.query(User).filter(User.phone_number == userid).first()
+        existing_user = db.query(User).filter(User.phone == userid).first()
         
         if not existing_user:
             logger.warning(f"User not found: {userid}")
@@ -193,12 +193,12 @@ def handle_incoming_message(value: dict, db: Session):
     try:
         # Get phone number ID from metadata (needed for sending messages)
         metadata = value.get("metadata", {})
-        phone_number_id = metadata.get("phone_number_id")
-        if not phone_number_id:
-            logger.error("Missing phone_number_id in metadata")
-            return {"status": "error", "message": "Missing phone_number_id"}
+        phone_id = metadata.get("phone_id")
+        if not phone_id:
+            logger.error("Missing phone_id in metadata")
+            return {"status": "error", "message": "Missing phone_id"}
 
-        logger.info(f"Phone number ID: {phone_number_id}")
+        logger.info(f"Phone number ID: {phone_id}")
 
         # Get sender phone number
         contacts = value.get("contacts", [])
@@ -227,7 +227,7 @@ def handle_incoming_message(value: dict, db: Session):
             return handle_text_message(
                 message=message,
                 phone=phone,
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 db=db
             )
 
@@ -236,7 +236,7 @@ def handle_incoming_message(value: dict, db: Session):
             return handle_interactive_message(
                 message=message,
                 phone=phone,
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 db=db
             )
 
@@ -244,7 +244,7 @@ def handle_incoming_message(value: dict, db: Session):
             return handle_image_message(
                 message=message,
                 phone=phone,
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 db=db
             )
 
@@ -252,7 +252,7 @@ def handle_incoming_message(value: dict, db: Session):
             return handle_audio_message(
                 message=message,
                 phone=phone,
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 db=db
             )
 
@@ -260,7 +260,7 @@ def handle_incoming_message(value: dict, db: Session):
             logger.info(f"Received {message_type} message from {phone}")
             whatsapp_service = WhatsAppService()
             whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text=f"Thanks for the {message_type}! I currently support text, images, and audio messages."
             )
@@ -270,7 +270,7 @@ def handle_incoming_message(value: dict, db: Session):
             logger.warning(f"Unsupported message type: {message_type}")
             whatsapp_service = WhatsAppService()
             whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text="Sorry, I don't support this message type yet."
             )
@@ -281,7 +281,7 @@ def handle_incoming_message(value: dict, db: Session):
         raise
 
 
-def handle_text_message(message: dict, phone: str, phone_number_id: str, db: Session):
+def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     """Handle regular text messages"""
     text_data = message.get("text")
     if not text_data or "body" not in text_data:
@@ -299,7 +299,7 @@ def handle_text_message(message: dict, phone: str, phone_number_id: str, db: Ses
         # New user - send registration template
         logger.info(f"New user detected: {phone}. Sending registration template.")
         message_sent = whatsapp_service.send_registration_template(
-            phone_number_id=phone_number_id,
+            phone_id=phone_id,
             recipient_phone=phone
         )
 
@@ -334,7 +334,7 @@ def handle_text_message(message: dict, phone: str, phone_number_id: str, db: Ses
 
         # Send the response back to the user via WhatsApp
         message_sent = whatsapp_service.send_message(
-            phone_number_id=phone_number_id,
+            phone_id=phone_id,
             recipient_phone=phone,
             message_text=response_message
         )
@@ -349,7 +349,7 @@ def handle_text_message(message: dict, phone: str, phone_number_id: str, db: Ses
         return {"status": "success", "message": "Message processed and sent"}
 
 
-def handle_interactive_message(message: dict, phone: str, phone_number_id: str, db: Session):
+def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Session):
     """
     Handle interactive messages like Flow responses and button replies.
     This is where you'll receive the registration form data!
@@ -379,7 +379,7 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
             # Extract registration fields from Flow response
             first_name = registration_data.get("screen_0_First_Name_0", "").strip()
             last_name = registration_data.get("screen_0_Last_Name_1", "").strip()
-            user_phone = registration_data.get("screen_0_Phone_Number_2", "").strip()
+            user_phone = registration_data.get("screen_0_phone_2", "").strip()
             email = registration_data.get("screen_0_email_3", "").strip()
             pin = registration_data.get("screen_0_PIN_4", "").strip()
 
@@ -388,15 +388,15 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
                 logger.error("Missing required fields in registration data")
                 whatsapp_service = WhatsAppService()
                 whatsapp_service.send_message(
-                    phone_number_id=phone_number_id,
+                    phone_id=phone_id,
                     recipient_phone=phone,
                     message_text="Registration failed. Please ensure all fields are filled correctly."
                 )
                 return {"status": "error", "message": "Missing required fields"}
 
             # Normalize phone numbers
-            normalized_user_phone = normalize_ghana_phone_number(user_phone)
-            normalized_wa_id = normalize_ghana_phone_number(phone)
+            normalized_user_phone = normalize_ghana_phone(user_phone)
+            normalized_wa_id = normalize_ghana_phone(phone)
 
             logger.info(f"Phone normalization - Form: {user_phone} -> {normalized_user_phone}")
             logger.info(f"Phone normalization - WhatsApp: {phone} -> {normalized_wa_id}")
@@ -410,7 +410,7 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
                 logger.warning(f"User already exists: {email} or {normalized_wa_id}")
                 whatsapp_service = WhatsAppService()
                 whatsapp_service.send_message(
-                    phone_number_id=phone_number_id,
+                    phone_id=phone_id,
                     recipient_phone=phone,
                     message_text="You’re already registered with Lemo, so you can happily continue using the our service."
                 )
@@ -447,7 +447,7 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
             # Send confirmation message
             whatsapp_service = WhatsAppService()
             whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text=f"🎉 Welcome {first_name}! Your registration is complete. You can now start using Autobus."
             )
@@ -459,7 +459,7 @@ def handle_interactive_message(message: dict, phone: str, phone_number_id: str, 
             # Send error message to user
             whatsapp_service = WhatsAppService()
             whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text="Sorry, registration failed. Please try again later."
             )
@@ -530,7 +530,7 @@ def handle_message_status(value: dict, db: Session):
         raise
 
 
-def handle_image_message(message: dict, phone: str, phone_number_id: str, db: Session):
+def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
     """
     Handle image messages from users.
     Images are processed by the LLM vision API for visual understanding.
@@ -553,7 +553,7 @@ def handle_image_message(message: dict, phone: str, phone_number_id: str, db: Se
             # New user - send registration template
             logger.info(f"New user detected: {phone}. Sending registration template.")
             message_sent = whatsapp_service.send_registration_template(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone
             )
             
@@ -601,7 +601,7 @@ def handle_image_message(message: dict, phone: str, phone_number_id: str, db: Se
             
             # Send the response back to the user
             message_sent = whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text=response_message
             )
@@ -620,7 +620,7 @@ def handle_image_message(message: dict, phone: str, phone_number_id: str, db: Se
         raise
 
 
-def handle_audio_message(message: dict, phone: str, phone_number_id: str, db: Session):
+def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
     """
     Handle audio messages from users.
     Audio is transcribed using OpenAI Whisper and processed as text.
@@ -643,7 +643,7 @@ def handle_audio_message(message: dict, phone: str, phone_number_id: str, db: Se
             # New user - send registration template
             logger.info(f"New user detected: {phone}. Sending registration template.")
             message_sent = whatsapp_service.send_registration_template(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone
             )
             
@@ -691,7 +691,7 @@ def handle_audio_message(message: dict, phone: str, phone_number_id: str, db: Se
             
             # Send the response back to the user
             message_sent = whatsapp_service.send_message(
-                phone_number_id=phone_number_id,
+                phone_id=phone_id,
                 recipient_phone=phone,
                 message_text=response_message
             )

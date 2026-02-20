@@ -36,7 +36,7 @@ def get_subscription_plans(db: Session = Depends(get_db)):
             id=plan.id,
             name=plan.name,
             price=plan.price,
-            features=plan.features,
+            features=plan.get_features_list(),
             description=plan.description,
             is_active=plan.is_active
         )
@@ -171,7 +171,7 @@ def create_subscription_plan(
             id=plan.id,
             name=plan.name,
             price=plan.price,
-            features=plan.features,
+            features=plan.get_features_list(),
             description=plan.description,
             is_active=plan.is_active
         )

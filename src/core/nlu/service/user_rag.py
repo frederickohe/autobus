@@ -81,7 +81,7 @@ class UserRAGManager:
                     "transaction_type": "debit",
                     "amount": float(tx.amount_paid) if tx.amount_paid else 0.0,
                     "recipient": tx.receiver_name or tx.receiver_phone,
-                    "phone_number": tx.receiver_phone,
+                    "phone": tx.receiver_phone,
                     "category": tx.intent,
                     "status": tx.status.value if hasattr(tx.status, 'value') else str(tx.status),
                     "description": None,

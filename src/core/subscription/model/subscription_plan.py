@@ -2,8 +2,9 @@ from sqlalchemy import String, DateTime, Integer, Float, Boolean, Text, Enum
 from sqlalchemy.orm import Mapped, mapped_column
 from datetime import datetime, timezone
 from utilities.dbconfig import Base
-from typing import Optional
+from typing import Optional, List
 import enum
+import json
 
 
 class BillingPeriod(str, enum.Enum):
@@ -39,3 +40,12 @@ class SubscriptionPlan(Base):
             }
             base_period = period_map.get(self.billing_period, self.billing_period.value)
             return f"{self.billing_period_count} {base_period}s"
+    
+    def get_features_list(self) -> List[str]:
+        """Parse and return features as a list of strings"""
+        try:
+            if isinstance(self.features, list):
+                return self.features
+            return json.loads(self.features) if self.features else []
+        except (json.JSONDecodeError, TypeError):
+            return []

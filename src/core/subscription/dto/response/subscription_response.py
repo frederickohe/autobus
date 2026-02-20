@@ -7,7 +7,7 @@ class PlanResponse(BaseModel):
     id: int
     name: str
     price: float
-    features: str
+    features: List[str]
     description: Optional[str]
     is_active: bool
 
@@ -26,7 +26,7 @@ class SubscriptionStatusResponse(BaseModel):
     has_active_subscription: bool
     subscription_id: Optional[int] = None
     plan_name: Optional[str] = None
-    features: Optional[str] = None
+    features: Optional[List[str]] = None
     amount_paid: Optional[float] = None
     expires_at: Optional[str] = None
     days_remaining: int

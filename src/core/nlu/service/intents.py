@@ -43,7 +43,7 @@ class IntentDetector:
         IMPORTANT RULES FOR BENEFICIARY DETECTION:
         - For send_money and buy_airtime intents: If the user mentions a NAME (not a phone number), extract it as "beneficiary_name" slot
         - Examples of names: "Send to John", "Buy airtime for Mom", "Send money to Ama"
-        - If a phone number is provided directly, use it as "recipient" or "phone_number" slot
+        - If a phone number is provided directly, use it as "recipient" or "phone" slot
         - Both name and number can be provided; if name is provided, prefer extracting the name as beneficiary_name slot
         - The system will look up the saved beneficiary by name and extract the phone number automatically
         
@@ -232,7 +232,7 @@ class IntentDetector:
 
         User starts buy_airtime: "Buy me 5 cedis airtime to 0550748724"
         INTENT: buy_airtime
-        SLOTS: {{"amount": "5", "phone_number": "0550748724"}}
+        SLOTS: {{"amount": "5", "phone": "0550748724"}}
         MISSING: network
 
         User continues current intent: "Actually, make it 100 cedis instead"

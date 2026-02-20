@@ -16,7 +16,6 @@ _model_modules = [
 	"core.subscription.model.user_subscription",
 	"core.subscription.model.subscription_plan",
 	"core.receipts.model.Receipt",
-	"core.profile.model.Profile",
 	"core.payments.model.timeline",
 	"core.payments.model.paynetwork",
 	"core.payments.model.paymentstatus",

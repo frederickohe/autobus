@@ -11,7 +11,7 @@ class HistoryResponseDTO(BaseModel):
     amount: Optional[float] = None
     currency: str = "GHS"
     recipient: Optional[str] = None
-    phone_number: Optional[str] = None
+    phone: Optional[str] = None
     data_plan: Optional[str] = None
     category: Optional[str] = None
     status: str = "completed"
