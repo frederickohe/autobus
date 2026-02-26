@@ -92,15 +92,11 @@ class AuthService:
         self.db.add(db_user)
         self.db.commit()
         self.db.refresh(db_user)
-            
-        # Send OTP to phone for verification
-        otp_result = self.otp_service.send_otp_phone(request.phone)
         
         return {
             "message": "User account created successfully. Please verify your phone number with the OTP sent to you.",
             "user_id": db_user.id,
             "verification_required": True,
-            "otp_sent": otp_result.success
         }
     
     def verify_and_enable_user(self, phone: str, otp: str):
