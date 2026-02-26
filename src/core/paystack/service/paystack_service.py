@@ -12,6 +12,7 @@ from core.paystack.dto.response.paystack_response import PaystackInitializeRespo
 from config import settings
 from core.user.model.User import User
 from core.paystack.model.transaction import Transaction  # You'll need to create this model
+from utilities.uniqueidgenerator import UniqueIdGenerator
 
 class PaystackService:
     def __init__(self, db: Session):
@@ -81,6 +82,7 @@ class PaystackService:
                 if result["status"]:
                     # Store transaction in database
                     transaction = Transaction(
+                        id=str(UniqueIdGenerator.generate()),
                         user_id=user_id,
                         reference=reference,
                         access_code=result["data"]["access_code"],
