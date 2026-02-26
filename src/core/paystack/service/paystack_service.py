@@ -1,3 +1,5 @@
+import os
+
 import httpx
 import secrets
 import string
@@ -14,7 +16,7 @@ from core.paystack.model.transaction import Transaction  # You'll need to create
 class PaystackService:
     def __init__(self, db: Session):
         self.db = db
-        self.secret_key = getattr(settings, 'PAYSTACK_SECRET_KEY', None)
+        self.secret_key = os.getenv("PAYSTACK_SECRET_KEY")    
         self.base_url = "https://api.paystack.co"
         self.headers = {
             "Authorization": f"Bearer {self.secret_key}",
