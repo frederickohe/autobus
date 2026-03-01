@@ -1,8 +1,6 @@
-from typing import Optional
 from fastapi.responses import JSONResponse
 import jwt
 from passlib.context import CryptContext
-from fastapi_jwt_auth import AuthJWT
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from fastapi import HTTPException
@@ -16,7 +14,6 @@ from core.otp.service.otpservice import OTPService
 import secrets
 import string
 import logging
-from core.subscription.service.subscription_service import SubscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +24,6 @@ class AuthService:
     def __init__(self, db: Session):
         self.db = db
         self.session_driver = SessionDriver()
-        self.otp_service = OTPService(db)
 
     def hash_password(self, password: str) -> str:
         """Hash a plain-text password."""
