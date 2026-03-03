@@ -1,4 +1,6 @@
 from pydantic import BaseModel
 
 class CommandRequest(BaseModel):
-    query: str
+    userid: str
+    message: str
+    agent_name: str

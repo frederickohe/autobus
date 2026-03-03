@@ -1,13 +1,16 @@
 from smolagents import CodeAgent, DuckDuckGoSearchTool, InferenceClientModel, load_tool, tool
+from smolagents.agent_types import AgentImage, AgentAudio
 import datetime
 import pytz
 import yaml
+import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
 from core.agent.tools.answer.final_answer import FinalAnswerTool
 from core.agent.tools.conversation.conversation import ConversationTool
 from core.agent.tools.email.email import EmailTool
+from core.agent.tools.generate_image.generate_image import ImageGenerationTool
 from core.agent.tools.agent_config import (
     CreateAgentTool,
     GetAgentTool,
@@ -15,6 +18,10 @@ from core.agent.tools.agent_config import (
     DeleteAgentTool,
     ListAgentsTool,
 )
+from core.conversationmanager.service.conversation_manager import ConversationManager
+from core.agent.utils.image_storage import ImageStorageManager
+
+logger = logging.getLogger(__name__)
 
 class AutoBus:
     def __init__(self, prompts_path: str = "src/core/agent/prompts.yaml", db_session: Optional[Session] = None):
@@ -32,6 +39,12 @@ class AutoBus:
         
         with open(prompts_path, 'r') as stream:
             prompt_templates = yaml.safe_load(stream)
+        
+        # Initialize conversation manager for tracking user conversations
+        self.conversation_manager = ConversationManager()
+        
+        # Initialize image storage manager for handling agent-generated images
+        self.image_storage = ImageStorageManager()
         
         self.final_answer = FinalAnswerTool()
         self.assistant_conversation = ConversationTool()
@@ -68,18 +81,68 @@ class AutoBus:
         )
         
     def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
-        """Process a user message through the Autobus agent.
+        """Process a user message through the Autobus agent with conversation history.
         
         Args:
             userid: Identifier for the user sending the message.
             message: The user's message text.
-            has_active_subscription: Whether the user has an active subscription.
+            agent_name: Name of the agent to process the message.
             
         Returns:
-            The agent's response.
+            The agent's response (can be string, AgentImage, or AgentAudio).
         """
         try:
-            response = self.agent.run(f"User ID: {userid}, agent_name: {agent_name}, Message: {message}")
-            return response
+            # Get conversation state for user
+            state = self.conversation_manager.get_conversation_state(userid)
+            
+            # Add user message to history
+            logger.info("Received message from %s: %s", userid, (message or '')[:200])
+            self.conversation_manager.update_conversation_history(userid, "user", message)
+            
+            # Format conversation context with recent history
+            conversation_context = self._format_conversation_context(state.conversation_history)
+            
+            # Build complete prompt with conversation history
+            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
+            
+            # Process message through agent
+            response = self.agent.run(complete_message)
+            
+            # Handle media responses (images/audio) by saving them and storing reference in conversation history
+            if isinstance(response, (AgentImage, AgentAudio)):
+                file_path, conversation_string = self.image_storage.handle_media_response(response, userid)
+                # Store only the reference string in conversation history, not the actual media object
+                self.conversation_manager.update_conversation_history(userid, "assistant", conversation_string)
+                logger.info(f"Saved media file for user {userid}: {file_path}")
+                # Return the original media object so the API caller still gets it
+                return f"Image generated and saved: {file_path}"
+            else:
+                # For text responses, store directly
+                self.conversation_manager.update_conversation_history(userid, "assistant", str(response))
+                return response
+            
         except Exception as e:
+            logger.error(f"Error processing message with Autobus for user {userid}: {e}", exc_info=True)
             return f"Error processing message with Autobus: {e}"
+    
+    def _format_conversation_context(self, conversation_history: list) -> str:
+        """Format conversation history for inclusion in the prompt.
+        
+        Args:
+            conversation_history: List of conversation messages with role and content.
+            
+        Returns:
+            Formatted conversation context string.
+        """
+        if not conversation_history:
+            return "[No previous conversation]"
+        
+        # Format recent messages (exclude the message just added, as it's mentioned separately)
+        formatted_messages = []
+        for msg in conversation_history[-20:]:  # Keep last 20 messages for context
+            role = msg.get("role", "unknown").capitalize()
+            content = msg.get("content", "")
+            timestamp = msg.get("timestamp", "")
+            formatted_messages.append(f"{role}: {content}")
+        
+        return "\n".join(formatted_messages) if formatted_messages else "[No previous conversation]"

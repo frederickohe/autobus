@@ -23,6 +23,7 @@ from core.webhooks.controller.webhookscontroller import webhooks_routes
 from core.beneficiaries.controller.beneficiary_controller import beneficiary_routes
 from core.nlu.controller.nlucontroller import nlu_routes
 from core.paystack.controller.paystack_controller import paystack_routes
+from core.agent.controller.agentcontroller import agent_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -106,6 +107,7 @@ app.include_router(beneficiary_routes, prefix="/api/v1/beneficiaries", tags=["Be
 app.include_router(webhooks_routes, prefix="/api/v1/webhooks", tags=["Webhooks Routes"])
 app.include_router(nlu_routes, prefix="/api/v1/nlu", tags=["NLU Routes"])
 app.include_router(paystack_routes, prefix="/api/v1/paystack", tags=["Paystack Routes"])
+app.include_router(agent_routes, prefix="/api/v1/agent", tags=["Agent Routes"])
 
 # JWT Authentication Settings
 class JWTSettings(BaseSettings):

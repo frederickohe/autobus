@@ -1,9 +1,9 @@
 # core/nlu/service/intent_processor.py
 from typing import Dict, List, Any, Optional
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
-from core.nlu.service.llmclient import LLMClient
+from core.llmclient.llmclient import LLMClient
 from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, AGENT_CATEGORIES
-from core.nlu.service.user_rag import UserRAGManager
+from core.retrievalaugementation.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
 from core.histories.service.historyservice import HistoryService

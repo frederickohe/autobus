@@ -1,7 +1,7 @@
 from typing import Dict, List, Any, Tuple
 import logging
 from core.nlu.config import INTENTS, SYSTEM_PROMPTS
-from core.nlu.service.llmclient import LLMClient  # Add this import
+from core.llmclient.llmclient import LLMClient  # Add this import
 
 logger = logging.getLogger(__name__)
 

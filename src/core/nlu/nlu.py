@@ -5,24 +5,20 @@ from decimal import Decimal
 import io
 from core.cloudstorage.service.storageservice import StorageService
 from core.histories.service.historyservice import HistoryService
-import openai
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
-from core.auth.service.authservice import AuthService
 from core.nlu.config import AGENT_CATEGORIES
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
-from core.nlu.service.conversation_manager import ConversationManager
+from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.nlu.service.security import SecurityManager
 from core.nlu.emitters.response import ResponseFormatter
 from core.receipts.service.image_gen import ReceiptGenerator
 from core.user.service.user_service import UserService
 from utilities.dbconfig import SessionLocal
-from core.auth.dto.request.user_create import UserCreateRequest
-from core.receipts.service.receipt_service import ReceiptService
 from core.payments.dto.paymentdto import PaymentDto
 from core.payments.model.paymentmethod import PaymentMethod
 from core.payments.model.paymentstatus import PaymentStatus
@@ -46,7 +42,6 @@ class ReceiptData:
     receiver: str
     payment_method: str
     timestamp: datetime
-    # Optional loan fields
     interest_rate: Optional[str] = None
     loan_period: Optional[str] = None
     expected_pay_date: Optional[str] = None
@@ -978,7 +973,7 @@ class AutobusNLUSystem:
         Returns:
             Dictionary with processed media context
         """
-        from core.nlu.service.media_processor import MediaProcessor
+        from core.llmclient.media_processor import MediaProcessor
         
         media_processor = MediaProcessor()
         media_context = {}

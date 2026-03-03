@@ -10,7 +10,7 @@ AGENT_REQUIRED_PARAMS = {
     "Financial Assistant Agent": ["payment_source", "account_id"],
     "Orders Management Agent": ["database_url", "db_username", "db_password", "orders_endpoint"],
     "Sales Management Agent": ["database_url", "db_username", "db_password", "crm_api_key", "crm_base_url"],
-    "Digital Marketing Agent": ["meta_api","facebook_token", "whatsapp_token", "instagram_token"],
+    "Digital Marketing Agent": [],
     "Data Handling Agent": ["storage_api_key", "storage_bucket"],
     "Inventory Agent": ["database_url", "db_username", "db_password",]
 }

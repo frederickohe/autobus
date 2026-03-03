@@ -1,18 +1,14 @@
-# Enhanced EmailTool with proper infrastructure
-
 import os
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import redis
 import json
 import hashlib
-from datetime import datetime, timedelta
+from datetime import datetime
 from smolagents.tools import Tool
-import aiosmtplib
 import asyncio
-import requests
 
 class EmailTool(Tool):
     name = "email_tool"
@@ -51,7 +47,14 @@ class EmailTool(Tool):
 
     def __init__(self, redis_client=None, db_pool=None, email_config=None):
         super().__init__()
-        self.redis = redis_client or redis.Redis(host='redis', port=6379, db=0)
+        redis_password = os.getenv('REDIS_PASSWORD', 'autobus098')
+        self.redis = redis_client or redis.Redis(
+            host=os.getenv('REDIS_HOST', 'redis'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            password=redis_password if redis_password else None,
+            db=0,
+            decode_responses=True
+        )
         self.db = db_pool  # PostgreSQL connection pool
         self.config = email_config or {
             'provider': 'sendgrid',  # or 'ses', 'mailgun', 'smtp'

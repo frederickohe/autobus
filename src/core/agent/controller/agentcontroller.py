@@ -3,7 +3,7 @@ from fastapi_jwt_auth import AuthJWT
 from fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
 from sqlalchemy.orm import Session
-from core.agent.agent import BusinessAssistant
+from core.agent.agent import AutoBus
 from core.agent.dto.commandreqeust import CommandRequest
 from core.exceptions import *
 from core.auth.dto.request.user_create import UserCreateRequest
@@ -47,6 +47,10 @@ agent_routes = APIRouter()
 @agent_routes.post("/command")
 def agent(query: CommandRequest, db: Session = Depends(get_db)):
 
-    assistant = BusinessAssistant()
+    assistant = AutoBus()
     
-    return assistant.process_query(query.query)
+    return assistant.process_user_message(
+        userid=query.userid,
+        message=query.message,
+        agent_name=query.agent_name
+    )

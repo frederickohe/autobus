@@ -7,7 +7,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from utilities.dbconfig import SessionLocal
 
-from core.nlu.model.Conversation import DailyConversation
+from core.conversationmanager.model.Conversation import DailyConversation
 
 
 @dataclass
@@ -56,7 +56,7 @@ class ConversationState:
 class ConversationManager:
     def __init__(self):
         self.db = SessionLocal()
-        self.memory_cache: Dict[str, ConversationState] = {}  # In-memory cache for performance
+        self.memory_cache: Dict[str, ConversationState] = {}
     
     def _get_today_key(self, user_id: str) -> str:
         """Generate cache key for user's today's conversation"""
@@ -89,11 +89,19 @@ class ConversationManager:
         return state
     
     def update_conversation_history(self, user_id: str, role: str, content: str):
-        """Update conversation history and persist to database"""
+        """Update conversation history and persist to database
+        
+        Args:
+            user_id: The user ID for the conversation.
+            role: The role of the message sender (e.g., 'user', 'assistant').
+            content: The message content (will be converted to string if needed).
+        """
         state = self.get_conversation_state(user_id)
+        # Ensure content is a string to avoid JSON serialization issues with objects like AgentImage
+        content_str = str(content) if not isinstance(content, str) else content
         state.conversation_history.append({
             "role": role, 
-            "content": content,
+            "content": content_str,
             "timestamp": datetime.utcnow().isoformat()
         })
         
