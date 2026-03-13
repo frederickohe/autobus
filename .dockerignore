@@ -8,6 +8,7 @@ __pycache__
 .env.local
 .venv
 venv
+alembic/versions/*.py
 env
 node_modules
 .DS_Store
