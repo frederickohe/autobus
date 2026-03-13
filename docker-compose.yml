@@ -107,7 +107,6 @@ services:
       BLOTATO_CLIENT_ID: ${BLOTATO_CLIENT_ID:-your_blotato_client_id_here}
       BLOTATO_CLIENT_SECRET: ${BLOTATO_CLIENT_SECRET:-your_blotato_client_secret_here}
       BLOTATO_REDIRECT_URI: ${BLOTATO_REDIRECT_URI:-http://localhost:8000/api/social/callback}
-      BASE_FRONTEND_URL: ${BASE_FRONTEND_URL:-http://localhost:3000}
 
     ports:
       - "8000:8000"
