@@ -30,6 +30,7 @@ _model_modules = [
 	"core.auth.model.refreshtoken",
 	"core.auth.model.password_reset_token",
 	"core.paystack.model.transaction",
+	"core.socialmedia.model.SocialAccount",
 ]
 
 

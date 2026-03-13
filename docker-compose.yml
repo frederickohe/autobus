@@ -102,7 +102,13 @@ services:
 
       # Language Model API Key
       OPENAI_API_KEY: ${OPENAI_API_KEY:-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}
-    
+
+      BLOTATO_API_KEY: ${BLOTATO_API_KEY:-your_blotato_api_key_here}
+      BLOTATO_CLIENT_ID: ${BLOTATO_CLIENT_ID:-your_blotato_client_id_here}
+      BLOTATO_CLIENT_SECRET: ${BLOTATO_CLIENT_SECRET:-your_blotato_client_secret_here}
+      BLOTATO_REDIRECT_URI: ${BLOTATO_REDIRECT_URI:-http://localhost:8000/api/social/callback}
+      BASE_FRONTEND_URL: ${BASE_FRONTEND_URL:-http://localhost:3000}
+
     ports:
       - "8000:8000"
     depends_on:

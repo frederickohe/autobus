@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     WIREPICK_SENDER_ID = "YourSenderID"     # Your approved sender ID
     USE_WIREPICK_API_KEY = False  # Set to True to use API key authentication, False to use client/password
     
+    # Blotato Social Media Integration Configuration
+    BLOTATO_API_KEY: str = os.environ.get('BLOTATO_API_KEY', '')
+    BLOTATO_CLIENT_ID: str = os.environ.get('BLOTATO_CLIENT_ID', '')
+    BLOTATO_CLIENT_SECRET: str = os.environ.get('BLOTATO_CLIENT_SECRET', '')
+    BLOTATO_API_BASE: str = os.environ.get('BLOTATO_API_BASE', 'https://api.blotato.com')
+    BLOTATO_OAUTH_BASE: str = os.environ.get('BLOTATO_OAUTH_BASE', 'https://app.blotato.com')
+    
     # OTP Configuration
     OTP_EXPIRE_MINUTES: int = int(os.environ.get('OTP_EXPIRE_MINUTES', 5))
 
