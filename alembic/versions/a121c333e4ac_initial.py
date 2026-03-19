@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as postgresql
 
-revision = '0d25037dcc7f'
+revision = 'a121c333e4ac'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -240,6 +240,30 @@ def upgrade():
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('token')
     )
+    op.create_table('social_accounts',
+    sa.Column('id', sa.String(length=50), nullable=False),
+    sa.Column('user_id', sa.String(length=20), nullable=False),
+    sa.Column('platform', sa.String(length=50), nullable=False),
+    sa.Column('account_id', sa.String(length=100), nullable=False),
+    sa.Column('account_name', sa.String(length=255), nullable=False),
+    sa.Column('platform_user_id', sa.String(length=100), nullable=True),
+    sa.Column('access_token', sa.String(length=500), nullable=True),
+    sa.Column('refresh_token', sa.String(length=500), nullable=True),
+    sa.Column('token_expires_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('is_active', sa.Boolean(), nullable=False),
+    sa.Column('connected_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('last_used_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('last_post_time', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('posts_today', sa.Integer(), nullable=False),
+    sa.Column('oauth_state', sa.String(length=100), nullable=True),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id'),
+    sa.UniqueConstraint('account_id'),
+    sa.UniqueConstraint('id')
+    )
+    op.create_index(op.f('ix_social_accounts_platform'), 'social_accounts', ['platform'], unique=False)
+    op.create_index(op.f('ix_social_accounts_user_id'), 'social_accounts', ['user_id'], unique=False)
     op.create_table('transactions',
     sa.Column('id', sa.String(length=20), nullable=False),
     sa.Column('user_id', sa.String(length=20), nullable=False),
@@ -283,6 +307,9 @@ def downgrade():
     op.drop_table('user_subscriptions')
     op.drop_index(op.f('ix_transactions_reference'), table_name='transactions')
     op.drop_table('transactions')
+    op.drop_index(op.f('ix_social_accounts_user_id'), table_name='social_accounts')
+    op.drop_index(op.f('ix_social_accounts_platform'), table_name='social_accounts')
+    op.drop_table('social_accounts')
     op.drop_table('refresh_tokens')
     op.drop_table('password_reset_tokens')
     op.drop_index(op.f('ix_notifications_user_id'), table_name='notifications')

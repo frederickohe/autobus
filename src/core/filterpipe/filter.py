@@ -105,9 +105,9 @@ class FilterPipeline:
         agent_config = res.get("agent_config")
 
         # 4. Agent params complete
-        res = self.check_agent_params_complete(agent_name, agent_config)
-        if not res.get("ok"):
-            return {"proceed": False, "message": res.get("message")}
+        # res = self.check_agent_params_complete(agent_name, agent_config)
+        # if not res.get("ok"):
+        #     return {"proceed": False, "message": res.get("message")}
 
         # All checks passed -> dispatch to AutoBus
         try:

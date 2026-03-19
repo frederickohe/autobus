@@ -1,7 +1,29 @@
 from smolagents.tools import Tool
 from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
+import json
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
+
+
+def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize parameters by stripping whitespace from string values.
+    
+    This fixes issues where LLMs might introduce unintended spaces or newlines
+    in generated values (e.g., "noreply@useautobus. com" instead of "noreply@useautobus.com").
+    
+    Args:
+        params: Dictionary of parameters to sanitize
+        
+    Returns:
+        Dictionary with whitespace stripped from string values
+    """
+    sanitized = {}
+    for key, value in params.items():
+        if isinstance(value, str):
+            sanitized[key] = value.strip()
+        else:
+            sanitized[key] = value
+    return sanitized
 
 
 class CreateAgentTool(Tool):
@@ -75,12 +97,15 @@ class CreateAgentTool(Tool):
             JSON string with success/error information
         """
         if not self.service:
-            return '{"ok": false, "message": "Database session not initialized"}'
+            return json.dumps({"ok": False, "message": "Database session not initialized"})
         
         try:
-            metadata = {"status": status}
+            # Sanitize parameters to remove unintended whitespace
+            params = _sanitize_params(params)
+            
+            metadata = {"status": status.strip() if isinstance(status, str) else status}
             if description:
-                metadata["description"] = description
+                metadata["description"] = description.strip() if isinstance(description, str) else description
                 
             result = self.service.create_or_update_agent(
                 user_id=user_id,
@@ -90,8 +115,8 @@ class CreateAgentTool(Tool):
             )
             
             if result.get("ok"):
-                return f'{{"ok": true, "message": "Agent {agent_name} configured successfully", "agent": {result.get("agent")}}}'
+                return json.dumps({"ok": True, "message": f"Agent {agent_name} configured successfully", "agent": result.get("agent")})
             else:
-                return f'{{"ok": false, "message": "{result.get("message")}"}}'
+                return json.dumps({"ok": False, "message": result.get("message")})
         except Exception as e:
-            return f'{{"ok": false, "message": "Error creating agent: {str(e)}"}}'
+            return json.dumps({"ok": False, "message": f"Error creating agent: {str(e)}"})

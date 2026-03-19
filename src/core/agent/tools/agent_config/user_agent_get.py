@@ -1,6 +1,7 @@
 from smolagents.tools import Tool
 from typing import Any, Dict, Optional
 from sqlalchemy.orm import Session
+import json
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
 
 
@@ -54,8 +55,8 @@ class GetAgentTool(Tool):
             result = self.service.get_agent(user_id=user_id, agent_name=agent_name)
             
             if result.get("ok"):
-                return f'{{"ok": true, "agent": {result.get("agent")}}}'
+                return json.dumps({"ok": True, "agent": result.get("agent")})
             else:
-                return f'{{"ok": false, "message": "{result.get("message")}"}}'
+                return json.dumps({"ok": False, "message": result.get("message")})
         except Exception as e:
-            return f'{{"ok": false, "message": "Error retrieving agent: {str(e)}"}}'
+            return json.dumps({"ok": False, "message": f"Error retrieving agent: {str(e)}"})
