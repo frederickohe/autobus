@@ -63,7 +63,7 @@ class OrderService:
 
             if order_data.payment_method:
                 try:
-                    PaymentMethod(order_data.payment_method)
+                    OrderPaymentMethod(order_data.payment_method)
                 except ValueError:
                     return False, None, f"Invalid payment_method: {order_data.payment_method}"
 
@@ -88,7 +88,7 @@ class OrderService:
                 customer_email=order_data.customer_email,
                 order_type=order_data.order_type,
                 order_status=OrderStatus.PENDING.value,
-                payment_status=PaymentStatus.PENDING.value,
+                payment_status=OrderPaymentStatus.PENDING.value,
                 fulfillment_status=FulfillmentStatus.UNFULFILLED.value,
                 subtotal_amount=order_data.subtotal_amount,
                 discount_amount=order_data.discount_amount,
@@ -196,7 +196,7 @@ class OrderService:
 
             if update_data.payment_status:
                 try:
-                    PaymentStatus(update_data.payment_status)
+                    OrderPaymentStatus(update_data.payment_status)
                 except ValueError:
                     return False, None, f"Invalid payment_status: {update_data.payment_status}"
 
@@ -208,7 +208,7 @@ class OrderService:
 
             if update_data.payment_method:
                 try:
-                    PaymentMethod(update_data.payment_method)
+                    OrderPaymentMethod(update_data.payment_method)
                 except ValueError:
                     return False, None, f"Invalid payment_method: {update_data.payment_method}"
 
@@ -219,7 +219,7 @@ class OrderService:
             if update_data.payment_status:
                 order.payment_status = update_data.payment_status
                 # Set payment_date if status changed to paid
-                if update_data.payment_status in [PaymentStatus.PAID.value]:
+                if update_data.payment_status in [OrderPaymentStatus.PAID.value]:
                     order.payment_date = datetime.utcnow()
 
             if update_data.fulfillment_status:
