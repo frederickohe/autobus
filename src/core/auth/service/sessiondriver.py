@@ -19,7 +19,7 @@ class TokenData(BaseModel):
 class SessionDriver:
     def __init__(self):
         # Get Redis host/port/password from environment variables (defaults suited for local development)
-        redis_host = os.getenv("REDIS_HOST", "redis")
+        redis_host = os.getenv("REDIS_HOST", "localhost")
         redis_port = int(os.getenv("REDIS_PORT", 6379))
         redis_password = os.getenv("REDIS_PASSWORD", None)
 
