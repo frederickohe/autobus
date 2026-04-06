@@ -18,6 +18,16 @@ from core.agent.tools.agent_config import (
     DeleteAgentTool,
     ListAgentsTool,
 )
+from core.agent.tools.product import (
+    CreateProductTool,
+    GetProductTool,
+    UpdateProductTool,
+    FetchProductByNameTool,
+    UserSelectProductTool,
+    GetProductInventoryTool,
+    IncrementInventoryTool,
+    DecrementInventoryTool,
+)
 from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
 
@@ -58,6 +68,16 @@ class AutoBus:
         self.user_agent_config_delete_tool = DeleteAgentTool(db_session)
         self.user_agent_config_list_agents_tool = ListAgentsTool(db_session)
         
+        # Initialize product tools with database session
+        self.product_create_tool = CreateProductTool(db_session)
+        self.product_get_tool = GetProductTool(db_session)
+        self.product_update_tool = UpdateProductTool(db_session)
+        self.product_fetch_by_name_tool = FetchProductByNameTool(db_session)
+        self.product_user_select_tool = UserSelectProductTool(db_session)
+        self.product_inventory_get_tool = GetProductInventoryTool(db_session)
+        self.inventory_increment_tool = IncrementInventoryTool(db_session)
+        self.inventory_decrement_tool = DecrementInventoryTool(db_session)
+        
         self.agent = CodeAgent(
             model=self.model,
             tools=[
@@ -71,6 +91,14 @@ class AutoBus:
                 self.user_agent_config_update_tool,
                 self.user_agent_config_delete_tool,
                 self.user_agent_config_list_agents_tool,
+                self.product_create_tool,
+                self.product_get_tool,
+                self.product_update_tool,
+                self.product_fetch_by_name_tool,
+                self.product_user_select_tool,
+                self.product_inventory_get_tool,
+                self.inventory_increment_tool,
+                self.inventory_decrement_tool,
             ],
             max_steps=6,
             verbosity_level=1,

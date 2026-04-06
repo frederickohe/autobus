@@ -50,6 +50,7 @@ class ProductService:
     def create_product(self, product_data: ProductCreateDTO) -> Tuple[bool, Optional[Product], str]:
         """
         Create a new product and automatically create an associated inventory record.
+        If a product with the exact same name exists, returns the existing product.
 
         Args:
             product_data: ProductCreateDTO with product details
@@ -59,6 +60,12 @@ class ProductService:
         """
         try:
             logger.info(f"[PRODUCT_SERVICE] Creating product: {product_data.name}")
+
+            # Check if product with exact name already exists
+            existing_by_name = self.get_product_by_name(product_data.name)
+            if existing_by_name:
+                logger.info(f"[PRODUCT_SERVICE] Product with name '{product_data.name}' already exists, returning existing product")
+                return True, existing_by_name, f"Product '{product_data.name}' already exists. Returning existing product."
 
             # Generate inventory_id from product name
             inventory_id = self.generate_inventory_id(product_data.name)
@@ -94,7 +101,7 @@ class ProductService:
                 product_id=product.product_id,
                 location=None,  # Default location is None
                 name=f"{product_data.name} - Default Inventory",
-                quantity_on_hand=0,
+                quantity_on_hand=1,
                 quantity_reserved=0,
                 quantity_in_transit=0,
                 quantity_on_order=0,
@@ -105,7 +112,8 @@ class ProductService:
                 reorder_quantity=None,
                 optimal_stock_level=None,
                 stockout_risk_score=None,
-                days_of_inventory=None
+                days_of_inventory=None,
+                last_counted_at=datetime.utcnow()  # Start counting from creation
             )
             
             self.db.add(inventory)
@@ -139,6 +147,19 @@ class ProductService:
         except Exception as e:
             logger.error(f"[PRODUCT_SERVICE] Error fetching product: {str(e)}", exc_info=True)
             return None
+
+    def get_product_by_name(self, name: str, skip: int = 0, limit: int = 100) -> List[Product]:
+        """Get all products that contain the name phrase (case-insensitive search)."""
+        try:
+            logger.info(f"[PRODUCT_SERVICE] Searching products by name: {name}")
+            products = self.db.query(Product).filter(
+                Product.name.ilike(f"%{name}%")
+            ).order_by(desc(Product.created_at)).offset(skip).limit(limit).all()
+            logger.info(f"[PRODUCT_SERVICE] Found {len(products)} products matching '{name}'")
+            return products
+        except Exception as e:
+            logger.error(f"[PRODUCT_SERVICE] Error fetching products by name: {str(e)}", exc_info=True)
+            return []
 
     def get_product_by_barcode(self, barcode: str) -> Optional[Product]:
         """Get a product by its barcode."""

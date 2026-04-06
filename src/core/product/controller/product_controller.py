@@ -22,6 +22,32 @@ product_routes = APIRouter()
 
 # ==================== PRODUCT ENDPOINTS ====================
 
+@product_routes.get("/by-name/{product_name}", response_model=List[ProductResponseDTO])
+def get_product_by_name(
+    product_name: str = Path(..., description="Product name phrase to search for"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token)
+):
+    """Get all products containing the name phrase (case-insensitive search)."""
+    try:
+        logger.info(f"[PRODUCT_CONTROLLER] Searching products by name: {product_name}")
+
+        product_service = ProductService(db)
+        products = product_service.get_product_by_name(product_name, skip, limit)
+
+        logger.info(f"[PRODUCT_CONTROLLER] Found {len(products)} products matching '{product_name}'")
+        return [ProductResponseDTO.from_product(p) for p in products]
+
+    except Exception as e:
+        logger.error(f"[PRODUCT_CONTROLLER] Error getting products by name: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving products: {str(e)}"
+        )
+
+
 @product_routes.post("/", response_model=ProductResponseDTO)
 def create_product(
     request: ProductCreateDTO,
@@ -80,69 +106,6 @@ def get_product(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving product: {str(e)}"
         )
-
-
-@product_routes.get("/inventory-id/{inventory_id}", response_model=ProductResponseDTO)
-def get_product_by_inventory_id(
-    inventory_id: str = Path(..., description="Product Inventory ID"),
-    db: Session = Depends(get_db),
-    authjwt: AuthJWT = Depends(validate_token)
-):
-    """Get a product by inventory ID."""
-    try:
-        logger.info(f"[PRODUCT_CONTROLLER] Getting product by inventory_id: {inventory_id}")
-
-        product_service = ProductService(db)
-        product = product_service.get_product_by_inventory_id(inventory_id)
-
-        if not product:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found"
-            )
-
-        return ProductResponseDTO.from_product(product)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[PRODUCT_CONTROLLER] Error getting product: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving product: {str(e)}"
-        )
-
-
-@product_routes.get("/barcode/{barcode}", response_model=ProductResponseDTO)
-def get_product_by_barcode(
-    barcode: str = Path(..., description="Product Barcode"),
-    db: Session = Depends(get_db),
-    authjwt: AuthJWT = Depends(validate_token)
-):
-    """Get a product by barcode."""
-    try:
-        logger.info(f"[PRODUCT_CONTROLLER] Getting product by barcode: {barcode}")
-
-        product_service = ProductService(db)
-        product = product_service.get_product_by_barcode(barcode)
-
-        if not product:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Product not found"
-            )
-
-        return ProductResponseDTO.from_product(product)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"[PRODUCT_CONTROLLER] Error getting product: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving product: {str(e)}"
-        )
-
 
 @product_routes.get("/", response_model=List[ProductResponseDTO])
 def list_products(

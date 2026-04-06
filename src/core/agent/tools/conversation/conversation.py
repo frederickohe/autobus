@@ -62,7 +62,9 @@ class ConversationTool(Tool):
             self.conversation_history.append({"role": "assistant", "content": assistant_message})
             return assistant_message
         except Exception as e:
-            error_msg = f"❌ Error generating conversation: {str(e)}"
+            import traceback
+            error_trace = traceback.format_exc()
+            error_msg = f"❌ Error generating conversation: {str(e)}\nDetails: {error_trace}"
             return error_msg
 
     def reset_conversation(self):

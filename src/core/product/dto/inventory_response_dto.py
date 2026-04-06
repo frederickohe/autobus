@@ -74,6 +74,7 @@ class InventoryResponseDTO(BaseModel):
             inventory_id=str(inventory.inventory_id),
             product_id=str(inventory.product_id),
             location=inventory.location,
+            name=inventory.name,
             quantity_on_hand=inventory.quantity_on_hand,
             quantity_reserved=inventory.quantity_reserved,
             quantity_available=inventory.quantity_available,
