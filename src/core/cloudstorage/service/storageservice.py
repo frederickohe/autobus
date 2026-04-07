@@ -1,77 +1,77 @@
 import os
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from azure.storage.blob import BlobServiceClient, ContentSettings
+import boto3
+from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
 
 class StorageService:
-    """Azure Blob Storage implementation used by the app.
+    """Contabo S3-compatible storage implementation used by the app.
 
     It reads configuration from environment variables:
-      - AZURE_STORAGE_CONNECTION_STRING
-      - AZURE_STORAGE_CONTAINER
-
-    If Azure credentials are not configured, storage operations will be disabled
-    and return None/empty strings gracefully.
+      - CONTABO_ACCESS_KEY
+      - CONTABO_SECRET_KEY
+      - CONTABO_ENDPOINT
+      - CONTABO_BUCKET
 
     Methods:
-      - upload_file(file_obj, file_name, content_type=None) -> str (blob url) or None
-      - download_file(file_name, destination_path) -> str or None
+      - upload_file(file_obj, file_name, content_type=None) -> str (blob url)
+      - download_file(file_name, destination_path) -> str
     """
 
-    def __init__(self, connection_string: str | None = None, container_name: str | None = None):
-        connection_string = connection_string or os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        container_name = container_name or os.getenv("AZURE_STORAGE_CONTAINER")
+    def __init__(self):
+        self.access_key = os.getenv("CONTABO_ACCESS_KEY")
+        self.secret_key = os.getenv("CONTABO_SECRET_KEY")
+        self.endpoint = os.getenv("CONTABO_ENDPOINT", "https://usc1.contabostorage.com")
+        self.bucket = os.getenv("CONTABO_BUCKET")
 
-        self.enabled = False
-        self.blob_service_client = None
-        self.container_client = None
+        if not self.access_key or not self.secret_key or not self.bucket:
+            raise ValueError(
+                "Contabo storage credentials and bucket must be set: "
+                "CONTABO_ACCESS_KEY, CONTABO_SECRET_KEY, and CONTABO_BUCKET"
+            )
 
-        if connection_string and container_name:
-            try:
-                self.blob_service_client = BlobServiceClient.from_connection_string(connection_string)
-                self.container_client = self.blob_service_client.get_container_client(container_name)
-                # Ensure container exists (create if not). If it already exists, ignore the error.
+        # Initialize S3 client with Contabo endpoint
+        self.s3_client = boto3.client(
+            "s3",
+            endpoint_url=self.endpoint,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            region_name="us-east-1"  # Required but not used by Contabo
+        )
+
+        # Ensure bucket exists (create if not). If it already exists, ignore the error.
+        try:
+            self.s3_client.head_bucket(Bucket=self.bucket)
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "404":
                 try:
-                    self.container_client.create_container()
-                except Exception:
-                    # Container likely already exists or creation not permitted; continue.
-                    pass
-                self.enabled = True
-                logger.info("Azure Blob Storage enabled")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Azure Blob Storage: {e}. Storage operations will be disabled.")
-                self.enabled = False
-        else:
-            logger.info("Azure Storage credentials not configured. Storage operations will be disabled.")
+                    self.s3_client.create_bucket(Bucket=self.bucket)
+                except ClientError:
+                    pass  # Bucket creation not permitted; continue.
+            else:
+                pass  # Other errors; continue.
 
-    def upload_file(self, file_obj, file_name: str, content_type: str | None = None, timeout_seconds: int = 30) -> str | None:
-        """Upload a file-like object to Azure Blob Storage and return the blob URL.
+    def upload_file(self, file_obj, file_name: str, content_type: str | None = None, timeout_seconds: int = 30) -> str:
+        """Upload a file-like object to Contabo S3 storage and return the object URL.
 
         file_obj must be a readable file-like object (e.g. UploadFile.file from FastAPI).
 
         Args:
             file_obj: File-like object to upload
-            file_name: Name/path for the blob
-            content_type: MIME type for the blob
+            file_name: Name/path for the object
+            content_type: MIME type for the object
             timeout_seconds: Maximum seconds to wait for upload (default: 30)
 
         Returns:
-            str: URL of the uploaded blob, or None if storage is disabled
+            str: URL of the uploaded object
 
         Raises:
             TimeoutError: If upload takes longer than timeout_seconds
-            Exception: Other Azure storage exceptions (only if enabled)
+            Exception: Other S3 storage exceptions
         """
-        if not self.enabled:
-            logger.warning(f"Storage upload requested for {file_name}, but Azure Blob Storage is not enabled. Skipping upload.")
-            return None
-
-        blob_client = self.container_client.get_blob_client(file_name)
-        content_settings = ContentSettings(content_type=content_type) if content_type else None
-
         # Make sure we start reading from beginning
         try:
             file_obj.seek(0)
@@ -81,10 +81,27 @@ class StorageService:
         # Define upload function to run in thread
         def _upload():
             try:
-                blob_client.upload_blob(file_obj, overwrite=True, content_settings=content_settings, timeout=timeout_seconds)
-                return blob_client.url
+                extra_args = {}
+                if content_type:
+                    extra_args["ContentType"] = content_type
+                
+                self.s3_client.upload_fileobj(
+                    file_obj,
+                    self.bucket,
+                    file_name,
+                    ExtraArgs=extra_args if extra_args else None
+                )
+                
+                # Generate public URL for the uploaded object using pre-signed URL
+                # This ensures the URL is in the correct Contabo format and publicly accessible
+                url = self.s3_client.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': self.bucket, 'Key': file_name},
+                    ExpiresIn=31536000  # 1 year expiration
+                )
+                return url
             except Exception as e:
-                logger.error(f"Azure upload error: {str(e)}")
+                logger.error(f"Contabo S3 upload error: {str(e)}")
                 raise
 
         # Execute upload with hard timeout using ThreadPoolExecutor
@@ -93,39 +110,38 @@ class StorageService:
             try:
                 # Wait for result with timeout
                 result = future.result(timeout=timeout_seconds)
-                logger.info(f"Successfully uploaded {file_name} to Azure Blob Storage")
+                logger.info(f"Successfully uploaded {file_name} to Contabo S3 storage")
                 return result
             except FuturesTimeoutError:
                 logger.error(f"Upload timeout after {timeout_seconds}s for {file_name}")
                 # Cancel the future (though the upload might still continue in background)
                 future.cancel()
-                raise TimeoutError(f"Azure blob upload timed out after {timeout_seconds} seconds")
+                raise TimeoutError(f"Contabo S3 upload timed out after {timeout_seconds} seconds")
             except Exception as e:
                 logger.error(f"Upload failed for {file_name}: {str(e)}")
                 raise
 
-    def download_file(self, file_name: str, destination_path: str) -> str | None:
-        """Download blob to local file path.
+    def download_file(self, file_name: str, destination_path: str) -> str:
+        """Download file from Contabo S3 to local file path.
 
         Args:
-            file_name: Name of the blob to download
+            file_name: Name/path of the object in S3
             destination_path: Local path to save the file
 
         Returns:
-            str: Success message, or None if storage is disabled
+            str: Confirmation message
 
         Raises:
-            Exceptions from Azure SDK if blob not found (only if enabled)
+            Exception: S3 storage exceptions if file not found
         """
-        if not self.enabled:
-            logger.warning(f"Storage download requested for {file_name}, but Azure Blob Storage is not enabled. Skipping download.")
-            return None
-
-        blob_client = self.container_client.get_blob_client(file_name)
-        downloader = blob_client.download_blob()
-
-        # Write bytes to the destination file
-        with open(destination_path, "wb") as f:
-            downloader.readinto(f)
-
-        return f"Downloaded {file_name} to {destination_path}"
+        try:
+            self.s3_client.download_file(
+                self.bucket,
+                file_name,
+                destination_path
+            )
+            logger.info(f"Successfully downloaded {file_name} from Contabo S3 to {destination_path}")
+            return f"Downloaded {file_name} to {destination_path}"
+        except ClientError as e:
+            logger.error(f"Contabo S3 download error for {file_name}: {str(e)}")
+            raise

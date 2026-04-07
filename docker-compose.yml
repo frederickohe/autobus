@@ -108,6 +108,11 @@ services:
       BLOTATO_CLIENT_SECRET: ${BLOTATO_CLIENT_SECRET:-your_blotato_client_secret_here}
       BLOTATO_REDIRECT_URI: ${BLOTATO_REDIRECT_URI:-http://localhost:8000/api/social/callback}
 
+      CONTABO_ACCESS_KEY: ${CONTABO_ACCESS_KEY:-e59e33a21a72b214bfc6aeb3e2fcd711}
+      CONTABO_SECRET_KEY: ${CONTABO_SECRET_KEY:-939a59165a7490c08e78311d26182118}
+      CONTABO_BUCKET: ${CONTABO_BUCKET:-autobus}
+      CONTABO_ENDPOINT: ${CONTABO_ENDPOINT:-https://usc1.contabostorage.com}
+
     ports:
       - "8000:8000"
     depends_on:
