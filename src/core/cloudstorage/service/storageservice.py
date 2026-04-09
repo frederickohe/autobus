@@ -54,7 +54,7 @@ class StorageService:
             else:
                 pass  # Other errors; continue.
 
-    def upload_file(self, file_obj, file_name: str, content_type: str | None = None, timeout_seconds: int = 30) -> str:
+    def upload_file(self, file_obj, file_name: str, content_type: str | None = None, timeout_seconds: int = 30, subfolder: str = "operations/") -> str:
         """Upload a file-like object to Contabo S3 storage and return the object URL.
 
         file_obj must be a readable file-like object (e.g. UploadFile.file from FastAPI).
@@ -64,6 +64,7 @@ class StorageService:
             file_name: Name/path for the object
             content_type: MIME type for the object
             timeout_seconds: Maximum seconds to wait for upload (default: 30)
+            subfolder: S3 subfolder path (default: "operations/", options: "operations/" or "ai-training-files/")
 
         Returns:
             str: URL of the uploaded object
@@ -72,6 +73,13 @@ class StorageService:
             TimeoutError: If upload takes longer than timeout_seconds
             Exception: Other S3 storage exceptions
         """
+        # Normalize subfolder path
+        if not subfolder.endswith("/"):
+            subfolder += "/"
+        
+        # Construct full S3 key with subfolder
+        s3_key = f"{subfolder}{file_name}"
+        
         # Make sure we start reading from beginning
         try:
             file_obj.seek(0)
@@ -88,7 +96,7 @@ class StorageService:
                 self.s3_client.upload_fileobj(
                     file_obj,
                     self.bucket,
-                    file_name,
+                    s3_key,
                     ExtraArgs=extra_args if extra_args else None
                 )
                 
@@ -96,7 +104,7 @@ class StorageService:
                 # This ensures the URL is in the correct Contabo format and publicly accessible
                 url = self.s3_client.generate_presigned_url(
                     'get_object',
-                    Params={'Bucket': self.bucket, 'Key': file_name},
+                    Params={'Bucket': self.bucket, 'Key': s3_key},
                     ExpiresIn=31536000  # 1 year expiration
                 )
                 return url
@@ -110,7 +118,7 @@ class StorageService:
             try:
                 # Wait for result with timeout
                 result = future.result(timeout=timeout_seconds)
-                logger.info(f"Successfully uploaded {file_name} to Contabo S3 storage")
+                logger.info(f"Successfully uploaded {file_name} to {subfolder} in Contabo S3 storage")
                 return result
             except FuturesTimeoutError:
                 logger.error(f"Upload timeout after {timeout_seconds}s for {file_name}")
@@ -121,12 +129,13 @@ class StorageService:
                 logger.error(f"Upload failed for {file_name}: {str(e)}")
                 raise
 
-    def download_file(self, file_name: str, destination_path: str) -> str:
+    def download_file(self, file_name: str, destination_path: str, subfolder: str = "operations/") -> str:
         """Download file from Contabo S3 to local file path.
 
         Args:
             file_name: Name/path of the object in S3
             destination_path: Local path to save the file
+            subfolder: S3 subfolder path (default: "operations/", options: "operations/" or "ai-training-files/")
 
         Returns:
             str: Confirmation message
@@ -134,13 +143,20 @@ class StorageService:
         Raises:
             Exception: S3 storage exceptions if file not found
         """
+        # Normalize subfolder path
+        if not subfolder.endswith("/"):
+            subfolder += "/"
+        
+        # Construct full S3 key with subfolder
+        s3_key = f"{subfolder}{file_name}"
+        
         try:
             self.s3_client.download_file(
                 self.bucket,
-                file_name,
+                s3_key,
                 destination_path
             )
-            logger.info(f"Successfully downloaded {file_name} from Contabo S3 to {destination_path}")
+            logger.info(f"Successfully downloaded {file_name} from {subfolder} in Contabo S3 to {destination_path}")
             return f"Downloaded {file_name} to {destination_path}"
         except ClientError as e:
             logger.error(f"Contabo S3 download error for {file_name}: {str(e)}")
