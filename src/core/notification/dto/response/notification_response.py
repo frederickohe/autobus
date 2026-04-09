@@ -24,7 +24,7 @@ class NotificationResponse(BaseModel):
     sms_delivered_at: Optional[datetime] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
         from_attributes = True
 
     @classmethod

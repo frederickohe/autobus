@@ -1,19 +1,26 @@
-from pydantic import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import URL
 import os
+from typing import Optional
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"  # Ignore extra fields from .env that aren't defined in the model
+    )
+    
     SERVICE_NAME: str = "Autobus Backend"
     DEBUG: bool = os.environ.get('DEBUG', 'false').lower() == 'true'
 
     # Database Configuration - supports both traditional and Docker Postgres env vars
     DB_DRIVER: str = os.environ.get('DB_DRIVER', 'postgresql+asyncpg')
-    DB_HOST: str = os.environ.get('PGHOST') or os.environ.get('DB_HOST')
+    DB_HOST: Optional[str] = os.environ.get('PGHOST') or os.environ.get('DB_HOST')
     DB_PORT: int = int(os.environ.get('PGPORT', os.environ.get('DB_PORT', 5432)))
-    DB_USER: str = os.environ.get('PGUSER') or os.environ.get('DB_USER')
-    DB_PASSWORD: str = os.environ.get('PGPASSWORD') or os.environ.get('DB_PASSWORD')
-    DB_DATABASE: str = os.environ.get('PGDATABASE') or os.environ.get('DB_DATABASE')
+    DB_USER: Optional[str] = os.environ.get('PGUSER') or os.environ.get('DB_USER')
+    DB_PASSWORD: Optional[str] = os.environ.get('PGPASSWORD') or os.environ.get('DB_PASSWORD')
+    DB_DATABASE: Optional[str] = os.environ.get('PGDATABASE') or os.environ.get('DB_DATABASE')
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 0
     DB_ECHO: bool = os.environ.get('DB_ECHO', 'false').lower() == 'true'
@@ -41,12 +48,12 @@ class Settings(BaseSettings):
     COMPANY_QUEUE: str = os.environ.get('COMPANY_QUEUE', '')
 
     # Wirepick SMS Configuration
-    WIREPICK_API_URL = "https://api.wirepick.com/httpsms"
-    WIREPICK_CLIENT_ID = "your_client_id"  # Replace with actual client ID
-    WIREPICK_PASSWORD = "your_password"    # Replace with actual password
-    WIREPICK_PUBLIC_KEY = "your_public_key" # Replace with actual public key (wpkKey)
-    WIREPICK_SENDER_ID = "YourSenderID"     # Your approved sender ID
-    USE_WIREPICK_API_KEY = False  # Set to True to use API key authentication, False to use client/password
+    WIREPICK_API_URL: str = "https://api.wirepick.com/httpsms"
+    WIREPICK_CLIENT_ID: str = "your_client_id"  # Replace with actual client ID
+    WIREPICK_PASSWORD: str = "your_password"    # Replace with actual password
+    WIREPICK_PUBLIC_KEY: str = "your_public_key" # Replace with actual public key (wpkKey)
+    WIREPICK_SENDER_ID: str = "YourSenderID"     # Your approved sender ID
+    USE_WIREPICK_API_KEY: bool = False  # Set to True to use API key authentication, False to use client/password
     
     # Blotato Social Media Integration Configuration
     BLOTATO_API_KEY: str = os.environ.get('BLOTATO_API_KEY', '')
@@ -83,10 +90,6 @@ class Settings(BaseSettings):
     def MULTI_TENANT_DB_STRING(self, migration_id: str) -> str:
         return (f'jdbc:postgresql://{self.DB_HOST}:'
                 f'{self.DB_PORT}/{migration_id}?ApplicationName=MultiTenant')
-        
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()

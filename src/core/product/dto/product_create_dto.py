@@ -1,5 +1,5 @@
 """Product Create DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 
 
@@ -36,14 +36,16 @@ class ProductCreateDTO(BaseModel):
             }
         }
 
-    @validator('name')
+    @field_validator('name')
+    @classmethod
     def validate_name(cls, v):
         """Validate product name."""
         if not v or not v.strip():
             raise ValueError('name cannot be empty')
         return v.strip()
 
-    @validator('barcode')
+    @field_validator('barcode')
+    @classmethod
     def validate_barcode(cls, v):
         """Validate barcode format."""
         if v:

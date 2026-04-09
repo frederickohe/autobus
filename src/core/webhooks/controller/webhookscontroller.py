@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from core.webhooks.dto.request.dialogrequest import DialogRequest
 from core.webhooks.dto.request.simple_chat_request import SimpleChatRequest
@@ -24,7 +24,7 @@ from core.filterpipe.filter import FilterPipeline
 from core.notification.dto.response.message_response import MessageResponse
 from core.webhooks.dto.response.message_response import AutobusResponse
 
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.auth.service.authservice import AuthService
 
 logging.basicConfig(level=logging.DEBUG)

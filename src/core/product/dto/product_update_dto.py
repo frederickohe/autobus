@@ -1,5 +1,5 @@
 """Product Update DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 
 
@@ -34,7 +34,8 @@ class ProductUpdateDTO(BaseModel):
             }
         }
 
-    @validator('name')
+    @field_validator('name')
+    @classmethod
     def validate_name(cls, v):
         """Validate product name if provided."""
         if v is not None:
@@ -43,7 +44,8 @@ class ProductUpdateDTO(BaseModel):
             return v.strip()
         return v
 
-    @validator('barcode')
+    @field_validator('barcode')
+    @classmethod
     def validate_barcode(cls, v):
         """Validate barcode if provided."""
         if v is not None:
@@ -52,7 +54,7 @@ class ProductUpdateDTO(BaseModel):
                 return None
         return v
 
-    def dict(self, *args, **kwargs):
-        """Override dict to exclude None values."""
-        d = super().dict(*args, **kwargs)
+    def model_dump(self, *args, **kwargs):
+        """Override model_dump to exclude None values."""
+        d = super().model_dump(*args, **kwargs)
         return {k: v for k, v in d.items() if v is not None}

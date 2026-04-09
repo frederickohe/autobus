@@ -193,7 +193,7 @@ def update_subscription_plan(
     subscription_service = SubscriptionService(db)
     
     # Filter out None values
-    updates = {k: v for k, v in request.dict().items() if v is not None}
+    updates = {k: v for k, v in request.model_dump().items() if v is not None}
     
     result = subscription_service.update_subscription_plan(plan_id, **updates)
     

@@ -9,7 +9,7 @@ from core.orders.dto.order_response_dto import OrderResponseDTO
 from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.user.controller.usercontroller import validate_token, get_db
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

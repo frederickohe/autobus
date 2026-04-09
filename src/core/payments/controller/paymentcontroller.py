@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 import jwt
 from sqlalchemy.orm import Session
 from typing import List
 from decimal import Decimal
 import logging
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from datetime import datetime
 
 from core.exceptions.PaymentException import PaymentNotFoundException

@@ -1,9 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Form
-from fastapi_jwt_auth import AuthJWT
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
 from sqlalchemy.orm import Session
-from core.agent.agent import AutoBus
 from core.agent.dto.commandreqeust import CommandRequest
 from core.exceptions import *
 from core.auth.dto.request.user_create import UserCreateRequest
@@ -13,6 +12,17 @@ import logging
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+# Lazy load AutoBus to avoid 26s startup delay
+_autobus_cache = None
+
+def get_autobus():
+    global _autobus_cache
+    if _autobus_cache is None:
+        logger.info("Initializing AutoBus agent (lazy load)...")
+        from core.agent.agent import AutoBus
+        _autobus_cache = AutoBus()
+    return _autobus_cache
 
 def validate_token(authjwt: AuthJWT = Depends()):
     try:
@@ -47,7 +57,7 @@ agent_routes = APIRouter()
 @agent_routes.post("/command")
 def agent(query: CommandRequest, db: Session = Depends(get_db)):
 
-    assistant = AutoBus()
+    assistant = get_autobus()
     
     return assistant.process_user_message(
         userid=query.userid,

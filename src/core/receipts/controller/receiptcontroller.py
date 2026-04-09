@@ -3,7 +3,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from core.auth.service.sessiondriver import SessionDriver, TokenData
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
 

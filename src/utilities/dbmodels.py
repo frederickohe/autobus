@@ -13,6 +13,7 @@ _model_modules = [
 	"core.user.model.User",
 	"core.beneficiaries.model.beneficiary",
 	"core.cloudstorage.model.filemodel",
+	"core.cloudstorage.model.aitrainingfilemodel",
 	"core.subscription.model.user_subscription",
 	"core.subscription.model.subscription_plan",
 	"core.receipts.model.Receipt",

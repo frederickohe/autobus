@@ -12,7 +12,7 @@ from core.product.dto.inventory_response_dto import InventoryResponseDTO
 from core.product.dto.inventory_create_dto import InventoryCreateDTO
 from core.product.dto.inventory_update_dto import InventoryUpdateDTO
 from core.user.controller.usercontroller import validate_token, get_db
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

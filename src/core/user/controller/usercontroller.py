@@ -4,7 +4,7 @@ from typing import List, Optional
 import jwt
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from core.user.dto.response.paged_users import PagedUserResponse
 from utilities.dbconfig import SessionLocal
@@ -20,7 +20,7 @@ from core.user.dto.response.message_response import MessageResponse
 from core.user.dto.response.user_response import UserResponse
 
 from core.user.service.user_service import UserService
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.user.dto.request.user_update_request import UserUpdateRequest
 from core.notification.service.notification_service import NotificationService
 from core.notification.dto.response.paged_notifications import PagedNotificationResponse

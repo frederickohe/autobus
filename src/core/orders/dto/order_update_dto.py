@@ -1,5 +1,5 @@
 """Order Update DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from decimal import Decimal
 
@@ -43,7 +43,8 @@ class OrderUpdateDTO(BaseModel):
             }
         }
 
-    @validator('subtotal_amount', pre=True)
+    @field_validator('subtotal_amount', mode='before')
+    @classmethod
     def validate_subtotal(cls, v):
         """Ensure subtotal is positive if provided."""
         if v is None:
@@ -54,7 +55,8 @@ class OrderUpdateDTO(BaseModel):
             raise ValueError('subtotal_amount must be greater than 0')
         return v
 
-    @validator('discount_amount', 'tax_amount', 'shipping_amount', pre=True)
+    @field_validator('discount_amount', 'tax_amount', 'shipping_amount', mode='before')
+    @classmethod
     def validate_positive(cls, v):
         """Ensure amounts are non-negative if provided."""
         if v is None:
@@ -65,7 +67,7 @@ class OrderUpdateDTO(BaseModel):
             raise ValueError('Amount must be non-negative')
         return v
 
-    def dict(self, *args, **kwargs):
-        """Override dict to exclude None values."""
-        d = super().dict(*args, **kwargs)
+    def model_dump(self, *args, **kwargs):
+        """Override model_dump to exclude None values."""
+        d = super().model_dump(*args, **kwargs)
         return {k: v for k, v in d.items() if v is not None}

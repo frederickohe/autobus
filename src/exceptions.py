@@ -1,7 +1,6 @@
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic.error_wrappers import ErrorWrapper
 from starlette.requests import Request
 from starlette.status import HTTP_422_UNPROCESSABLE_ENTITY
 
@@ -9,9 +8,18 @@ from utilities.exceptions import DatabaseValidationError
 
 
 async def database_validation_exception_handler(request: Request, exc: DatabaseValidationError) -> JSONResponse:
+    # Create validation error in Pydantic v2 format
+    error_dict = {
+        "type": "value_error",
+        "loc": (exc.field or "__root__",),
+        "msg": exc.message,
+        "input": exc.message,
+    }
+    # Create a RequestValidationError with the error dict
+    validation_error = RequestValidationError.from_exception_data("database_validation", [error_dict])
     return await request_validation_exception_handler(
         request,
-        RequestValidationError([ErrorWrapper(ValueError(exc.message), exc.field or "__root__")]),
+        validation_error,
     )
 
 

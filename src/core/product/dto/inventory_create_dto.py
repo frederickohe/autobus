@@ -1,5 +1,5 @@
 """Inventory Create DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 
@@ -50,7 +50,8 @@ class InventoryCreateDTO(BaseModel):
             }
         }
 
-    @validator('min_stock_level', 'max_stock_level', 'reorder_point', 'reorder_quantity', pre=True)
+    @field_validator('min_stock_level', 'max_stock_level', 'reorder_point', 'reorder_quantity', mode='before')
+    @classmethod
     def validate_stock_levels(cls, v):
         """Validate stock levels are non-negative if provided."""
         if v is None:
@@ -59,7 +60,8 @@ class InventoryCreateDTO(BaseModel):
             raise ValueError('Stock levels must be non-negative')
         return v
 
-    @validator('stockout_risk_score')
+    @field_validator('stockout_risk_score')
+    @classmethod
     def validate_risk_score(cls, v):
         """Validate risk score is between 0 and 100."""
         if v is None:

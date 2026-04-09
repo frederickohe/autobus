@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
 
 # Router for organizing routes

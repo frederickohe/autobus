@@ -23,7 +23,7 @@ class BillService:
         if existing_bill:
             raise ValueError(f"A bill already exists for the provided formId: {bill_data.form_id}")
         
-        db_bill = Bill(**bill_data.dict())
+        db_bill = Bill(**bill_data.model_dump())
         self.db.add(db_bill)
         self.db.commit()
         self.db.refresh(db_bill)
@@ -39,7 +39,7 @@ class BillService:
         bill = self.get_bill_by_id(bill_id)
         
         # Update bill properties
-        for key, value in bill_data.dict(exclude_unset=True).items():
+        for key, value in bill_data.model_dump(exclude_unset=True).items():
             setattr(bill, key, value)
         
         self.db.commit()

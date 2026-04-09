@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from core.subscription.model.subscription_plan import BillingPeriod
 import json
@@ -14,10 +14,12 @@ class CreatePlanRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="Description of the plan")
     is_active: bool = Field(True, description="Whether the plan is active")
     
-    @validator('features')
+    @field_validator('features')
+    @classmethod
     def convert_features_to_string(cls, v):
         return json.dumps(v)
 
-    @validator('agents')
+    @field_validator('agents')
+    @classmethod
     def convert_agents_to_string(cls, v):
         return json.dumps(v)

@@ -1,5 +1,5 @@
 """Inventory Update DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 
 
@@ -42,7 +42,8 @@ class InventoryUpdateDTO(BaseModel):
             }
         }
 
-    @validator('min_stock_level', 'max_stock_level', 'reorder_point', 'reorder_quantity', pre=True)
+    @field_validator('min_stock_level', 'max_stock_level', 'reorder_point', 'reorder_quantity', mode='before')
+    @classmethod
     def validate_stock_levels(cls, v):
         """Validate stock levels are non-negative if provided."""
         if v is None:
@@ -51,7 +52,8 @@ class InventoryUpdateDTO(BaseModel):
             raise ValueError('Stock levels must be non-negative')
         return v
 
-    @validator('stockout_risk_score')
+    @field_validator('stockout_risk_score')
+    @classmethod
     def validate_risk_score(cls, v):
         """Validate risk score is between 0 and 100."""
         if v is None:
@@ -60,7 +62,7 @@ class InventoryUpdateDTO(BaseModel):
             raise ValueError('stockout_risk_score must be between 0 and 100')
         return v
 
-    def dict(self, *args, **kwargs):
-        """Override dict to exclude None values."""
-        d = super().dict(*args, **kwargs)
+    def model_dump(self, *args, **kwargs):
+        """Override model_dump to exclude None values."""
+        d = super().model_dump(*args, **kwargs)
         return {k: v for k, v in d.items() if v is not None}

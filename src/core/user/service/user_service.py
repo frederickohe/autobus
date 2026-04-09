@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
@@ -176,12 +176,12 @@ class UserService:
 
     def update_user(self, email: str, payload: UserUpdateRequest) -> UserResponse:
             # log the update attempt
-            logger.debug(f"Updating user {email} with data: {payload.dict(exclude_unset=True)}")
+            logger.debug(f"Updating user {email} with data: {payload.model_dump(exclude_unset=True)}")
             user = self.db.query(User).filter(User.email == email).first()
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
 
-            data = payload.dict(exclude_unset=True)
+            data = payload.model_dump(exclude_unset=True)
             for key, value in data.items():
                 if hasattr(user, key):
                     setattr(user, key, value)
@@ -196,7 +196,7 @@ class UserService:
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
 
-            data = payload.dict(exclude_unset=True)
+            data = payload.model_dump(exclude_unset=True)
             for key, value in data.items():
                 if hasattr(user, key):
                     setattr(user, key, value)

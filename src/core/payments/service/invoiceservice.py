@@ -16,7 +16,7 @@ class InvoiceService:
         self.bill_service = BillService(db)
     
     def create_invoice(self, invoice_data: InvoiceCreate) -> Invoice:
-        db_invoice = Invoice(**invoice_data.dict())
+        db_invoice = Invoice(**invoice_data.model_dump())
         self.db.add(db_invoice)
         self.db.commit()
         self.db.refresh(db_invoice)

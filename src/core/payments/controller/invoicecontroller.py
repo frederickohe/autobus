@@ -1,17 +1,17 @@
 import logging
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 import jwt
 from sqlalchemy.orm import Session
 import logging
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 
 from sqlalchemy.orm import Session
 from core.payments.service.invoiceservice import InvoiceService
 from core.payments.model.timeline import Timeline
 from utilities.dbconfig import SessionLocal
 from core.payments.dto.response.pagedinvoiceresponse import PaginatedInvoicesResponse
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

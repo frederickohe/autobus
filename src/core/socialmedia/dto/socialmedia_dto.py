@@ -26,7 +26,7 @@ class OAuth2CallbackRequest(BaseModel):
     error_description: Optional[str] = Field(None, description="Error description")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "code": "auth_code_from_blotato",
                 "state": "random_state_string",
@@ -48,7 +48,7 @@ class SocialAccountResponse(BaseModel):
 
     class Config:
         from_attributes = True
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "id": "sa_123456",
                 "platform": "TWITTER",
@@ -68,7 +68,7 @@ class SocialAccountsListResponse(BaseModel):
     total: int
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "accounts": [
                     {
@@ -95,7 +95,7 @@ class DisconnectAccountRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "disconnect_from_blotato": False
             }
@@ -109,7 +109,7 @@ class PublishMediaItem(BaseModel):
     type: Optional[str] = Field(None, description="Media type: image, video, gif, etc.")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "url": "https://example.com/image.jpg",
                 "type": "image"
@@ -141,7 +141,7 @@ class PublishPostRequest(BaseModel):
     hashtags: Optional[List[str]] = Field(None, description="Optional hashtags")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "account_ids": ["sa_123456", "sa_789012"],
                 "content": "Check out this amazing new feature! 🚀",
@@ -167,7 +167,7 @@ class PlatformPublishResult(BaseModel):
     message: str
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "account_id": "sa_123456",
                 "platform": "TWITTER",
@@ -189,7 +189,7 @@ class PublishPostResponse(BaseModel):
     message: str
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "total_platforms": 2,
@@ -227,7 +227,7 @@ class RefreshAccountsRequest(BaseModel):
     )
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "platforms": None
             }
@@ -242,7 +242,7 @@ class RefreshAccountsResponse(BaseModel):
     message: str
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": True,
                 "refreshed_count": 1,
@@ -260,7 +260,7 @@ class ErrorResponse(BaseModel):
     detail: Optional[str] = None
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "success": False,
                 "error": "Invalid account ID",

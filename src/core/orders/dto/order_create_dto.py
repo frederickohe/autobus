@@ -1,5 +1,5 @@
 """Order Create DTO"""
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from decimal import Decimal
 
@@ -53,7 +53,8 @@ class OrderCreateDTO(BaseModel):
             }
         }
 
-    @validator('subtotal_amount', pre=True)
+    @field_validator('subtotal_amount', mode='before')
+    @classmethod
     def validate_subtotal(cls, v):
         """Ensure subtotal is positive."""
         if isinstance(v, (int, float)):
@@ -62,7 +63,8 @@ class OrderCreateDTO(BaseModel):
             raise ValueError('subtotal_amount must be greater than 0')
         return v
 
-    @validator('discount_amount', 'tax_amount', 'shipping_amount', pre=True)
+    @field_validator('discount_amount', 'tax_amount', 'shipping_amount', mode='before')
+    @classmethod
     def validate_positive(cls, v):
         """Ensure amounts are non-negative."""
         if v is None:

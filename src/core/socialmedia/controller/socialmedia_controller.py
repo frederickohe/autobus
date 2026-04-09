@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
 
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from core.socialmedia.dto.socialmedia_dto import (
     SocialAccountResponse, SocialAccountsListResponse, DisconnectAccountRequest,
     PublishPostRequest, PublishPostResponse, RefreshAccountsRequest,

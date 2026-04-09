@@ -6,7 +6,7 @@ import logging
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
 from core.beneficiaries.dto.beneficiary_dto import BeneficiaryCreateRequest, BeneficiaryResponse
 from core.user.controller.usercontroller import validate_token, get_db
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 import json
 
@@ -11,7 +11,8 @@ class UpdatePlanRequest(BaseModel):
     description: Optional[str] = Field(None, max_length=500, description="Description of the plan")
     is_active: Optional[bool] = Field(None, description="Whether the plan is active")
     
-    @validator('features', pre=True)
+    @field_validator('features', mode='before')
+    @classmethod
     def convert_features_to_string(cls, v):
         if v is None:
             return None
@@ -27,7 +28,8 @@ class UpdatePlanRequest(BaseModel):
                 return json.dumps([v])
         return v
 
-    @validator('agents', pre=True)
+    @field_validator('agents', mode='before')
+    @classmethod
     def convert_agents_to_string(cls, v):
         if v is None:
             return None

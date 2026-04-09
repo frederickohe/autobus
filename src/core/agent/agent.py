@@ -28,6 +28,12 @@ from core.agent.tools.product import (
     IncrementInventoryTool,
     DecrementInventoryTool,
 )
+from core.agent.tools.rag.retriever import RetrieverTool
+from core.agent.tools.rag.document_management import (
+    UploadDocumentTool,
+    GetDocumentsTool,
+    DeleteDocumentTool,
+)
 from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
 
@@ -56,6 +62,8 @@ class AutoBus:
         # Initialize image storage manager for handling agent-generated images
         self.image_storage = ImageStorageManager()
         
+        self.db_session = db_session
+        
         self.final_answer = FinalAnswerTool()
         self.assistant_conversation = ConversationTool()
         self.email = EmailTool()
@@ -78,6 +86,12 @@ class AutoBus:
         self.inventory_increment_tool = IncrementInventoryTool(db_session)
         self.inventory_decrement_tool = DecrementInventoryTool(db_session)
         
+        #Initialize RAG tools (retriever, document management)
+        self.retriever_tool = RetrieverTool()
+        self.upload_document_tool = UploadDocumentTool(db_session)
+        self.get_documents_tool = GetDocumentsTool(db_session)
+        self.delete_document_tool = DeleteDocumentTool(db_session)
+        
         self.agent = CodeAgent(
             model=self.model,
             tools=[
@@ -99,6 +113,10 @@ class AutoBus:
                 self.product_inventory_get_tool,
                 self.inventory_increment_tool,
                 self.inventory_decrement_tool,
+                self.retriever_tool,
+                self.upload_document_tool,
+                self.get_documents_tool,
+                self.delete_document_tool,
             ],
             max_steps=6,
             verbosity_level=1,
@@ -109,7 +127,7 @@ class AutoBus:
         )
         
     def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
-        """Process a user message through the Autobus agent with conversation history.
+        """Process a user message through the Autobus agent with conversation history and RAG.
         
         Args:
             userid: Identifier for the user sending the message.
@@ -120,6 +138,9 @@ class AutoBus:
             The agent's response (can be string, AgentImage, or AgentAudio).
         """
         try:
+            # Set user documents for retriever
+            self.retriever_tool.set_user_docs(userid)
+            
             # Get conversation state for user
             state = self.conversation_manager.get_conversation_state(userid)
             
@@ -130,7 +151,7 @@ class AutoBus:
             # Format conversation context with recent history
             conversation_context = self._format_conversation_context(state.conversation_history)
             
-            # Build complete prompt with conversation history
+            # Build complete prompt with conversation history and user context
             complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
             
             # Process message through agent

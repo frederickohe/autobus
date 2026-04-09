@@ -5,7 +5,7 @@ import secrets
 import string
 
 from core.user.controller.usercontroller import validate_token, get_db
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from utilities.dbconfig import SessionLocal
 from core.paystack.dto.request.paystack_request import PaystackInitializeRequest
 from core.paystack.dto.response.paystack_response import PaystackInitializeResponse, PaystackVerifyResponse

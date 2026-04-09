@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Form
-from fastapi_jwt_auth import AuthJWT
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
 from sqlalchemy.orm import Session
 from core.auth.service.sessiondriver import SessionDriver, TokenData

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, Dict, Any
 from datetime import datetime
 from uuid import UUID
@@ -20,15 +20,16 @@ class HistoryResponseDTO(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    @validator('id', pre=True)
+    @field_validator('id', mode='before')
+    @classmethod
     def convert_id_to_str(cls, v):
         if isinstance(v, UUID):
             return str(v)
         return v
 
     class Config:
-        orm_mode = True
-        allow_population_by_field_name = True
+        from_attributes = True
+        populate_by_name = True
 
 class HistoryListResponseDTO(BaseModel):
     histories: list[HistoryResponseDTO]

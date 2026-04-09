@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
-from fastapi_jwt_auth import AuthJWT
+from another_fastapi_jwt_auth import AuthJWT
 from core.exceptions import *
 from core.notification.dto.request.notificationcreate import NotificationCreateRequest
 from core.notification.dto.request.notificationupdate import NotificationUpdateRequest
@@ -19,7 +19,7 @@ from core.notification.dto.response.paged_notifications import PagedNotification
 from core.notification.dto.response.message_response import MessageResponse
 
 from core.notification.service.notification_service import NotificationService
-from fastapi_jwt_auth.exceptions import MissingTokenError
+from another_fastapi_jwt_auth.exceptions import MissingTokenError
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
