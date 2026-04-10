@@ -8,21 +8,15 @@ from core.exceptions import *
 from core.auth.dto.request.user_create import UserCreateRequest
 from core.auth.service.authservice import AuthService
 from utilities.dbconfig import SessionLocal
+from core.agent.agent import AutoBus
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Lazy load AutoBus to avoid 26s startup delay
-_autobus_cache = None
-
-def get_autobus():
-    global _autobus_cache
-    if _autobus_cache is None:
-        logger.info("Initializing AutoBus agent (lazy load)...")
-        from core.agent.agent import AutoBus
-        _autobus_cache = AutoBus()
-    return _autobus_cache
+# Initialize AutoBus agent directly
+logger.info("Initializing AutoBus agent...")
+autobus_agent = AutoBus()
 
 def validate_token(authjwt: AuthJWT = Depends()):
     try:
@@ -57,7 +51,7 @@ agent_routes = APIRouter()
 @agent_routes.post("/command")
 def agent(query: CommandRequest, db: Session = Depends(get_db)):
 
-    assistant = get_autobus()
+    assistant = autobus_agent
     
     return assistant.process_user_message(
         userid=query.userid,

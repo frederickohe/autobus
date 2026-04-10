@@ -1,47 +1,30 @@
-from smolagents import CodeAgent, DuckDuckGoSearchTool, InferenceClientModel, load_tool, tool
+from smolagents import CodeAgent, InferenceClientModel
 from smolagents.agent_types import AgentImage, AgentAudio
-import datetime
-import pytz
 import yaml
 import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 
 from core.agent.tools.answer.final_answer import FinalAnswerTool
-from core.agent.tools.conversation.conversation import ConversationTool
-from core.agent.tools.email.email import EmailTool
-from core.agent.tools.generate_image.generate_image import ImageGenerationTool
-from core.agent.tools.agent_config import (
-    CreateAgentTool,
-    GetAgentTool,
-    UpdateAgentTool,
-    DeleteAgentTool,
-    ListAgentsTool,
-)
-from core.agent.tools.product import (
-    CreateProductTool,
-    GetProductTool,
-    UpdateProductTool,
-    FetchProductByNameTool,
-    UserSelectProductTool,
-    GetProductInventoryTool,
-    IncrementInventoryTool,
-    DecrementInventoryTool,
-)
-from core.agent.tools.rag.retriever import RetrieverTool
-from core.agent.tools.rag.document_management import (
-    UploadDocumentTool,
-    GetDocumentsTool,
-    DeleteDocumentTool,
-)
 from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
+
+# Import sub-agents
+from core.agent.agents import (
+    ConfigAgent,
+    EmailAgent,
+    ImageGenerationAgent,
+    VideoGenerationAgent,
+    ProductsAgent,
+    ChatbotAgent,
+    WebSearchAgent,
+)
 
 logger = logging.getLogger(__name__)
 
 class AutoBus:
     def __init__(self, prompts_path: str = "src/core/agent/prompts.yaml", db_session: Optional[Session] = None):
-        """Initialize the Autobus agent.
+        """Initialize the Autobus manager agent with sub-agents.
         
         Args:
             prompts_path: Path to the prompts YAML configuration file.
@@ -59,88 +42,67 @@ class AutoBus:
         # Initialize conversation manager for tracking user conversations
         self.conversation_manager = ConversationManager()
         
-        # Initialize image storage manager for handling agent-generated images
+        # Initialize image storage manager for handling agent-generated media
         self.image_storage = ImageStorageManager()
         
         self.db_session = db_session
         
+        # Initialize the FinalAnswerTool directly for the manager agent
         self.final_answer = FinalAnswerTool()
-        self.assistant_conversation = ConversationTool()
-        self.email = EmailTool()
-        self.image_generation = load_tool("agents-course/text-to-image", trust_remote_code=True)
         
-        # Initialize agent config tools with database session
-        self.user_agent_config_create_tool = CreateAgentTool(db_session)
-        self.user_agent_config_get_tool = GetAgentTool(db_session)
-        self.user_agent_config_update_tool = UpdateAgentTool(db_session)
-        self.user_agent_config_delete_tool = DeleteAgentTool(db_session)
-        self.user_agent_config_list_agents_tool = ListAgentsTool(db_session)
+        # Initialize all sub-agents
+        self.config_agent = ConfigAgent(self.model, db_session)
+        self.email_agent = EmailAgent(self.model, db_session)
+        self.image_generation_agent = ImageGenerationAgent(self.model, db_session)
+        self.video_generation_agent = VideoGenerationAgent(self.model, db_session)
+        self.products_agent = ProductsAgent(self.model, db_session)
+        self.chatbot_agent = ChatbotAgent(self.model, db_session)
+        self.web_search_agent = WebSearchAgent(self.model, db_session)
         
-        # Initialize product tools with database session
-        self.product_create_tool = CreateProductTool(db_session)
-        self.product_get_tool = GetProductTool(db_session)
-        self.product_update_tool = UpdateProductTool(db_session)
-        self.product_fetch_by_name_tool = FetchProductByNameTool(db_session)
-        self.product_user_select_tool = UserSelectProductTool(db_session)
-        self.product_inventory_get_tool = GetProductInventoryTool(db_session)
-        self.inventory_increment_tool = IncrementInventoryTool(db_session)
-        self.inventory_decrement_tool = DecrementInventoryTool(db_session)
-        
-        #Initialize RAG tools (retriever, document management)
-        self.retriever_tool = RetrieverTool()
-        self.upload_document_tool = UploadDocumentTool(db_session)
-        self.get_documents_tool = GetDocumentsTool(db_session)
-        self.delete_document_tool = DeleteDocumentTool(db_session)
-        
+        # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
         self.agent = CodeAgent(
             model=self.model,
-            tools=[
-                self.final_answer,
-                self.assistant_conversation,
-                self.email,
-                self.image_generation,
-                DuckDuckGoSearchTool(),
-                self.user_agent_config_create_tool,
-                self.user_agent_config_get_tool,
-                self.user_agent_config_update_tool,
-                self.user_agent_config_delete_tool,
-                self.user_agent_config_list_agents_tool,
-                self.product_create_tool,
-                self.product_get_tool,
-                self.product_update_tool,
-                self.product_fetch_by_name_tool,
-                self.product_user_select_tool,
-                self.product_inventory_get_tool,
-                self.inventory_increment_tool,
-                self.inventory_decrement_tool,
-                self.retriever_tool,
-                self.upload_document_tool,
-                self.get_documents_tool,
-                self.delete_document_tool,
+            tools=[self.final_answer],  # Manager agent has direct access to answer tool only
+            managed_agents=[
+                self.config_agent.agent,
+                self.email_agent.agent,
+                self.image_generation_agent.agent,
+                self.video_generation_agent.agent,
+                self.products_agent.agent,
+                self.chatbot_agent.agent,
+                self.web_search_agent.agent,
             ],
             max_steps=6,
             verbosity_level=1,
             planning_interval=None,
-            name=None,
-            description=None,
+            name="autobus_manager",
+            description="Autobus Manager Agent - Coordinates specialized sub-agents for various tasks",
             prompt_templates=prompt_templates
         )
-        
+    
     def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
-        """Process a user message through the Autobus agent with conversation history and RAG.
+        """Process a user message through the Autobus multi-agent system.
+        
+        The manager agent automatically routes the request to appropriate sub-agents:
+        - config_agent: Agent configuration management
+        - conversation_agent: Conversation handling
+        - email_agent: Email operations
+        - image_generation_agent: Image generation requests
+        - video_generation_agent: Video generation requests
+        - products_agent: Product management and inventory
+        - chatbot_agent: RAG-based question answering
+        - ai_training_agent: AI model training and fine-tuning
+        - web_search_agent: Web search and page retrieval
         
         Args:
             userid: Identifier for the user sending the message.
             message: The user's message text.
-            agent_name: Name of the agent to process the message.
+            agent_name: Name of the agent/sub-agent if specifically targeted.
             
         Returns:
             The agent's response (can be string, AgentImage, or AgentAudio).
         """
         try:
-            # Set user documents for retriever
-            self.retriever_tool.set_user_docs(userid)
-            
             # Get conversation state for user
             state = self.conversation_manager.get_conversation_state(userid)
             
@@ -152,9 +114,13 @@ class AutoBus:
             conversation_context = self._format_conversation_context(state.conversation_history)
             
             # Build complete prompt with conversation history and user context
+            # For RAG: set user documents in chatbot agent
+            if self.chatbot_agent.retriever_tool:
+                self.chatbot_agent.retriever_tool.set_user_docs(userid)
+            
             complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
             
-            # Process message through agent
+            # Process message through manager agent
             response = self.agent.run(complete_message)
             
             # Handle media responses (images/audio) by saving them and storing reference in conversation history

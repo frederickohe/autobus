@@ -20,11 +20,16 @@ class ConversationTool(Tool):
         self,
         model_id: str = "meta-llama/Llama-3.2-3B-Instruct",
         max_tokens: int = 256,
-        temperature: float = 0.7
+        temperature: float = 0.7,
+        token: str = None
     ):
         super().__init__()
         # Use the Hugging Face Inference API – make sure your token is set in the environment
-        self.client = InferenceClient(model=model_id)
+        # If token is not provided, it will use HF_TOKEN environment variable
+        if token is None:
+            token = os.environ.get("HF_TOKEN")
+        
+        self.client = InferenceClient(model=model_id, token=token)
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.conversation_history = []  # stores messages with roles
@@ -61,6 +66,13 @@ class ConversationTool(Tool):
             # Add assistant response to history
             self.conversation_history.append({"role": "assistant", "content": assistant_message})
             return assistant_message
+        except StopIteration:
+            error_msg = (
+                "❌ Authentication Error: HuggingFace API token is missing or invalid.\n"
+                "Please set the HF_TOKEN environment variable with a valid HuggingFace API token.\n"
+                "You can get a token from: https://huggingface.co/settings/tokens"
+            )
+            return error_msg
         except Exception as e:
             import traceback
             error_trace = traceback.format_exc()
