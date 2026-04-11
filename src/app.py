@@ -35,7 +35,6 @@ from fastapi.exceptions import RequestValidationError
 from sqlalchemy import inspect
 
 from loguru import logger
-import logging
 from contextlib import asynccontextmanager
 
 
