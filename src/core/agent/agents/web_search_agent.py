@@ -2,7 +2,7 @@
 
 Handles web searching and page content retrieval."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel, WebSearchTool, tool
+from smolagents import CodeAgent, InferenceClientModel, WebSearchTool, tool
 from sqlalchemy.orm import Session
 import logging
 import re
@@ -59,7 +59,7 @@ class WebSearchAgent:
         self.web_search_tool = WebSearchTool()
         
         # Initialize the agent
-        self.agent = ToolCallingAgent(
+        self.agent = CodeAgent(
             tools=[
                 self.web_search_tool,
                 visit_webpage,

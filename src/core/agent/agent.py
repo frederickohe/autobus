@@ -1,4 +1,4 @@
-from smolagents import ToolCallingAgent, InferenceClientModel
+from smolagents import CodeAgent, InferenceClientModel
 from smolagents.agent_types import AgentImage, AgentAudio
 import yaml
 import logging
@@ -59,42 +59,31 @@ class AutoBus:
         self.chatbot_agent = ChatbotAgent(self.model, db_session)
         self.web_search_agent = WebSearchAgent(self.model, db_session)
         
-        # Create agent registry for direct routing
-        self.agent_registry = {
-            "config": self.config_agent,
-            "config_agent": self.config_agent,
-            "email": self.email_agent,
-            "email_agent": self.email_agent,
-            "image": self.image_generation_agent,
-            "image_generation": self.image_generation_agent,
-            "image_generation_agent": self.image_generation_agent,
-            "video": self.video_generation_agent,
-            "video_generation": self.video_generation_agent,
-            "video_generation_agent": self.video_generation_agent,
-            "products": self.products_agent,
-            "products_agent": self.products_agent,
-            "chatbot": self.chatbot_agent,
-            "chatbot_agent": self.chatbot_agent,
-            "web_search": self.web_search_agent,
-            "web_search_agent": self.web_search_agent,
-        }
-        
-        # Initialize the manager agent with direct access to FinalAnswerTool
-        # Using ToolCallingAgent instead of CodeAgent for HuggingFace API compatibility
-        self.agent = ToolCallingAgent(
+        # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
+        self.agent = CodeAgent(
             model=self.model,
             tools=[self.final_answer],  # Manager agent has direct access to answer tool only
+            managed_agents=[
+                self.config_agent.agent,
+                self.email_agent.agent,
+                self.image_generation_agent.agent,
+                self.video_generation_agent.agent,
+                self.products_agent.agent,
+                self.chatbot_agent.agent,
+                self.web_search_agent.agent,
+            ],
             max_steps=6,
             verbosity_level=1,
+            planning_interval=None,
             name="autobus_manager",
             description="Autobus Manager Agent - Coordinates specialized sub-agents for various tasks",
+            prompt_templates=prompt_templates
         )
     
-    def process_user_message(self, userid: str, message: str, agent_name: str = None) -> str:
+    def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
         """Process a user message through the Autobus multi-agent system.
         
-        If agent_name is provided and matches a known agent, routes directly to that agent.
-        Otherwise, the manager agent automatically routes to appropriate sub-agents:
+        The manager agent automatically routes the request to appropriate sub-agents:
         - config_agent: Agent configuration management
         - email_agent: Email operations
         - image_generation_agent: Image generation requests
@@ -106,7 +95,7 @@ class AutoBus:
         Args:
             userid: Identifier for the user sending the message.
             message: The user's message text.
-            agent_name: Name of the agent/sub-agent if specifically targeted (optional).
+            agent_name: Name of the agent/sub-agent if specifically targeted.
             
         Returns:
             The agent's response (can be string, AgentImage, or AgentAudio).
@@ -127,26 +116,10 @@ class AutoBus:
             if self.chatbot_agent.retriever_tool:
                 self.chatbot_agent.retriever_tool.set_user_docs(userid)
             
-            # Check if a specific agent is requested
-            response = None
-            if agent_name:
-                agent_name_lower = agent_name.lower().strip()
-                if agent_name_lower in self.agent_registry:
-                    # Route directly to the specified agent
-                    logger.info(f"Routing to specific agent: {agent_name_lower}")
-                    response = self._call_specific_agent(
-                        self.agent_registry[agent_name_lower],
-                        userid,
-                        message,
-                        conversation_context
-                    )
-                else:
-                    logger.warning(f"Unknown agent name: {agent_name}. Available agents: {list(self.agent_registry.keys())}")
+            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
             
-            # Fall back to manager agent if no specific agent was routed or agent not found
-            if response is None:
-                complete_message = f"User ID: {userid}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
-                response = self.agent.run(complete_message)
+            # Process message through manager agent
+            response = self.agent.run(complete_message)
             
             # Handle media responses (images/audio) by saving them and storing reference in conversation history
             if isinstance(response, (AgentImage, AgentAudio)):
@@ -164,38 +137,6 @@ class AutoBus:
         except Exception as e:
             logger.error(f"Error processing message with Autobus for user {userid}: {e}", exc_info=True)
             return f"Error processing message with Autobus: {e}"
-    
-    def _call_specific_agent(self, agent_wrapper, userid: str, message: str, conversation_context: str) -> str:
-        """Call a specific sub-agent directly with the user message.
-        
-        Args:
-            agent_wrapper: The agent wrapper object containing the actual CodeAgent.
-            userid: User identifier.
-            message: The user's message.
-            conversation_context: Formatted conversation history.
-            
-        Returns:
-            The agent's response.
-        """
-        complete_message = f"User ID: {userid}\n\nConversation History:\n{conversation_context}\n\nMessage: {message}"
-        return agent_wrapper.agent.run(complete_message)
-    
-    def get_available_agents(self) -> dict:
-        """Get list of available agents with their aliases.
-        
-        Returns:
-            Dictionary mapping agent names to their descriptions.
-        """
-        agent_descriptions = {
-            "config": "Configuration management",
-            "email": "Email operations and management",
-            "image": "Image generation",
-            "video": "Video generation",
-            "products": "Product management and inventory",
-            "chatbot": "RAG-based question answering",
-            "web_search": "Web search and page retrieval",
-        }
-        return agent_descriptions
     
     def _format_conversation_context(self, conversation_history: list) -> str:
         """Format conversation history for inclusion in the prompt.

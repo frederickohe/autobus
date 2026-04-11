@@ -2,7 +2,7 @@
 
 Handles video generation and processing."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel, load_tool
+from smolagents import CodeAgent, InferenceClientModel, load_tool
 from sqlalchemy.orm import Session
 import logging
 
@@ -40,7 +40,7 @@ class VideoGenerationAgent:
         if self.video_generation_tool:
             tools.append(self.video_generation_tool)
         
-        self.agent = ToolCallingAgent(
+        self.agent = CodeAgent(
             tools=tools if tools else [],
             model=model,
             max_steps=5,

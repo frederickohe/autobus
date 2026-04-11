@@ -2,7 +2,7 @@
 
 Handles model training, fine-tuning, and AI-related operations."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel
+from smolagents import CodeAgent, InferenceClientModel
 from sqlalchemy.orm import Session
 import logging
 
@@ -26,7 +26,7 @@ class AITrainingAgent:
         self.tools = []
         
         # Initialize the agent
-        self.agent = ToolCallingAgent(
+        self.agent = CodeAgent(
             tools=self.tools,
             model=model,
             max_steps=10,
