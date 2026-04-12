@@ -12,7 +12,7 @@ from core.cloudstorage.dto.document_dto import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/documents", tags=["documents"])
+router = APIRouter()
 
 
 @router.post("/upload/{user_id}", response_model=DocumentUploadResponseDTO)

@@ -6,7 +6,7 @@ class AITrainingFileModel(Base):
     __tablename__ = "ai_training_files"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, ForeignKey("users.userid"), nullable=False, index=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     file_name = Column(String, index=True)
     file_url = Column(String)
     subfolder = Column(String, default="ai-training-files/", index=True)

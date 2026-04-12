@@ -2,6 +2,7 @@ from smolagents import CodeAgent, InferenceClientModel
 from smolagents.agent_types import AgentImage, AgentAudio
 import yaml
 import logging
+import re
 from typing import Optional
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,29 @@ from core.agent.agents import (
 )
 
 logger = logging.getLogger(__name__)
+
+def normalize_file_paths(text: str) -> str:
+    """Normalize file paths in text by removing extra spaces.
+    
+    Fixes issues where LLM might add spaces in file paths like:
+    'C:\path\Autobus_Conceptnote. docx' -> 'C:\path\Autobus_Conceptnote.docx'
+    
+    Args:
+        text: Text that may contain file paths.
+        
+    Returns:
+        Text with normalized file paths.
+    """
+    # Pattern to match Windows paths with spaces before extensions or between path components
+    # Handles cases like "filename. ext" -> "filename.ext"
+    text = re.sub(r'(\w)\s+(\.\w+)', r'\1\2', text)
+    
+    # Handle spaces in path separators (rare but possible)
+    # E.g., "folder \ folder" -> "folder\folder"
+    text = re.sub(r'\s+\\\s+', r'\\', text)
+    text = re.sub(r'\s+/\s+', r'/', text)
+    
+    return text
 
 class AutoBus:
     def __init__(self, prompts_path: str = "src/core/agent/prompts.yaml", db_session: Optional[Session] = None):
@@ -104,9 +128,12 @@ class AutoBus:
             # Get conversation state for user
             state = self.conversation_manager.get_conversation_state(userid)
             
+            # Normalize file paths in the message to prevent LLM from misinterpreting them
+            normalized_message = normalize_file_paths(message)
+            
             # Add user message to history
-            logger.info("Received message from %s: %s", userid, (message or '')[:200])
-            self.conversation_manager.update_conversation_history(userid, "user", message)
+            logger.info("Received message from %s: %s", userid, (normalized_message or '')[:200])
+            self.conversation_manager.update_conversation_history(userid, "user", normalized_message)
             
             # Format conversation context with recent history
             conversation_context = self._format_conversation_context(state.conversation_history)
@@ -116,7 +143,7 @@ class AutoBus:
             if self.chatbot_agent.retriever_tool:
                 self.chatbot_agent.retriever_tool.set_user_docs(userid)
             
-            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {message}"
+            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {normalized_message}"
             
             # Process message through manager agent
             response = self.agent.run(complete_message)

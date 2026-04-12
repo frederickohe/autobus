@@ -27,6 +27,7 @@ from core.agent.controller.agentcontroller import agent_routes
 from core.socialmedia.controller.socialmedia_controller import social_routes
 from core.product.controller.product_controller import product_routes
 from core.orders.controller.order_controller import order_routes
+from core.cloudstorage.controller.documentcontroller import router as document_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -103,6 +104,7 @@ app.include_router(notification_routes, prefix="/api/v1/notification", tags=["No
 app.include_router(payment_routes, prefix="/api/v1/payment", tags=["Payment Routes"])
 app.include_router(bill_routes, prefix="/api/v1/bill", tags=["Billing Routes"])
 app.include_router(invoice_routes, prefix="/api/v1/invoice", tags=["Invoice Routes"])
+app.include_router(document_routes, prefix="/api/v1/documents", tags=["Document Routes"])
 app.include_router(otp_routes, prefix="/api/v1/otp", tags=["OTP Routes"])
 app.include_router(subscription_routes, prefix="/api/v1/subscription", tags=["Subscription Routes"])
 app.include_router(beneficiary_routes, prefix="/api/v1/beneficiaries", tags=["Beneficiary Routes"])

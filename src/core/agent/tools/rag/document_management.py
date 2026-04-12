@@ -1,11 +1,34 @@
 from smolagents import Tool
 import logging
+import re
 from sqlalchemy.orm import Session
 from typing import Optional
 
 from core.cloudstorage.service.document_service import DocumentService
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_file_path(file_path: str) -> str:
+    """Normalize file path by removing extra spaces.
+    
+    Fixes issues where LLM might add spaces in file paths like:
+    'C:\path\Autobus_Conceptnote. docx' -> 'C:\path\Autobus_Conceptnote.docx'
+    
+    Args:
+        file_path: The file path to normalize.
+        
+    Returns:
+        Normalized file path.
+    """
+    # Remove spaces before file extensions: "filename. ext" -> "filename.ext"
+    file_path = re.sub(r'(\w)\s+(\.\w+)', r'\1\2', file_path)
+    
+    # Remove spaces around path separators
+    file_path = re.sub(r'\s+\\\s+', r'\\', file_path)
+    file_path = re.sub(r'\s+/\s+', r'/', file_path)
+    
+    return file_path
 
 
 class UploadDocumentTool(Tool):
@@ -48,6 +71,10 @@ class UploadDocumentTool(Tool):
             return "Error: Document service not initialized"
         
         try:
+            # Normalize file path to handle any extra spaces the LLM might have added
+            file_path = normalize_file_path(file_path)
+            logger.debug(f"Normalized file path: {file_path}")
+            
             # Open file and upload
             with open(file_path, 'rb') as f:
                 # We need to create a file-like object that mimics FastAPI's UploadFile
