@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from datetime import datetime
 from utilities.dbconfig import Base
 
@@ -13,3 +13,5 @@ class AITrainingFileModel(Base):
     upload_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     file_size = Column(Integer, nullable=True)
     file_type = Column(String, nullable=True)
+    content = Column(Text, nullable=True)  # Store extracted document content for RAG
+    content_extracted = Column(String, default="pending", nullable=False)  # pending, success, failed

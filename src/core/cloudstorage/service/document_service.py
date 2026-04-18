@@ -1,6 +1,7 @@
 import os
 import logging
 import pickle
+import threading
 from typing import Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
@@ -10,6 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from core.cloudstorage.model.aitrainingfilemodel import AITrainingFileModel
 from core.cloudstorage.service.storageservice import StorageService
+from core.agent.tools.rag.document_processor import DocumentProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +92,14 @@ class DocumentService:
             
             logger.info(f"Successfully uploaded document {file_name} for user {user_id}")
             
+            # Extract content asynchronously to avoid blocking
+            extract_thread = threading.Thread(
+                target=self._extract_document_content,
+                args=(doc_record.id, file_url, file_type)
+            )
+            extract_thread.daemon = True
+            extract_thread.start()
+            
             # Re-process user's documents for retriever
             self._reprocess_user_documents(user_id)
             
@@ -169,6 +179,56 @@ class DocumentService:
             self.db_session.rollback()
             return False
     
+    def _extract_document_content(self, doc_id: int, file_url: str, file_type: str) -> None:
+        """Extract text content from a document and store in database.
+        
+        Runs in background thread to avoid blocking uploads.
+        
+        Args:
+            doc_id: ID of the document record
+            file_url: URL to download the document from
+            file_type: MIME type of the document
+        """
+        try:
+            logger.info(f"Extracting content from document {doc_id} at {file_url}")
+            
+            # Extract text content from the file
+            content = DocumentProcessor.extract_text_from_url(file_url, file_type)
+            
+            if content:
+                # Update the document record with extracted content
+                from utilities.dbconfig import SessionLocal
+                db_session = SessionLocal()
+                try:
+                    doc = db_session.query(AITrainingFileModel).filter(
+                        AITrainingFileModel.id == doc_id
+                    ).first()
+                    if doc:
+                        doc.content = content
+                        doc.content_extracted = "success"
+                        db_session.commit()
+                        logger.info(f"Successfully extracted content for document {doc_id}: {len(content)} chars")
+                    else:
+                        logger.warning(f"Document {doc_id} not found in database")
+                finally:
+                    db_session.close()
+            else:
+                # Mark as failed if no content extracted
+                from utilities.dbconfig import SessionLocal
+                db_session = SessionLocal()
+                try:
+                    doc = db_session.query(AITrainingFileModel).filter(
+                        AITrainingFileModel.id == doc_id
+                    ).first()
+                    if doc:
+                        doc.content_extracted = "failed"
+                        db_session.commit()
+                        logger.warning(f"Failed to extract content for document {doc_id}")
+                finally:
+                    db_session.close()
+        except Exception as e:
+            logger.error(f"Error extracting content for document {doc_id}: {str(e)}", exc_info=True)
+    
     def _reprocess_user_documents(self, user_id: str) -> None:
         """Reprocess all documents for a user and create retriever pickle.
         
@@ -186,18 +246,23 @@ class DocumentService:
                 logger.info(f"No documents for user {user_id}, skipping processing")
                 return
             
-            # For now, we'll store document metadata as langchain Documents
-            # In production, you'd want to read the actual file content from storage
+            # Create langchain Documents from database records with extracted content
             source_docs = []
             for doc in documents:
-                # Create a placeholder document with metadata
-                # In production, download and read the actual content
+                # Use extracted content if available, otherwise use metadata
+                if doc.content and doc.content.strip():
+                    page_content = doc.content
+                else:
+                    # Fallback to metadata-only if content extraction hasn't completed yet
+                    page_content = f"Document: {doc.file_name}\nFile Type: {doc.file_type}\nURL: {doc.file_url}"
+                
                 source_doc = Document(
-                    page_content=f"Document: {doc.file_name}\nURL: {doc.file_url}\nType: {doc.file_type}",
+                    page_content=page_content,
                     metadata={
                         "source": doc.file_name,
                         "file_url": doc.file_url,
-                        "uploaded_at": doc.upload_timestamp.isoformat()
+                        "uploaded_at": doc.upload_timestamp.isoformat(),
+                        "content_extracted": doc.content_extracted
                     }
                 )
                 source_docs.append(source_doc)

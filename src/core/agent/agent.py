@@ -1,4 +1,4 @@
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from smolagents.agent_types import AgentImage, AgentAudio
 import yaml
 import logging
@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from core.agent.tools.answer.final_answer import FinalAnswerTool
 from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
+from core.user.model.User import User
 
 # Import sub-agents
 from core.agent.agents import (
@@ -84,7 +85,7 @@ class AutoBus:
         self.web_search_agent = WebSearchAgent(self.model, db_session)
         
         # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             model=self.model,
             tools=[self.final_answer],  # Manager agent has direct access to answer tool only
             managed_agents=[
@@ -117,7 +118,7 @@ class AutoBus:
         - web_search_agent: Web search and page retrieval
         
         Args:
-            userid: Identifier for the user sending the message.
+            userid: Phone number of the user sending the message.
             message: The user's message text.
             agent_name: Name of the agent/sub-agent if specifically targeted.
             
@@ -125,44 +126,52 @@ class AutoBus:
             The agent's response (can be string, AgentImage, or AgentAudio).
         """
         try:
-            # Get conversation state for user
-            state = self.conversation_manager.get_conversation_state(userid)
+            # Query user table to get internal UUID user_id from phone number
+            user = self.db_session.query(User).filter(User.phone == userid).first()
+            if not user:
+                logger.error(f"User not found with phone number: {userid}")
+                return f"Error: User not found with phone number {userid}"
+            
+            internal_user_id = user.id
+            
+            # Get conversation state for user using internal UUID
+            state = self.conversation_manager.get_conversation_state(internal_user_id)
             
             # Normalize file paths in the message to prevent LLM from misinterpreting them
             normalized_message = normalize_file_paths(message)
             
             # Add user message to history
-            logger.info("Received message from %s: %s", userid, (normalized_message or '')[:200])
-            self.conversation_manager.update_conversation_history(userid, "user", normalized_message)
+            logger.info("Received message from phone %s (internal user_id: %s): %s", userid, internal_user_id, (normalized_message or '')[:200])
+            self.conversation_manager.update_conversation_history(internal_user_id, "user", normalized_message)
             
             # Format conversation context with recent history
             conversation_context = self._format_conversation_context(state.conversation_history)
             
             # Build complete prompt with conversation history and user context
-            # For RAG: set user documents in chatbot agent
+            # For RAG: set user documents in chatbot agent using internal UUID
             if self.chatbot_agent.retriever_tool:
-                self.chatbot_agent.retriever_tool.set_user_docs(userid)
+                self.chatbot_agent.retriever_tool.set_user_docs(internal_user_id)
             
-            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {normalized_message}"
+            complete_message = f"User ID: {internal_user_id}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {normalized_message}"
             
             # Process message through manager agent
             response = self.agent.run(complete_message)
             
             # Handle media responses (images/audio) by saving them and storing reference in conversation history
             if isinstance(response, (AgentImage, AgentAudio)):
-                file_path, conversation_string = self.image_storage.handle_media_response(response, userid)
+                file_path, conversation_string = self.image_storage.handle_media_response(response, internal_user_id)
                 # Store only the reference string in conversation history, not the actual media object
-                self.conversation_manager.update_conversation_history(userid, "assistant", conversation_string)
-                logger.info(f"Saved media file for user {userid}: {file_path}")
+                self.conversation_manager.update_conversation_history(internal_user_id, "assistant", conversation_string)
+                logger.info(f"Saved media file for user {internal_user_id}: {file_path}")
                 # Return the original media object so the API caller still gets it
                 return f"Image generated and saved: {file_path}"
             else:
                 # For text responses, store directly
-                self.conversation_manager.update_conversation_history(userid, "assistant", str(response))
+                self.conversation_manager.update_conversation_history(internal_user_id, "assistant", str(response))
                 return response
             
         except Exception as e:
-            logger.error(f"Error processing message with Autobus for user {userid}: {e}", exc_info=True)
+            logger.error(f"Error processing message with Autobus for phone {userid}: {e}", exc_info=True)
             return f"Error processing message with Autobus: {e}"
     
     def _format_conversation_context(self, conversation_history: list) -> str:

@@ -1,8 +1,9 @@
-.PHONY: help build up down logs restart clean test migrate
+.PHONY: help build up down logs restart clean test migrate dev
 
 help:
 	@echo "Autobus Docker Deployment - Available Commands"
 	@echo ""
+	@echo "  make dev                Run development server with hot reload"
 	@echo "  make build              Build Docker images"
 	@echo "  make up                 Start all services in background"
 	@echo "  make down               Stop all services"
@@ -20,6 +21,10 @@ help:
 	@echo "  make migrate-history    Show migration history"
 	@echo "  make rebuild            Clean rebuild all images and services"
 	@echo ""
+
+dev:
+	@echo "Starting development server with hot reload..."
+	DEBUG=true python main.py
 
 build:
 	@echo "Building Docker images..."

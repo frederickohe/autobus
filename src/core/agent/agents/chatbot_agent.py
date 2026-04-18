@@ -30,7 +30,7 @@ class ChatbotAgent:
         self.db_session = db_session
         
         # Initialize RAG tools
-        self.retriever_tool = RetrieverTool()
+        self.retriever_tool = RetrieverTool(db_session=db_session)
         self.upload_document_tool = UploadDocumentTool(db_session)
         self.get_documents_tool = GetDocumentsTool(db_session)
         self.delete_document_tool = DeleteDocumentTool(db_session)
@@ -49,23 +49,20 @@ class ChatbotAgent:
             description="RAG-based chatbot agent. Uses retriever tool to answer questions based on uploaded documents. Can manage document uploads, retrieval, and deletion.",
         )
     
-    def process(self, message: str, user_id: str = None) -> str:
+    def process(self, message: str, user_id: str) -> str:
         """Process a chatbot/RAG query.
         
         Args:
             message: The user's question or request.
-            user_id: Optional user identifier for personalized document retrieval.
+            user_id: User identifier for document retrieval.
             
         Returns:
             The agent's response based on retrieved documents or operation result.
         """
         try:
-            # Set user documents for retriever if user_id provided
-            if user_id:
-                self.retriever_tool.set_user_docs(user_id)
-                context = f"User ID: {user_id}\n{message}"
-            else:
-                context = message
+            # Set user documents for retriever
+            self.retriever_tool.set_user_docs(user_id)
+            context = f"User ID: {user_id}\n{message}"
             
             logger.info(f"Chatbot Agent processing: {message[:100]}")
             response = self.agent.run(context)

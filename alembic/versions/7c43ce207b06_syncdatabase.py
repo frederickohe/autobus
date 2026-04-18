@@ -3,7 +3,7 @@ from alembic import op
 import sqlalchemy as sa
 import sqlalchemy.dialects.postgresql as postgresql
 
-revision = '73fe507a0e76'
+revision = '7c43ce207b06'
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -41,10 +41,14 @@ def upgrade():
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('file_name', sa.String(), nullable=True),
     sa.Column('file_url', sa.String(), nullable=True),
+    sa.Column('subfolder', sa.String(), nullable=True),
+    sa.Column('upload_timestamp', sa.DateTime(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_index(op.f('ix_files_file_name'), 'files', ['file_name'], unique=True)
     op.create_index(op.f('ix_files_id'), 'files', ['id'], unique=False)
+    op.create_index(op.f('ix_files_subfolder'), 'files', ['subfolder'], unique=False)
+    op.create_index(op.f('ix_files_upload_timestamp'), 'files', ['upload_timestamp'], unique=False)
     op.create_table('invoice',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('bill_id', sa.Integer(), nullable=True),
@@ -181,6 +185,25 @@ def upgrade():
     sa.UniqueConstraint('id'),
     sa.UniqueConstraint('staff_id')
     )
+    op.create_table('ai_training_files',
+    sa.Column('id', sa.Integer(), nullable=False),
+    sa.Column('user_id', sa.String(), nullable=False),
+    sa.Column('file_name', sa.String(), nullable=True),
+    sa.Column('file_url', sa.String(), nullable=True),
+    sa.Column('subfolder', sa.String(), nullable=True),
+    sa.Column('upload_timestamp', sa.DateTime(), nullable=True),
+    sa.Column('file_size', sa.Integer(), nullable=True),
+    sa.Column('file_type', sa.String(), nullable=True),
+    sa.Column('content', sa.Text(), nullable=True),
+    sa.Column('content_extracted', sa.String(), nullable=False),
+    sa.ForeignKeyConstraint(['user_id'], ['users.id'], ),
+    sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index(op.f('ix_ai_training_files_file_name'), 'ai_training_files', ['file_name'], unique=False)
+    op.create_index(op.f('ix_ai_training_files_id'), 'ai_training_files', ['id'], unique=False)
+    op.create_index(op.f('ix_ai_training_files_subfolder'), 'ai_training_files', ['subfolder'], unique=False)
+    op.create_index(op.f('ix_ai_training_files_upload_timestamp'), 'ai_training_files', ['upload_timestamp'], unique=False)
+    op.create_index(op.f('ix_ai_training_files_user_id'), 'ai_training_files', ['user_id'], unique=False)
     op.create_table('beneficiaries',
     sa.Column('id', sa.Integer(), nullable=False),
     sa.Column('user_id', sa.String(length=20), nullable=False),
@@ -408,6 +431,12 @@ def downgrade():
     op.drop_table('histories')
     op.drop_index(op.f('ix_beneficiaries_id'), table_name='beneficiaries')
     op.drop_table('beneficiaries')
+    op.drop_index(op.f('ix_ai_training_files_user_id'), table_name='ai_training_files')
+    op.drop_index(op.f('ix_ai_training_files_upload_timestamp'), table_name='ai_training_files')
+    op.drop_index(op.f('ix_ai_training_files_subfolder'), table_name='ai_training_files')
+    op.drop_index(op.f('ix_ai_training_files_id'), table_name='ai_training_files')
+    op.drop_index(op.f('ix_ai_training_files_file_name'), table_name='ai_training_files')
+    op.drop_table('ai_training_files')
     op.drop_table('users')
     op.drop_table('subscription_plans')
     op.drop_index(op.f('ix_receipts_user_id'), table_name='receipts')
@@ -419,6 +448,8 @@ def downgrade():
     op.drop_table('payment')
     op.drop_table('otps')
     op.drop_table('invoice')
+    op.drop_index(op.f('ix_files_upload_timestamp'), table_name='files')
+    op.drop_index(op.f('ix_files_subfolder'), table_name='files')
     op.drop_index(op.f('ix_files_id'), table_name='files')
     op.drop_index(op.f('ix_files_file_name'), table_name='files')
     op.drop_table('files')
