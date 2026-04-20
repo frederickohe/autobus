@@ -2,7 +2,7 @@
 
 Handles image generation and processing."""
 
-from smolagents import CodeAgent, InferenceClientModel, load_tool
+from smolagents import ToolCallingAgent, InferenceClientModel, load_tool
 from sqlalchemy.orm import Session
 import logging
 
@@ -37,7 +37,7 @@ class ImageGenerationAgent:
         # Initialize the agent
         tools = [self.image_generation_tool] if self.image_generation_tool else []
         
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             tools=tools if tools else [load_tool("agents-course/text-to-image", trust_remote_code=True)],
             model=model,
             max_steps=5,

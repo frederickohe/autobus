@@ -2,7 +2,7 @@
 
 Handles agent creation, retrieval, update, and deletion operations."""
 
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from sqlalchemy.orm import Session
 import logging
 
@@ -38,7 +38,7 @@ class ConfigAgent:
         self.list_tool = ListAgentsTool(db_session)
         
         # Initialize the agent
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             tools=[
                 self.create_tool,
                 self.get_tool,

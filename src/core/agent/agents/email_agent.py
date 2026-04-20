@@ -2,7 +2,7 @@
 
 Handles email composition and sending operations."""
 
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from sqlalchemy.orm import Session
 import logging
 
@@ -28,7 +28,7 @@ class EmailAgent:
         self.email_tool = EmailTool()
         
         # Initialize the agent
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             tools=[self.email_tool],
             model=model,
             max_steps=5,

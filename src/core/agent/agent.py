@@ -1,4 +1,4 @@
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from smolagents.agent_types import AgentImage, AgentAudio
 import yaml
 import logging
@@ -57,11 +57,15 @@ class AutoBus:
         self.model = InferenceClientModel(
             max_tokens=2096,
             temperature=0.5,
-            model_id='Qwen/Qwen2.5-Coder-32B-Instruct',
+            model_id='meta-llama/Llama-3.1-70B-Instruct',
         )
         
         with open(prompts_path, 'r') as stream:
             prompt_templates = yaml.safe_load(stream)
+        
+        # Ensure authorized_imports is available in templates if not already defined
+        if 'authorized_imports' not in prompt_templates:
+            prompt_templates['authorized_imports'] = "math, datetime, json, re, csv, os, sys, collections, itertools, functools, operator, statistics, requests, pandas, numpy, pathlib, typing, urllib"
         
         # Initialize conversation manager for tracking user conversations
         self.conversation_manager = ConversationManager()
@@ -84,7 +88,7 @@ class AutoBus:
         self.web_search_agent = WebSearchAgent(self.model, db_session)
         
         # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             model=self.model,
             tools=[self.final_answer],  # Manager agent has direct access to answer tool only
             managed_agents=[

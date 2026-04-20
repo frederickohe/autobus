@@ -2,7 +2,7 @@
 
 Handles RAG-based question answering and document retrieval."""
 
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from sqlalchemy.orm import Session
 import logging
 
@@ -36,7 +36,7 @@ class ChatbotAgent:
         self.delete_document_tool = DeleteDocumentTool(db_session)
         
         # Initialize the agent
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             tools=[
                 self.retriever_tool,
                 self.upload_document_tool,

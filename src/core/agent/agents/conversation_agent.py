@@ -2,7 +2,7 @@
 
 Handles multi-turn conversations and message routing."""
 
-from smolagents import CodeAgent, InferenceClientModel
+from smolagents import ToolCallingAgent, InferenceClientModel
 from sqlalchemy.orm import Session
 import logging
 
@@ -28,7 +28,7 @@ class ConversationAgent:
         self.conversation_tool = ConversationTool()
         
         # Initialize the agent
-        self.agent = CodeAgent(
+        self.agent = ToolCallingAgent(
             tools=[self.conversation_tool],
             model=model,
             max_steps=5,
