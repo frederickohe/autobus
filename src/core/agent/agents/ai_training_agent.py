@@ -2,7 +2,7 @@
 
 Handles model training, fine-tuning, and AI-related operations."""
 
-from langchain import OpenAI
+from langchain_community.llms import OpenAI
 from langchain.chains import LLMChain
 from langchain.agents import Tool, initialize_agent
 from sqlalchemy.orm import Session

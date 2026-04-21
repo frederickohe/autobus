@@ -3,7 +3,114 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def normalize_ghana_phone(phone: str) -> str:
+def extract_ghana_phone_numbers_from_text(text: str) -> list:
+    """
+    Extract all valid Ghana phone numbers from text (e.g., OCR output).
+    
+    Handles:
+    - Local format: 0XXXXXXXXX (10 digits starting with 0)
+    - International format: 233XXXXXXXXX (12 digits)
+    - Text with OCR noise, headers, etc.
+    
+    Args:
+        text: Text potentially containing Ghana phone numbers
+        
+    Returns:
+        List of valid Ghana phone numbers in local format (0XXXXXXXXX)
+    """
+    if not text:
+        return []
+    
+    # Pattern 1: Match 10-digit sequences starting with 0
+    # This catches local format: 0XXXXXXXXX
+    pattern1 = r'\b0\d{9}\b'
+    
+    # Pattern 2: Match 12-digit sequences starting with 233
+    # This catches international format: 233XXXXXXXXX
+    pattern2 = r'\b233\d{9}\b'
+    
+    # Pattern 3: Match 9-digit sequences that could be phone numbers
+    # (without leading 0, could be partial format)
+    pattern3 = r'(?<!\d)\d{9}(?!\d)'
+    
+    phones = []
+    
+    # Find all matches from pattern 1 (most common locally)
+    for match in re.finditer(pattern1, text):
+        phone = match.group()
+        if phone not in phones:
+            phones.append(phone)
+            logger.info(f"[PHONE_EXTRACT] Found phone in local format: {phone}")
+    
+    # Find all matches from pattern 2 (international format)
+    for match in re.finditer(pattern2, text):
+        phone = match.group()
+        # Convert to local format
+        local_phone = convert_to_local_ghana_format(phone)
+        if local_phone not in phones:
+            phones.append(local_phone)
+            logger.info(f"[PHONE_EXTRACT] Found phone in international format: {phone} -> {local_phone}")
+    
+    # Find all matches from pattern 3, but validate with Ghana network prefixes
+    ghana_prefixes = ['024', '025', '053', '054', '055', '059',  # MTN
+                      '020', '050',  # Vodafone
+                      '023', '026', '027', '056', '057', '058']  # AirtelTigo
+    
+    for match in re.finditer(pattern3, text):
+        partial_phone = match.group()
+        # Try as 9-digit without prefix
+        candidate_0prefix = '0' + partial_phone
+        # Check if it has a valid Ghana prefix
+        if candidate_0prefix[:3] in ghana_prefixes and candidate_0prefix not in phones:
+            phones.append(candidate_0prefix)
+            logger.info(f"[PHONE_EXTRACT] Found phone with Ghana prefix: {candidate_0prefix}")
+    
+    return phones
+
+
+def clean_ocr_text(text: str) -> str:
+    """
+    Clean OCR extracted text by removing common noise patterns.
+    
+    Removes:
+    - Debug output patterns like "lebe_backend  |"
+    - Multiple consecutive spaces
+    - Lines that are only special characters
+    
+    Args:
+        text: Raw OCR text
+        
+    Returns:
+        Cleaned text
+    """
+    if not text:
+        return text
+    
+    # Remove common debug/logging patterns
+    text = re.sub(r'lebe_backend\s*\|', '', text)
+    text = re.sub(r'\[.*?\]\s*', '', text)  # Remove [tags]
+    
+    # Remove lines with only pipes/special chars
+    lines = text.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # Skip lines that are mostly special characters or just whitespace
+        if line.strip() and not re.match(r'^[\|\s\-\_\*]+$', line):
+            cleaned_lines.append(line)
+    
+    text = '\n'.join(cleaned_lines)
+    
+    # Remove multiple consecutive newlines
+    text = re.sub(r'\n\n+', '\n', text)
+    
+    # Remove multiple consecutive spaces
+    text = re.sub(r'  +', ' ', text)
+    
+    logger.debug(f"[OCR_CLEAN] Cleaned OCR text")
+    return text
+
+
+def normalize_ghana_phone_number(phone: str) -> str:
     """
     Normalize Ghanaian phone numbers to international format (233XXXXXXXXX).
 

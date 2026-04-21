@@ -17,7 +17,7 @@ from core.user.model.User import User
 from core.nlu.nlu import AutobusNLUSystem
 from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
-from utilities.phone_utils import normalize_ghana_phone
+from utilities.phone_utils import normalize_ghana_phone_number
 from core.filterpipe.filter import FilterPipeline
 
 # DTO Models
@@ -152,15 +152,16 @@ async def handle_simple_chat(userid: str, message: str, context: str, db: Sessio
     try:
         logger.info(f"Processing simple chat message from userid: {userid}")
 
-        pipeline = FilterPipeline(db)
-        res = pipeline.process(userid, message, context)
+        nlu_system = AutobusNLUSystem()
 
-        if not res.get("proceed"):
-            logger.warning(f"Filter check failed for {userid}: {res.get('message')}")
-            return SimpleChatResponse(message=res.get("message"))
+        # Process the message
+        response_message = nlu_system.process_message(
+                userid,
+                message
+        )
 
-        response_message = res.get("response")
         logger.info(f"Generated response: {response_message}")
+        
         return SimpleChatResponse(message=response_message)
 
     except Exception as e:
@@ -299,22 +300,25 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
 
     else:
         # Existing user - process message through pipeline (which now also dispatches to AutoBus)
-        logger.info(f"Existing user detected: {phone}. Running filter pipeline.")
+        logger.info(f"Existing user detected: {phone}. Processing message through NLU.")
 
-        pipeline = FilterPipeline(db)
-        res = pipeline.process(phone, message_text, None)
+        # message_id = message.get("id")
+        # with typing_indicator_context(
+        #     whatsapp_service=whatsapp_service,
+        #     phone_number_id=phone_number_id,
+        #     recipient_phone=phone,
+        #     message_id=message_id
+        # ):
+        
+        # Initialize NLU system and subscription service
+        nlu_system = AutobusNLUSystem()
 
-        if not res.get("proceed"):
-            logger.warning(f"Filter check failed for {phone}: {res.get('message')}")
-            # send error message back to user
-            whatsapp_service.send_message(
-                phone_id=phone_id,
-                recipient_phone=phone,
-                message_text=res.get("message")
-            )
-            return {"status": "error", "message": res.get("message")}
+        # Process the message
+        response_message = nlu_system.process_message(
+                phone,
+                message_text
+        )
 
-        response_message = res.get("response")
         logger.info(f"Generated response: {response_message}")
 
         # Send the response back to the user via WhatsApp
@@ -380,8 +384,8 @@ def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Ses
                 return {"status": "error", "message": "Missing required fields"}
 
             # Normalize phone numbers
-            normalized_user_phone = normalize_ghana_phone(user_phone)
-            normalized_wa_id = normalize_ghana_phone(phone)
+            normalized_user_phone = normalize_ghana_phone_number(user_phone)
+            normalized_wa_id = normalize_ghana_phone_number(phone)
 
             logger.info(f"Phone normalization - Form: {user_phone} -> {normalized_user_phone}")
             logger.info(f"Phone normalization - WhatsApp: {phone} -> {normalized_wa_id}")

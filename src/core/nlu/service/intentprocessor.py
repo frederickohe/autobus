@@ -1,15 +1,15 @@
 # core/nlu/service/intent_processor.py
+import json
 from typing import Dict, List, Any, Optional
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
-from core.llmclient.llmclient import LLMClient
-from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, AGENT_CATEGORIES
-from core.retrievalaugementation.user_rag import UserRAGManager
+from core.nlu.service.llmclient import LLMClient
+from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES
+from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
+from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
 from core.beneficiaries.service.beneficiary_service import BeneficiaryService
-from core.histories.service.historyservice import HistoryService
-from utilities.dbconfig import SessionLocal
-from datetime import datetime, timedelta
 import logging
+from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,6 @@ class IntentProcessor:
         # Prepare enhanced system prompt with user context
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["conversational"],
-            conversation_history=conversation_history,
             user_data=user_data,
             intent=intent,
             slots=slots
@@ -47,7 +46,7 @@ class IntentProcessor:
             temperature=0.7
         )
         
-        return self._format_conversational_response(intent, response, slots, user_data)
+        return self._format_conversational_response(intent, response, slots)
     
     def process_financial_tips_intent(
         self,
@@ -63,7 +62,6 @@ class IntentProcessor:
         # Prepare enhanced system prompt with user context
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["financial_tips"],
-            conversation_history=conversation_history,
             user_data=user_data,
             intent=intent,
             slots=slots
@@ -76,7 +74,7 @@ class IntentProcessor:
             temperature=0.4
         )
         
-        return self._format_financial_tips_response(intent, response, slots, user_data)
+        return self._format_financial_tips_response(intent, response, slots)
 
     def process_expense_report_intent(
         self,
@@ -87,11 +85,12 @@ class IntentProcessor:
         user_data: Optional[Dict] = None
     ) -> str:
         """
-        Process expense report with user spending context
+        Process expense report with enhanced financial insights
         """
+        
+        # Build enhanced system prompt
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["expense_report"],
-            conversation_history=conversation_history,
             user_data=user_data,
             intent=intent,
             slots=slots
@@ -101,10 +100,10 @@ class IntentProcessor:
             system_prompt=system_prompt,
             user_message=user_message,
             conversation_history=conversation_history,
-            temperature=0.3
+            temperature=0.4
         )
         
-        return response
+        return self._clean_markdown_formatting(response)
     
     def process_beneficiaries_intent(
     self,
@@ -131,6 +130,8 @@ class IntentProcessor:
             return self._handle_view_beneficiaries(beneficiary_service, user_id)
         elif intent == "delete_beneficiary":
             return self._handle_delete_beneficiary(beneficiary_service, user_id, slots)
+        elif intent == "update_beneficiary":
+            return self._handle_update_beneficiary(beneficiary_service, user_id, slots)
         else:
             return "Beneficiary intent not supported"
 
@@ -183,11 +184,214 @@ class IntentProcessor:
         
         success, message = beneficiary_service.delete_beneficiary(target_beneficiary.id, user_id)
         return message
+
+    def _handle_update_beneficiary(self, beneficiary_service: BeneficiaryService, user_id: str, slots: Dict) -> str:
+        """Handle updating a beneficiary"""
+        beneficiary_name = slots.get("beneficiary_name")
+        new_name = slots.get("new_beneficiary_name")
+        customer_number = slots.get("customer_number")
+        bank_code = slots.get("bank_code")
+
+        if not beneficiary_name:
+            return "Please specify which beneficiary you want to edit."
+
+        if not any([new_name, customer_number, bank_code]):
+            return "What would you like to update? You can send a new name, phone number, or bank code."
+
+        beneficiaries = beneficiary_service.get_beneficiaries(user_id)
+        target_beneficiary = None
+        for beneficiary in beneficiaries:
+            if beneficiary.name.lower() == beneficiary_name.lower():
+                target_beneficiary = beneficiary
+                break
+
+        if not target_beneficiary:
+            return f"Beneficiary '{beneficiary_name}' not found in your saved beneficiaries."
+
+        success, beneficiary, message = beneficiary_service.update_beneficiary(
+            beneficiary_id=target_beneficiary.id,
+            user_id=user_id,
+            name=new_name,
+            customer_number=customer_number,
+            bank_code=bank_code
+        )
+        return message
+
+    def process_payflows_intent(
+        self,
+        intent: str,
+        user_message: str,
+        conversation_history: List[Dict],
+        slots: Dict[str, Any],
+        user_data: Optional[Dict] = None
+    ) -> str:
+        """
+        Process payflows management using PayflowService.
+        Payflows are saved snapshots of successful payment transactions.
+        """
+        db = next(get_db())
+        
+        from core.payflows.service.payflow_service import PayflowService
+        payflow_service = PayflowService(db)
+        
+        # For payflow DB operations we need the internal `users.id` (FK target).
+        user_id = (user_data or {}).get("db_user_id") or (user_data or {}).get("user_id") or "unknown"
+        
+        if intent == "save_payflow":
+            return self._handle_save_payflow(payflow_service, user_id, slots)
+        elif intent == "view_payflows":
+            return self._handle_view_payflows(payflow_service, user_id, slots)
+        elif intent == "execute_payflow":
+            return self._handle_execute_payflow(payflow_service, user_id, slots)
+        elif intent == "delete_payflow":
+            return self._handle_delete_payflow(payflow_service, user_id, slots)
+        elif intent == "update_payflow":
+            return self._handle_update_payflow(payflow_service, user_id, slots)
+        else:
+            return "Payflow intent not supported"
+
+    def _handle_save_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
+        """Handle saving a new payflow after successful transaction"""
+        payflow_name = slots.get("payflow_name")
+        
+        if not payflow_name:
+            return "Please provide a name for this payment template."
+        
+        # Get the saved payflow data from slots
+        intent_name = slots.get("intent_name")
+        slot_values = slots.get("slot_values", {})
+        
+        # Safely handle slot_values if it's a string (from corrupted data)
+        if isinstance(slot_values, str):
+            logger.warning(f"[SAVE_PAYFLOW] slot_values is a string, expected dict. Attempting to evaluate...")
+            try:
+                import ast
+                slot_values = ast.literal_eval(slot_values) if slot_values else {}
+            except (ValueError, SyntaxError):
+                logger.error(f"[SAVE_PAYFLOW] Failed to parse slot_values string: {slot_values}")
+                return "Error: Invalid payflow data format. Please complete a full transaction first."
+        
+        if not intent_name or not slot_values:
+            return "Unable to save payflow: incomplete transaction data. Please complete a full transaction first."
+        
+        success, payflow, message = payflow_service.save_payflow(
+            user_id=user_id,
+            name=payflow_name,
+            description=slots.get("description"),
+            intent_name=intent_name,
+            slot_values=slot_values,
+            payment_method=slots.get("payment_method"),
+            recipient_phone=slots.get("recipient_phone"),
+            recipient_name=slots.get("recipient_name"),
+            account_number=slots.get("account_number"),
+            bill_provider=slots.get("bill_provider"),
+            last_amount=slots.get("amount") or slots.get("last_amount"),
+            requires_confirmation=slots.get("requires_confirmation", False)
+        )
+        
+        return message
+
+    def _handle_view_payflows(self, payflow_service, user_id: str, slots: Dict) -> str:
+        """Handle viewing all payflows"""
+        intent_filter = slots.get("intent_filter")
+        payflows = payflow_service.list_payflows(user_id, intent_filter=intent_filter)
+        
+        if not payflows:
+            return "You don't have any saved payment templates yet. Save one after completing a payment!"
+        
+        # Format payflow list
+        payflow_list = "\n".join([
+            f"✅ {pf.name}: {pf.intent_name.replace('_', ' ').title()} "
+            f"({'Requires confirmation' if pf.requires_confirmation else 'Quick pay'})"
+            for pf in payflows
+        ])
+        
+        return f"Your saved payment templates:\n{payflow_list}"
+
+    def _handle_execute_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
+        """Handle executing a saved payflow"""
+        payflow_name = slots.get("payflow_name")
+        
+        if not payflow_name:
+            return "Please specify which payment template you want to use."
+        
+        # Lookup payflow by name
+        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
+        
+        if not payflow:
+            return f"Payment template '{payflow_name}' not found. Would you like to view your saved templates?"
+        
+        # Prepare execution
+        override_amount = slots.get("amount")
+        success, prepared_slots, message = payflow_service.execute_payflow(
+            user_id=user_id,
+            payflow_id=payflow.id,
+            override_amount=override_amount
+        )
+        
+        if not success:
+            return message
+        
+        # Return execution response - in real flow, this would trigger payment processing
+        intent_display = payflow.intent_name.replace('_', ' ').title()
+        amount = prepared_slots.get('amount', 'N/A')
+        requires_confirmation = payflow.requires_confirmation
+        
+        if requires_confirmation:
+            return f"Ready to replay your '{payflow_name}' template ({intent_display}, Amount: {amount}). Please confirm with your PIN to proceed."
+        else:
+            return f"Initiating direct payment using '{payflow_name}' template..."
+
+    def _handle_delete_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
+        """Handle deleting a payflow"""
+        payflow_name = slots.get("payflow_name")
+        
+        if not payflow_name:
+            return "Please specify which payment template you want to remove."
+        
+        # Lookup payflow by name
+        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
+        
+        if not payflow:
+            return f"Payment template '{payflow_name}' not found."
+        
+        success, message = payflow_service.delete_payflow(user_id, payflow.id)
+        return message
+
+    def _handle_update_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
+        """Handle updating a payflow"""
+        payflow_name = slots.get("payflow_name")
+        
+        if not payflow_name:
+            return "Please specify which payment template you want to edit."
+        
+        # Lookup payflow by name
+        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
+        
+        if not payflow:
+            return f"Payment template '{payflow_name}' not found."
+        
+        # Prepare updates
+        updates = {}
+        if slots.get("new_payflow_name"):
+            updates["name"] = slots.get("new_payflow_name")
+        if "last_amount" in slots:
+            updates["last_amount"] = slots.get("last_amount")
+        
+        if not updates:
+            return "What would you like to update? You can change the template name or amount."
+        
+        success, updated_payflow, message = payflow_service.update_payflow(
+            user_id=user_id,
+            payflow_id=payflow.id,
+            **updates
+        )
+        
+        return message
     
     def _build_enhanced_system_prompt(
         self,
         base_prompt: str,
-        conversation_history: List[Dict],
         user_data: Optional[Dict],
         intent: str,
         slots: Dict
@@ -195,94 +399,92 @@ class IntentProcessor:
         """
         Build enhanced system prompt with user context RAG
         """
-        # Initialize user context
-        user_context = ""
-        if user_data:
+        # Add user context if available
+        user_context_section = ""
+        if user_data and intent == "expense_report":
             # user_data produced by NLU uses the key 'user_id' (not 'id')
             # Ensure we pass a string user_id to the RAG manager so it matches
             # the History.user_id column (which is stored as string).
-            user_id_for_rag = str(user_data.get("user_id"))
-            user_context = self.rag_manager.get_extracted_user_context(
-                user_id=user_id_for_rag,
+            # Get user name
+            user_name = f"{user_data.get('first_name', '')} {user_data.get('last_name', '')}".strip()
+            if not user_name:
+                user_name = user_data.get('username', 'User')
+            
+            # Get time frame from slots or default
+            time_frame = slots.get('time_period', 'the selected period')
+            
+            # Fetch transactions using your existing method
+            transactions = self.rag_manager.get_transaction_history(
+                user_id=user_data.get('user_id'),
                 intent=intent,
-                current_slots=slots,
-                full_user_data=user_data
+                slots=slots
             )
-        
-        
+            
+            rag_manager = EnhancedUserRAGManager()
+            
+            user_financial_context = rag_manager.get_financial_insights_context(
+                user_name=user_name,
+                user_id=user_data.get('user_id'),
+                transactions=transactions,
+                time_frame=time_frame,
+                user_phone=user_data.get('phone_number')
+            )
+            user_context_section = f"User Transaction Data:\n{json.dumps(user_financial_context, indent=2)}"
+            print(f"[ENHANCED_SYSTEM_PROMPT] User Transaction Data for {user_name}:\n{json.dumps(user_financial_context, indent=2)}")
         # Build the enhanced prompt
         enhanced_prompt = base_prompt.format(
-            context=user_context,
+            context=user_context_section,
             missing_slots="",
             category=slots.get('category', 'general')
         )
-        
-        # Append user context if available
-        if user_context:
-            enhanced_prompt += f"\n\n{user_context}\n\nIMPORTANT: Use the above user context to personalize your response. Consider their financial situation, goals, and history when providing advice."
-        
+             
         return enhanced_prompt
 
-    def _format_conversational_response(self, intent: str, response: str, slots: Dict, user_data: Optional[Dict] = None) -> str:
-        """Format conversational responses using templates.
-
-        Uses a safe mapping that falls back to `user_data` for common keys
-        (e.g. `user_name`) and returns an empty string for missing keys
-        to avoid KeyError when templates reference optional slots.
-        """
-        from collections import defaultdict
-
+    def _format_conversational_response(self, intent: str, response: str, slots: Dict) -> str:
+        """Format conversational responses using templates"""
         template_data = RESPONSE_TEMPLATES["conversational"]
-
+        
         if intent in template_data:
             template = template_data[intent]
-
-            # Build a mapping that prefers slots, then user_data, then empty string
-            mapping = dict(slots or {})
-            if user_data:
-                # normalize common user name keys
-                if 'user_name' not in mapping:
-                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone') or ''
-
-            # Use defaultdict so missing keys return empty string instead of raising
-            safe_map = defaultdict(str, mapping)
-
-            try:
-                return template.format_map(safe_map, response=response) if hasattr(template, 'format_map') else template.format(response=response, **safe_map)
-            except Exception:
-                # Last-resort: attempt to format with response only
-                try:
-                    return template.format(response=response)
-                except Exception:
-                    return response
-
+            return template.format(response=response, **slots)
+        
         return response
 
-    def _format_financial_tips_response(self, intent: str, response: str, slots: Dict, user_data: Optional[Dict] = None) -> str:
-        """Format financial tips responses using templates with safe mapping."""
-        from collections import defaultdict
-
+    def _format_financial_tips_response(self, intent: str, response: str, slots: Dict) -> str:
+        """Format financial tips responses using templates"""
         template_data = RESPONSE_TEMPLATES["financial_tips"]
-
+        
         if intent in template_data:
             template = template_data[intent]
-
-            mapping = dict(slots or {})
-            if user_data:
-                if 'user_name' not in mapping:
-                    mapping['user_name'] = user_data.get('user_name') or user_data.get('fullname') or user_data.get('full_name') or user_data.get('phone') or ''
-
-            safe_map = defaultdict(str, mapping)
-
-            try:
-                return template.format_map(safe_map, response=response) if hasattr(template, 'format_map') else template.format(response=response, **safe_map)
-            except Exception:
-                try:
-                    return template.format(response=response)
-                except Exception:
-                    return response
-
+            return template.format(response=response, **slots)
+        
         return response
+
+    def _clean_markdown_formatting(self, response: str) -> str:
+        """
+        Remove markdown formatting from response.
+        Removes bold (**text**), italic (*text*), and other common markdown symbols
+        """
+        import re
+        
+        # Remove bold (**text** or __text__)
+        response = re.sub(r'\*\*(.+?)\*\*', r'\1', response)
+        response = re.sub(r'__(.+?)__', r'\1', response)
+        
+        # Remove italic (*text* or _text_) - be careful not to remove single asterisks
+        response = re.sub(r'\*([^*\n]+)\*', r'\1', response)
+        response = re.sub(r'_([^_\n]+)_', r'\1', response)
+        
+        # Remove markdown headings (# ## ### etc)
+        response = re.sub(r'^#+\s+', '', response, flags=re.MULTILINE)
+        
+        # Remove markdown code blocks (```code```)
+        response = re.sub(r'```.*?```', '', response, flags=re.DOTALL)
+        
+        # Remove inline code (`code`)
+        response = re.sub(r'`([^`]+)`', r'\1', response)
+        
+        return response.strip()
 
     def _prepare_conversation_context(self, conversation_history: List[Dict]) -> str:
         """Prepare conversation context from history"""
@@ -295,3 +497,5 @@ class IntentProcessor:
             context += f"{role}: {msg['content']}\n"
         
         return context
+
+

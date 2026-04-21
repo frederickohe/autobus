@@ -14,9 +14,16 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Initialize AutoBus agent directly
-logger.info("Initializing AutoBus agent...")
-autobus_agent = AutoBus()
+# Lazy initialization - only create the agent when first needed
+_autobus_agent_instance = None
+
+def get_autobus_agent():
+    """Lazy initialization of AutoBus agent. Only created on first use."""
+    global _autobus_agent_instance
+    if _autobus_agent_instance is None:
+        logger.info("Lazy initializing AutoBus agent on first use...")
+        _autobus_agent_instance = AutoBus()
+    return _autobus_agent_instance
 
 def validate_token(authjwt: AuthJWT = Depends()):
     try:
@@ -50,8 +57,7 @@ agent_routes = APIRouter()
 
 @agent_routes.post("/command")
 def agent(query: CommandRequest, db: Session = Depends(get_db)):
-
-    assistant = autobus_agent
+    assistant = get_autobus_agent()
     
     return assistant.process_user_message(
         userid=query.userid,

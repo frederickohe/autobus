@@ -31,8 +31,8 @@ class SlotManager:
                 elif "account_number" in slot:
                     # Account numbers should not be validated - they can be in any format
                     validated_slots[slot] = str(value).strip()
-                elif "phone" in slot or "recipient" in slot or "number" in slot:
-                    validated_slots[slot] = self._validate_phone(value)
+                elif "email" not in slot and ("phone" in slot or "recipient" in slot or "number" in slot):
+                    validated_slots[slot] = self._validate_phone_number(value)
                 else:
                     validated_slots[slot] = str(value).strip()
 
@@ -49,7 +49,7 @@ class SlotManager:
             pass
         return None
     
-    def _validate_phone(self, phone: str) -> Optional[str]:
+    def _validate_phone_number(self, phone: str) -> Optional[str]:
         """Validate Ghana phone number format"""
         # Remove spaces, dashes, etc.
         clean_phone = ''.join(c for c in str(phone) if c.isdigit())
@@ -83,10 +83,13 @@ class SlotManager:
 
         slot_descriptions = {
             "recipient": "Who would you like to send money to? Please provide the phone number.",
+            "recipient_email": "What's the recipient's email address?",
+            "subject": "What's the subject of the email?",
+            "body": "What's the body/message of the email?",
             "amount": "How much would you like to send?",
             "network": "Which mobile network? (MTN, Vodafone, AirtelTigo)",
-            "reason": "What's the reason for this transfer?",
-            "phone": "Which phone number should I top up?",
+            "reference": "What's the reference for this transfer?",
+            "phone_number": "Which phone number should I top up?",
             "data_plan": "Which data plan would you like?",
             "bill_type": self._generate_bill_type_prompt(bill_providers),
             "account_number": "What's your account number (smart card number)?",
@@ -97,8 +100,11 @@ class SlotManager:
             "category": "Which category?",
             "period": "For what period?",
             "time_period": "For what time period?",
-            "beneficiary_name": "Whose name do you want to send to (from your saved contacts)?",
-            "customer_number": "Beneficiary mobile number?"
+            "beneficiary_name": "What is the name of the beneficiary (from your saved contacts)?",
+            "update_field": "What would you like to update? (name, number)",
+            "new_beneficiary_name": "What should the new beneficiary name be?",
+            "customer_number": "Beneficiary mobile number?",
+            "airtime_receiver_name": "What is the name of the person receiving the airtime?",
         }
 
         prompts = []

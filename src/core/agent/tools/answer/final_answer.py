@@ -1,14 +1,41 @@
 from typing import Any, Optional
-from smolagents.tools import Tool
+from pydantic import BaseModel, Field
+from langchain.tools import BaseTool
+import json
 
-class FinalAnswerTool(Tool):
-    name = "final_answer"
-    description = "Provides a final answer to the given problem."
-    inputs = {'answer': {'type': 'any', 'description': 'The final answer to the problem'}}
-    output_type = "any"
 
-    def forward(self, answer: Any) -> Any:
-        return answer
+class FinalAnswerInput(BaseModel):
+    """Input schema for FinalAnswerTool"""
+    answer: Any = Field(..., description="The final answer to the problem")
 
-    def __init__(self, *args, **kwargs):
-        self.is_initialized = False
+
+class FinalAnswerTool(BaseTool):
+    """LangChain tool for providing a final answer."""
+    
+    name: str = "final_answer"
+    description: str = "Provides a final answer to the given problem."
+    args_schema: type[BaseModel] = FinalAnswerInput
+
+    def _run(self, answer: Any) -> str:
+        """Execute the tool to provide a final answer.
+        
+        Args:
+            answer: The answer to return
+            
+        Returns:
+            String representation of the answer
+        """
+        if isinstance(answer, str):
+            return answer
+        return json.dumps(answer) if isinstance(answer, (dict, list)) else str(answer)
+
+    async def _arun(self, answer: Any) -> str:
+        """Async version of _run.
+        
+        Args:
+            answer: The answer to return
+            
+        Returns:
+            String representation of the answer
+        """
+        return self._run(answer)

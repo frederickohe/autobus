@@ -1,16 +1,14 @@
-from smolagents import ToolCallingAgent
-from smolagents.agent_types import AgentImage, AgentAudio
+from langchain_openai import ChatOpenAI
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.prompts import PromptTemplate
 import yaml
 import logging
 import re
-from typing import Optional
+from typing import Optional, Any
 from sqlalchemy.orm import Session
 
 from core.agent.tools.answer.final_answer import FinalAnswerTool
-from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
-from core.llmclient.openai_model_wrapper import OpenAIModelForSmolagents
-import OpenAIModelForSmolagents as OpenAI
 
 # Import sub-agents
 from core.agent.agents import (
@@ -50,15 +48,15 @@ def normalize_file_paths(text: str) -> str:
 
 class AutoBus:
     def __init__(self, prompts_path: str = "src/core/agent/prompts.yaml", db_session: Optional[Session] = None):
-        """Initialize the Autobus manager agent with sub-agents.
+        """Initialize the Autobus manager agent with sub-agents using LangChain.
         
         Args:
             prompts_path: Path to the prompts YAML configuration file.
             db_session: Optional SQLAlchemy database session for agent config operations.
         """
-        # Initialize OpenAI model for smolagents
-        self.model = OpenAI(
-            model="gpt-4",
+        # Initialize LangChain ChatOpenAI model
+        self.model = ChatOpenAI(
+            model_name="gpt-4",
             temperature=0.5,
             max_tokens=2096
         )
@@ -69,9 +67,6 @@ class AutoBus:
         # Ensure authorized_imports is available in templates if not already defined
         if 'authorized_imports' not in prompt_templates:
             prompt_templates['authorized_imports'] = "math, datetime, json, re, csv, os, sys, collections, itertools, functools, operator, statistics, requests, pandas, numpy, pathlib, typing, urllib"
-        
-        # Initialize conversation manager for tracking user conversations
-        self.conversation_manager = ConversationManager()
         
         # Initialize image storage manager for handling agent-generated media
         self.image_storage = ImageStorageManager()
@@ -90,18 +85,50 @@ class AutoBus:
         self.web_search_agent = WebSearchAgent(self.model, db_session)
         self.products_agent = ProductsAgent(self.model, db_session)
         
-        # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
-        self.agent = initialize_agent(
-            tools=[self.final_answer],
+        # Create system prompt for manager agent
+        manager_system_prompt = """You are AutoBus, a sophisticated multi-agent orchestrator.
+
+You coordinate multiple specialized sub-agents to help users with various tasks:
+- config_agent: Manages agent configurations
+- email_agent: Handles email operations
+- image_generation_agent: Generates images
+- video_generation_agent: Creates videos
+- chatbot_agent: Answers questions using RAG
+- web_search_agent: Searches the web
+- products_agent: Manages products
+
+Route requests to the appropriate sub-agent and synthesize their responses.
+When a user asks for something, determine which agent(s) to use and coordinate them.
+Always provide clear, helpful responses."""
+        
+        # Create tools list for the manager agent
+        tools = [self.final_answer]
+        
+        # Create the manager agent using ReAct pattern
+        self.agent = create_react_agent(
             llm=self.model,
-            agent="zero-shot-react-description",
-            verbose=True
+            tools=tools,
+            prompt=PromptTemplate.from_template(
+                manager_system_prompt + 
+                "\n\nAvailable Tools:\n{tools}\n\nTool Names: {tool_names}\n\nUser: {input}\n\nThink about which sub-agents to use.\nAgent Scratchpad:\n{agent_scratchpad}"
+            )
         )
+        
+        # Wrap in AgentExecutor
+        self.executor = AgentExecutor.from_agent_and_tools(
+            agent=self.agent,
+            tools=tools,
+            verbose=True,
+            max_iterations=10,
+            handle_parsing_errors=True,
+        )
+        
+        logger.info("AutoBus initialized with LangChain")
     
     def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
         """Process a user message through the Autobus multi-agent system.
         
-        The manager agent automatically routes the request to appropriate sub-agents:
+        The manager agent routes the request to appropriate sub-agents:
         - config_agent: Agent configuration management
         - email_agent: Email operations
         - image_generation_agent: Image generation requests
@@ -115,44 +142,30 @@ class AutoBus:
             agent_name: Name of the agent/sub-agent if specifically targeted.
             
         Returns:
-            The agent's response (can be string, AgentImage, or AgentAudio).
+            The agent's response.
         """
         try:
-            # Get conversation state for user
-            state = self.conversation_manager.get_conversation_state(userid)
-            
-            # Normalize file paths in the message to prevent LLM from misinterpreting them
-            normalized_message = normalize_file_paths(message)
             
             # Add user message to history
-            logger.info("Received message from %s: %s", userid, (normalized_message or '')[:200])
-            self.conversation_manager.update_conversation_history(userid, "user", normalized_message)
-            
-            # Format conversation context with recent history
-            conversation_context = self._format_conversation_context(state.conversation_history)
-            
+            logger.info("Received message from %s: %s", userid, (message or '')[:200])
+
             # Build complete prompt with conversation history and user context
             # For RAG: set user documents in chatbot agent
-            if self.chatbot_agent.retriever_tool:
+            if hasattr(self.chatbot_agent, 'retriever_tool') and self.chatbot_agent.retriever_tool:
                 self.chatbot_agent.retriever_tool.set_user_docs(userid)
             
-            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nConversation History:\n{conversation_context}\n\nCurrent Message: {normalized_message}"
+            complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nCurrent Message: {message}"
             
             # Process message through manager agent
-            response = self.agent.run(complete_message)
+            response = self.executor.invoke({"input": complete_message})
             
-            # Handle media responses (images/audio) by saving them and storing reference in conversation history
-            if isinstance(response, (AgentImage, AgentAudio)):
-                file_path, conversation_string = self.image_storage.handle_media_response(response, userid)
-                # Store only the reference string in conversation history, not the actual media object
-                self.conversation_manager.update_conversation_history(userid, "assistant", conversation_string)
-                logger.info(f"Saved media file for user {userid}: {file_path}")
-                # Return the original media object so the API caller still gets it
-                return f"Image generated and saved: {file_path}"
+            # Extract output from response
+            if isinstance(response, dict):
+                result = response.get("output", str(response))
             else:
-                # For text responses, store directly
-                self.conversation_manager.update_conversation_history(userid, "assistant", str(response))
-                return response
+                result = str(response)
+    
+            return result
             
         except Exception as e:
             logger.error(f"Error processing message with Autobus for user {userid}: {e}", exc_info=True)

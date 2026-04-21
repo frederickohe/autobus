@@ -6,7 +6,7 @@ integrating with the existing LLMClient while supporting LangChain's agent and t
 
 import logging
 from typing import Dict, List, Any, Optional
-from langchain.chat_models import ChatOpenAI
+from langchain_openai import ChatOpenAI
 from langchain.schema import BaseMessage, HumanMessage, SystemMessage, AIMessage
 import os
 from dotenv import load_dotenv

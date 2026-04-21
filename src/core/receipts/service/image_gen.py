@@ -115,7 +115,7 @@ class ReceiptGenerator:
                 img.paste(logo_bg, (80, y), logo_bg)
             except Exception as e:
                 logger.warning(f"Error pasting logo: {str(e)}")
-                draw.text((80, y), "LEBE", font=bold_fnt, fill=dark)
+                draw.text((80, y), "Autobus", font=bold_fnt, fill=dark)
 
         draw.text((WIDTH - 80, y + 20),
                   "Transaction Receipt",
@@ -311,7 +311,7 @@ class ReceiptGenerator:
                 logo_bg.paste(logo_resized, (0, 0), logo_resized)
                 img.paste(logo_bg, (80, y), logo_bg)
             except:
-                draw.text((80, y), "LEBE", font=bold_font, fill=black_text)
+                draw.text((80, y), "Autobus", font=bold_font, fill=black_text)
 
         draw.text((width - 80, y + 20),
                   "Loan Receipt",

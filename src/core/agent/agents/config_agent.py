@@ -69,7 +69,10 @@ Always be clear about what operations you're performing and their results."""
         self.agent = create_react_agent(
             llm=self.model,
             tools=self.tools,
-            prompt=PromptTemplate.from_template(system_prompt + "\n{input}\nAgentScratchpad:{agent_scratchpad}")
+            prompt=PromptTemplate.from_template(
+                system_prompt + 
+                "\n\nAvailable Tools:\n{tools}\n\nTool Names: {tool_names}\n\nUser: {input}\n\nThought process (agent scratchpad):\n{agent_scratchpad}"
+            )
         )
         
         # Wrap in AgentExecutor

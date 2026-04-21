@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
     
     SERVICE_NAME: str = "Autobus Backend"
-    DEBUG: bool = os.environ.get('DEBUG', 'false').lower() == 'true'
+    DEBUG: bool = True
 
     # Database Configuration - supports both traditional and Docker Postgres env vars
     DB_DRIVER: str = os.environ.get('DB_DRIVER', 'postgresql+asyncpg')

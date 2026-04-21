@@ -29,9 +29,9 @@ class UserResponse(BaseModel):
     instagram_url: Optional[str] = None
     
     # Notification Preferences
-    profile_sharing: Optional[str] = None
-    in_app_notification: Optional[str] = None
-    sms_notification: Optional[str] = None
+    profile_sharing: Optional[bool] = None
+    in_app_notification: Optional[bool] = None
+    sms_notification: Optional[bool] = None
     
     # Status and Timestamps
     status: str

@@ -3,27 +3,36 @@ import base64
 from dataclasses import dataclass
 from decimal import Decimal
 import io
+import re
 from core.cloudstorage.service.storageservice import StorageService
 from core.histories.service.historyservice import HistoryService
+import openai
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
-from core.nlu.config import AGENT_CATEGORIES
+from sqlalchemy import or_
+from fastapi import HTTPException
+from core.auth.service.authservice import AuthService
+from core.nlu.config import INTENT_CATEGORIES
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
-from core.conversationmanager.service.conversation_manager import ConversationManager
+from core.nlu.service.conversation_manager import ConversationManager
 from core.nlu.service.security import SecurityManager
+from core.nlu.service.date_selection_manager import DateSelectionManager, DateOption
 from core.nlu.emitters.response import ResponseFormatter
 from core.receipts.service.image_gen import ReceiptGenerator
 from core.user.service.user_service import UserService
 from utilities.dbconfig import SessionLocal
+from core.auth.dto.request.user_create import UserCreateRequest
+from core.receipts.service.receipt_service import ReceiptService
 from core.payments.dto.paymentdto import PaymentDto
 from core.payments.model.paymentmethod import PaymentMethod
 from core.payments.model.paymentstatus import PaymentStatus
 from core.payments.model.paynetwork import Network
 from core.payments.service.paymentservice import PaymentService
+from core.user.model.User import User
 from utilities.uniqueidgenerator import UniqueIdGenerator
 from decimal import Decimal
 from core.beneficiaries.utility.network_detector import NetworkDetector
@@ -42,6 +51,7 @@ class ReceiptData:
     receiver: str
     payment_method: str
     timestamp: datetime
+    # Optional loan fields
     interest_rate: Optional[str] = None
     loan_period: Optional[str] = None
     expected_pay_date: Optional[str] = None
@@ -55,61 +65,12 @@ class AutobusNLUSystem:
         self.security_manager = SecurityManager()
         self.response_formatter = ResponseFormatter()
         self.intent_processor = IntentProcessor()
-    
-    def _resolve_beneficiary(self, user_id: str, beneficiary_name: str, db: Session) -> Optional[Dict]:
-        """
-        Lookup a beneficiary by name and extract the customer number.
-        
-        Args:
-            user_id: User identifier
-            beneficiary_name: Name of the beneficiary to lookup
-            db: Database session
-            
-        Returns:
-            Dictionary with beneficiary info (customer_number, network, name) or None if not found
-        """
-        try:
-            from core.beneficiaries.service.beneficiary_service import BeneficiaryService
-            
-            beneficiary_service = BeneficiaryService(db)
-            beneficiaries = beneficiary_service.get_beneficiaries(user_id)
-            
-            if not beneficiaries:
-                logger.info(f"[BENEFICIARY_LOOKUP] No beneficiaries found for user {user_id}")
-                return None
-            
-            # Search for matching beneficiary by name (case-insensitive partial match)
-            beneficiary_name_lower = beneficiary_name.lower().strip()
-            matched_beneficiary = None
-            
-            for benef in beneficiaries:
-                if benef.name.lower() == beneficiary_name_lower or \
-                   beneficiary_name_lower in benef.name.lower():
-                    matched_beneficiary = benef
-                    break
-            
-            if matched_beneficiary:
-                logger.info(f"[BENEFICIARY_LOOKUP] Found beneficiary: {matched_beneficiary.name} ({matched_beneficiary.customer_number})")
-                return {
-                    "customer_number": matched_beneficiary.customer_number,
-                    "network": matched_beneficiary.network,
-                    "name": matched_beneficiary.name,
-                    "account_type": matched_beneficiary.account_type,
-                    "bank_code": matched_beneficiary.bank_code
-                }
-            else:
-                logger.info(f"[BENEFICIARY_LOOKUP] No beneficiary found matching name: {beneficiary_name}")
-                return None
-                
-        except Exception as e:
-            logger.error(f"[BENEFICIARY_LOOKUP_ERROR] Error during beneficiary lookup: {str(e)}", exc_info=True)
-            return None
+        self.date_selection_manager = DateSelectionManager()
     
     def process_message(
         self, 
         user_id: str, 
         user_message: str, 
-        user_subscription_status: str,
         image_media_id: Optional[str] = None,
         image_url: Optional[str] = None,
         audio_media_id: Optional[str] = None,
@@ -121,13 +82,11 @@ class AutobusNLUSystem:
         Args:
             user_id: User identifier
             user_message: Text message from user
-            user_subscription_status: User's subscription status
             image_media_id: WhatsApp media ID for image
             image_url: Direct URL to image
             audio_media_id: WhatsApp media ID for audio
             audio_url: Direct URL to audio
         """
-
         # Get conversation state
         state = self.conversation_manager.get_conversation_state(user_id)
         
@@ -146,14 +105,6 @@ class AutobusNLUSystem:
                 audio_media_id=audio_media_id,
                 audio_url=audio_url
             )
-
-        # Check if waiting for payment confirmation
-        if state.waiting_for_payment_confirmation:
-            return self._handle_payment_confirmation(user_id, user_message, media_context)
-
-        # Check if waiting for PIN
-        if state.waiting_for_pin:
-            return self._handle_pin_verification(user_id, user_message)
         
         # Detect intent and extract slots
         logger.info("Detecting intent for user %s (current_intent=%s)", user_id, state.current_intent)
@@ -166,6 +117,14 @@ class AutobusNLUSystem:
             response = self.response_formatter.format_response("", "ask_for_image_description")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
+        
+        # If the intent is not clear due to low confidence, return appropriate response
+        if intent == "intent_not_clear":
+            logger.info("Intent not clear for user %s; asking for clarification", user_id)
+            response = self.response_formatter.format_response("", "intent_not_clear")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+        
         logger.info("Detected intent=%s missing=%s", intent, missing_slots)
 
         # Validate and merge slots
@@ -174,45 +133,79 @@ class AutobusNLUSystem:
         state.collected_slots.update(validated_slots)
 
         state.current_intent = intent
-        
+
         # CHECK SUBSCRIPTION STATUS EARLY
         # print (f"User Subscription Status: {user_subscription_status}")
         # if not user_subscription_status and intent != "create_new_account":
         #     # User needs subscription but isn't trying to create account
         #     response = self.response_formatter.format_response(
-        #         "subscription_required", 
+        #         "subscription_required",
         #         "need_subscription",
         #         current_intent=intent  # Pass the original intent for context
         #     )
         #     self.conversation_manager.update_conversation_history(user_id, "assistant", response)
         #     return response
-        
+
+        # Check if user wants to cancel during slot collection
+        if state.current_intent and user_message:
+            user_msg_lower = user_message.lower().strip()
+            cancellation_keywords = ["cancel", "stop", "abort", "never mind", "nevermind", "quit"]
+
+            if any(keyword in user_msg_lower for keyword in cancellation_keywords):
+                logger.info(f"[CANCELLATION] User {user_id} cancelled {state.current_intent} during slot collection")
+                response = self.response_formatter.format_response(state.current_intent, "payment_cancelled")
+
+                # Clear all transaction state
+                state.current_intent = ""
+                state.collected_slots = {}
+                state.pending_payment_dto = {}
+                state.waiting_for_payment_confirmation = False
+                self.conversation_manager._save_conversation_state(state)
+
+                self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+                return response
+
         # Check for missing required slots
         current_missing = self.slot_manager.get_missing_slots(intent, state.collected_slots)
 
+        # For beneficiary edits, guide the user through a strict field-selection flow.
+        if intent == "update_beneficiary":
+            if not state.collected_slots.get("update_field"):
+                if state.collected_slots.get("new_beneficiary_name"):
+                    state.collected_slots["update_field"] = "name"
+                elif state.collected_slots.get("customer_number"):
+                    state.collected_slots["update_field"] = "number"
+                elif state.collected_slots.get("bank_code"):
+                    state.collected_slots["update_field"] = "bank_code"
+
+            update_field = (state.collected_slots.get("update_field") or "").lower().strip()
+            field_map = {
+                "name": "new_beneficiary_name",
+                "rename": "new_beneficiary_name",
+                "new name": "new_beneficiary_name",
+                "number": "customer_number",
+                "phone": "customer_number",
+                "phone number": "customer_number",
+                "mobile": "customer_number",
+            }
+            target_slot = field_map.get(update_field)
+            if update_field and not target_slot:
+                current_missing = ["update_field"]
+            elif target_slot and not state.collected_slots.get(target_slot):
+                current_missing = [target_slot]
+
         if current_missing or (len(state.collected_slots) == 1 and 'amount' in state.collected_slots):
-            # Ask for missing slots
-            prompt = self.slot_manager.generate_slot_prompt(intent, current_missing)
+            # Ask for one missing slot at a time to keep the flow predictable
+            next_missing = [current_missing[0]] if current_missing else []
+            prompt = self.slot_manager.generate_slot_prompt(intent, next_missing)
             response = self.response_formatter.format_response(
                 intent, "missing_slots", prompt=prompt
             )
 
         else:
-            # All slots collected, execute action directly (PIN verification commented out for testing)
-            # TODO: Re-enable PIN verification after payment flow is working
-            # if self.security_manager.is_pin_required(intent):
-            #     # Set pending action using ConversationManager method
-            #     self.conversation_manager.set_pending_action(
-            #         user_id,
-            #         intent,
-            #         state.collected_slots.copy()
-            #     )
-            #     response = self.response_formatter.format_response(
-            #         intent, "confirm_action", **state.collected_slots
-            #     )
-            # else:
-            #     # Execute non-secure action directly
-            response = self._execute_action(user_id, intent, state.collected_slots, user_message, state.conversation_history)
+            # All slots collected, execute action directly
+            slots_to_execute = state.collected_slots.copy()
+            response = self._execute_action(user_id, intent, slots_to_execute, user_message, state.conversation_history)
         
         # Add assistant response to history
         self.conversation_manager.update_conversation_history(user_id, "assistant", response)
@@ -257,7 +250,18 @@ class AutobusNLUSystem:
         return response
 
     def _handle_payment_confirmation(self, user_id: str, user_response: str, media_context: Optional[Dict[str, Any]] = None) -> str:
-        """Handle user's yes/no response for payment confirmation"""
+        """
+        Handle user's yes/no response for payment confirmation.
+        Supports text, audio, and image inputs for confirmation.
+        
+        Args:
+            user_id: User identifier
+            user_response: Text response from user
+            media_context: Optional dict with 'audio_bytes', 'image_base64', 'image_url', or other media
+            
+        Returns:
+            Response string to send to user
+        """
         state = self.conversation_manager.get_conversation_state(user_id)
 
         # Check if pending payment exists
@@ -268,53 +272,11 @@ class AutobusNLUSystem:
             self.conversation_manager._save_conversation_state(state)
             return error_response
 
-        # If media (audio/image) was provided, try to extract a textual yes/no
-        if media_context:
-            # Prefer audio transcription if available
-            try:
-                if media_context.get("audio_bytes"):
-                    transcription = None
-                    try:
-                        transcription = self.intent_detector.llm_client.transcribe_audio_from_bytes(
-                            media_context.get("audio_bytes"),
-                            filename=media_context.get("audio_filename", "audio.mp3")
-                        )
-                    except Exception:
-                        transcription = None
-                    if transcription:
-                        user_response = transcription
-                # If no audio, try to ask the LLM to interpret the image as a yes/no
-                elif media_context.get("image_base64") or media_context.get("image_url"):
-                    try:
-                        system_prompt = (
-                            "You are a concise classifier. Given an image supplied by the user, "
-                            "determine whether the image indicates a CONFIRMATION (yes) or a REJECTION (no) of a pending payment. "
-                            "Respond with a single word: yes or no. Do not add any extra text."
-                        )
-                        user_msg = (
-                            "Interpret the attached image and respond with only 'yes' or 'no' "
-                            "to indicate whether the user CONFIRMS the pending payment."
-                        )
-                        image_base64 = media_context.get("image_base64")
-                        image_url = media_context.get("image_url")
-                        image_mime = media_context.get("image_mime_type") or media_context.get("mime_type") or "image/jpeg"
-                        img_response = self.intent_detector.llm_client.chat_completion(
-                            system_prompt=system_prompt,
-                            user_message=user_msg,
-                            conversation_history=None,
-                            temperature=0.0,
-                            max_tokens=10,
-                            image_url=image_url,
-                            image_base64=image_base64,
-                            image_media_type=image_mime,
-                        )
-                        if img_response:
-                            user_response = img_response
-                    except Exception:
-                        pass
-            except Exception:
-                # If any media handling fails, fall back to textual user_response
-                pass
+        # Extract confirmation from media if provided
+        extracted_confirmation = self._extract_confirmation_from_media(user_id, media_context)
+        if extracted_confirmation:
+            user_response = extracted_confirmation
+            logger.info(f"[PAYMENT_CONFIRMATION] Extracted confirmation from media: {extracted_confirmation}")
 
         # Check user's response (yes/no/confirm/proceed/etc.)
         user_response_lower = (user_response or "").lower().strip()
@@ -323,7 +285,7 @@ class AutobusNLUSystem:
 
         if any(keyword in user_response_lower for keyword in confirmation_keywords):
             # User confirmed payment
-            logger.info(f"[PAYMENT_CONFIRMATION] User {user_id} confirmed payment")
+            logger.info(f"[PAYMENT_CONFIRMATION] User {user_id} confirmed payment (response: {user_response_lower})")
             intent = state.current_intent
             # Use slots stored in pending_payment_dto (includes receiver_name and providers)
             slots = state.pending_payment_dto.get("slots", state.collected_slots)
@@ -339,7 +301,7 @@ class AutobusNLUSystem:
 
         elif any(keyword in user_response_lower for keyword in rejection_keywords):
             # User rejected payment
-            logger.info(f"[PAYMENT_CONFIRMATION] User {user_id} rejected payment")
+            logger.info(f"[PAYMENT_CONFIRMATION] User {user_id} rejected payment (response: {user_response_lower})")
             response = self.response_formatter.format_response(state.current_intent, "payment_cancelled")
 
             # Clear confirmation state
@@ -358,6 +320,173 @@ class AutobusNLUSystem:
         self.conversation_manager.update_conversation_history(user_id, "assistant", response)
         return response
 
+    def _handle_expense_date_selection(self, user_id: str, user_response: str) -> str:
+        """
+        Handle user's date selection for expense tracking.
+        
+        User can select multiple dates by entering numbers separated by spaces or commas.
+        Examples: "1 2 3" or "1, 2, 3" or "1,2,3"
+        
+        Args:
+            user_id: User identifier
+            user_response: User's selection input (e.g., "1 2 3")
+            
+        Returns:
+            Response string to send to user
+        """
+        state = self.conversation_manager.get_conversation_state(user_id)
+        
+        # Check if expense dates are available
+        if not state.pending_expense_dates:
+            error_response = self.response_formatter.format_response("", "error", message="No date options available. Please start over.")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", error_response)
+            state.waiting_for_expense_date_selection = False
+            self.conversation_manager._save_conversation_state(state)
+            return error_response
+        
+        # Convert stored date dicts back to DateOption objects
+        date_options = [
+            DateOption(
+                number=opt["number"],
+                label=opt["label"],
+                start_date=datetime.fromisoformat(opt["start_date"]),
+                end_date=datetime.fromisoformat(opt["end_date"])
+            )
+            for opt in state.pending_expense_dates
+        ]
+        
+        # Parse user selections
+        selected_options, errors = self.date_selection_manager.parse_selections(user_response, date_options)
+        
+        if errors:
+            logger.info(f"[EXPENSE_SELECTION] User {user_id} provided invalid selections. Errors: {errors}")
+            error_msg = "\n".join(errors)
+            error_response = self.response_formatter.format_response(
+                "expense_report", 
+                "error", 
+                message=f"I couldn't understand your selection:\n{error_msg}\n\n{self.date_selection_manager.generate_menu_text(date_options)}"
+            )
+            self.conversation_manager.update_conversation_history(user_id, "assistant", error_response)
+            return error_response
+        
+        # Get the merged date range
+        start_date, end_date = self.date_selection_manager.merge_date_ranges(selected_options)
+        summary = self.date_selection_manager.format_selected_dates_summary(selected_options)
+        
+        logger.info(
+            f"[EXPENSE_SELECTION] User {user_id} selected dates. "
+            f"Summary: {summary}. Date range: {start_date.date()} to {end_date.date()}"
+        )
+        
+        # Update slots with the selected date range
+        state.collected_slots["time_period_start"] = start_date.isoformat()
+        state.collected_slots["time_period_end"] = end_date.isoformat()
+        state.collected_slots["time_period"] = summary
+        
+        # Get user data for context
+        user_data = self._get_user_data(user_id)
+        
+        # Process expense report with the selected dates
+        response = self.intent_processor.process_expense_report_intent(
+            intent="expense_report",
+            user_message=f"Show my expenses for {summary}",
+            conversation_history=state.conversation_history,
+            slots=state.collected_slots,
+            user_data=user_data
+        )
+        
+        # Clear expense selection state
+        state.waiting_for_expense_date_selection = False
+        state.pending_expense_dates = []
+        state.collected_slots = {}
+        self.conversation_manager._save_conversation_state(state)
+        
+        self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+        return response
+
+    def _extract_confirmation_from_media(self, user_id: str, media_context: Optional[Dict[str, Any]]) -> Optional[str]:
+        """
+        Extract confirmation (yes/no) from media inputs (audio or image).
+        
+        Args:
+            user_id: User identifier
+            media_context: Dictionary with 'audio_bytes', 'image_base64', 'image_url', etc.
+            
+        Returns:
+            Confirmation string ('yes' or 'no') or None if media processing fails
+        """
+        if not media_context:
+            return None
+
+        # Priority 1: Process audio if available
+        if media_context.get("audio_bytes"):
+            try:
+                logger.info(f"[MEDIA_CONFIRMATION] Transcribing audio for user {user_id}")
+                audio_filename = media_context.get("audio_filename", "audio.mp3")
+                audio_bytes = media_context.get("audio_bytes")
+                
+                transcription = self.intent_detector.llm_client.transcribe_audio_from_bytes(
+                    audio_bytes,
+                    filename=audio_filename
+                )
+                
+                if transcription:
+                    logger.info(f"[MEDIA_CONFIRMATION] Audio transcribed: {transcription[:100]}")
+                    return transcription
+                else:
+                    logger.warning(f"[MEDIA_CONFIRMATION] Audio transcription returned empty for user {user_id}")
+                    
+            except Exception as e:
+                logger.error(f"[MEDIA_CONFIRMATION] Error transcribing audio for user {user_id}: {str(e)}", exc_info=True)
+
+        # Priority 2: Process image if available
+        if media_context.get("image_base64") or media_context.get("image_url"):
+            try:
+                logger.info(f"[MEDIA_CONFIRMATION] Interpreting image for user {user_id}")
+                
+                # Build prompt for image interpretation
+                system_prompt = (
+                    "You are a payment confirmation classifier. Analyze the provided image and determine "
+                    "if it represents a CONFIRMATION or REJECTION of a payment transaction.\n"
+                    "Respond with ONLY one word: 'yes' for confirmation or 'no' for rejection.\n"
+                    "Examples of yes: thumbs up, checkmark, tick, nod, positive gesture, 'yes' text, confirmation sign\n"
+                    "Examples of no: thumbs down, cross, X mark, shake head, negative gesture, 'no' text, rejection sign"
+                )
+                
+                user_msg = (
+                    "Based on this image, should I confirm and process the pending payment? "
+                    "Respond with only 'yes' or 'no'."
+                )
+                
+                image_base64 = media_context.get("image_base64")
+                image_url = media_context.get("image_url")
+                image_mime = media_context.get("image_mime_type") or media_context.get("mime_type") or "image/jpeg"
+                
+                logger.debug(f"[MEDIA_CONFIRMATION] Image parameters - mime_type: {image_mime}, has_base64: {bool(image_base64)}, has_url: {bool(image_url)}")
+                
+                img_response = self.intent_detector.llm_client.chat_completion(
+                    system_prompt=system_prompt,
+                    user_message=user_msg,
+                    conversation_history=None,
+                    temperature=0.0,  # Deterministic response
+                    max_tokens=10,
+                    image_url=image_url,
+                    image_base64=image_base64,
+                    image_media_type=image_mime,
+                )
+                
+                if img_response:
+                    logger.info(f"[MEDIA_CONFIRMATION] Image interpretation result: {img_response}")
+                    return img_response.strip()
+                else:
+                    logger.warning(f"[MEDIA_CONFIRMATION] Image interpretation returned empty for user {user_id}")
+                    
+            except Exception as e:
+                logger.error(f"[MEDIA_CONFIRMATION] Error interpreting image for user {user_id}: {str(e)}", exc_info=True)
+
+        logger.debug(f"[MEDIA_CONFIRMATION] No media confirmation could be extracted for user {user_id}")
+        return None
+
     def _execute_action(self, user_id: str, intent: str, slots: Dict, user_message: str = "", conversation_history: List[Dict] = None) -> str:
         """Execute the actual financial action through payment service"""
         try:
@@ -365,7 +494,7 @@ class AutobusNLUSystem:
             payment_intents = ["buy_airtime", "send_money", "pay_bill", "get_loan"]
 
             if intent in payment_intents:
-                return self._process_payment_intent(user_id, intent, slots)
+                return self._process_payment_intent(user_id, intent, slots, user_message)
             else:
                 return self._process_non_payment_intent(user_id, intent, user_message, conversation_history, slots)
 
@@ -375,7 +504,7 @@ class AutobusNLUSystem:
             traceback.print_exc()
             return self.response_formatter.format_response(intent, "error", message=str(e))
 
-    def _process_payment_intent(self, user_id: str, intent: str, slots: Dict) -> str:
+    def _process_payment_intent(self, user_id: str, intent: str, slots: Dict, user_message: str = "") -> str:
         """Process payment intents through PaymentService"""
 
         db = SessionLocal()
@@ -400,28 +529,51 @@ class AutobusNLUSystem:
             # Resolve beneficiary for buy_airtime and send_money if beneficiary_name slot exists
             if intent == "buy_airtime" or intent == "send_money":
                 beneficiary_name = slots.get('beneficiary_name')
-                if beneficiary_name:
+                needs_lookup = (not slots.get('phone_number')) if intent == "buy_airtime" else (not slots.get('recipient'))
+                if beneficiary_name and needs_lookup:
                     logger.info(f"[BENEFICIARY_RESOLUTION] Resolving beneficiary for {intent}: {beneficiary_name}")
                     beneficiary_info = self._resolve_beneficiary(user_id, beneficiary_name, db)
                     if beneficiary_info:
                         # Update slots with resolved beneficiary information
-                        slots['phone'] = beneficiary_info['customer_number']
+                        slots['phone_number'] = beneficiary_info['customer_number']
                         slots['network'] = beneficiary_info['network']
                         slots['beneficiary_matched'] = beneficiary_info['name']
+                        slots['beneficiary_id'] = beneficiary_info['id']
                         logger.info(f"[BENEFICIARY_RESOLUTION] Beneficiary resolved: {beneficiary_info['name']} → {beneficiary_info['customer_number']}")
                     else:
                         return self.response_formatter.format_response(intent, "error", message=f"Beneficiary '{beneficiary_name}' not found in your saved contacts. Please provide the phone number directly or save this beneficiary first.")
 
             # Create PaymentDto based on intent
             if intent == "buy_airtime":
+                sender_name = "User"
+                try:
+                    sender_user = db.query(User).filter(
+                        or_(
+                            User.phone == user_id,
+                            User.whatsapp_phone == user_id
+                        )
+                    ).first()
+                    if sender_user:
+                        sender_name = f"{sender_user.first_name} {sender_user.last_name}".strip()
+                except Exception as e:
+                    logger.warning(f"Could not fetch user name for {user_id}: {e}")
+                    
                 payment_dto = PaymentDto(
                     senderPhone=user_id,  # User initiating the payment
-                    receiverPhone=slots.get('phone', user_id),  # Use extracted phone number (supports buying airtime for others)
+                    receiverPhone=slots.get('phone_number', user_id),  # Use extracted phone number (supports buying airtime for others)
                     network=network_map.get(slots.get('network', 'MTN'), Network.MTN),
                     paymentMethod=PaymentMethod.MOBILE_MONEY,
                     serviceName="Airtime Top-Up",
+                    reference="Airtime Purchase",
                     amountPaid=Decimal(slots.get('amount', '0')),
-                    transactionId=str(UniqueIdGenerator.generate())
+                    transactionId=str(UniqueIdGenerator.generate()),
+                    customerName=slots.get('recipient_name', 'Unknown'),
+                    senderName=sender_name,  # Actual user name from database
+                    receiverName=slots.get('receiver_name'),  # Verified account holder name from account inquiry
+                    senderProvider=slots.get('sender_provider'),  # Provider for sender
+                    receiverProvider=slots.get('receiver_provider'),  # Provider for receiver
+                    beneficiaryId=slots.get('beneficiary_id'),
+                    beneficiaryName=slots.get('beneficiary_matched'),
                 )
 
             elif intent == "send_money":
@@ -429,7 +581,12 @@ class AutobusNLUSystem:
                 from core.user.model.User import User
                 sender_name = "User"
                 try:
-                    sender_user = db.query(User).filter(User.phone == user_id).first()
+                    sender_user = db.query(User).filter(
+                        or_(
+                            User.phone == user_id,
+                            User.whatsapp_phone == user_id
+                        )
+                    ).first()
                     if sender_user:
                         sender_name = f"{sender_user.first_name} {sender_user.last_name}".strip()
                 except Exception as e:
@@ -446,6 +603,9 @@ class AutobusNLUSystem:
                     senderProvider=slots.get('sender_provider'),  # Provider for sender
                     receiverProvider=slots.get('receiver_provider'),  # Provider for receiver
                     serviceName=f"Money Transfer to {slots.get('recipient')}",
+                    reference=slots.get('reference'),
+                    beneficiaryId=slots.get('beneficiary_id'),
+                    beneficiaryName=slots.get('beneficiary_matched'),
                     amountPaid=Decimal(slots.get('amount', '0')),
                     transactionId=str(UniqueIdGenerator.generate())
                 )
@@ -648,7 +808,7 @@ class AutobusNLUSystem:
                 
                 # First, resolve beneficiary if beneficiary_name slot exists
                 beneficiary_name = slots.get('beneficiary_name')
-                if beneficiary_name:
+                if beneficiary_name and not slots.get('recipient'):
                     logger.info(f"[BENEFICIARY_RESOLUTION] Resolving beneficiary: {beneficiary_name}")
                     beneficiary_info = self._resolve_beneficiary(user_id, beneficiary_name, db)
                     if beneficiary_info:
@@ -656,9 +816,26 @@ class AutobusNLUSystem:
                         slots['recipient'] = beneficiary_info['customer_number']
                         slots['network'] = beneficiary_info['network']
                         slots['beneficiary_matched'] = beneficiary_info['name']
+                        slots['beneficiary_id'] = beneficiary_info['id']
                         logger.info(f"[BENEFICIARY_RESOLUTION] Beneficiary resolved: {beneficiary_info['name']} → {beneficiary_info['customer_number']}")
                     else:
                         return self.response_formatter.format_response(intent, "error", message=f"Beneficiary '{beneficiary_name}' not found in your saved contacts. Please provide the phone number directly or save this beneficiary first.")
+
+                # Fallback: if no recipient yet but we have a reference, try regex matching on raw message
+                if not slots.get('recipient') and slots.get('reference'):
+                    regex_match = self._resolve_beneficiary_from_message(user_id, user_message, db)
+                    if regex_match:
+                        slots['recipient'] = regex_match['customer_number']
+                        slots['network'] = slots.get('network') or regex_match['network']
+                        slots['beneficiary_matched'] = regex_match['name']
+                        slots['beneficiary_id'] = regex_match['id']
+                        slots['beneficiary_name'] = slots.get('beneficiary_name') or regex_match['name']
+                    else:
+                        return self.response_formatter.format_response(
+                            intent,
+                            "missing_slots",
+                            prompt="Please provide the recipient's phone number or a saved beneficiary name."
+                        )
                 
                 try:
                     payment_service = PaymentService(db)
@@ -705,7 +882,12 @@ class AutobusNLUSystem:
 
                         # Create confirmation message with provider information
                         receiver_provider = ProviderMapper.get_provider(recipient_network)
-                        confirmation_msg = f"Are you sure you want to send GHS {amount} to {recipient_phone} ({account_name}) on {receiver_provider}?\nPlease reply 'yes' to confirm or 'no' to cancel."
+                        reference = slots.get('reference')
+                        reference_line = f"\nReference: {reference}" if reference else ""
+                        confirmation_msg = (
+                            f"Are you sure you want to send GHS {amount} to {recipient_phone} ({account_name}) on {receiver_provider}?"
+                            f"{reference_line}\nPlease reply 'yes' to confirm or 'no' to cancel."
+                        )
 
                         # Store payment info and set waiting for confirmation
                         state.current_intent = intent
@@ -761,8 +943,8 @@ class AutobusNLUSystem:
                     intent=intent,
                     transaction_type=transaction_type,
                     amount=amount,
-                    recipient=slots.get('recipient') or slots.get('phone'),
-                    phone=user_id,
+                    recipient=slots.get('recipient') or slots.get('phone_number'),
+                    phone_number=user_id,
                     description=f"{intent.replace('_', ' ').title()} - Transaction ID: {payment_dto.transactionId}",
                     metadata={"slots": slots, "payment_status": result.status}
                 )
@@ -774,7 +956,26 @@ class AutobusNLUSystem:
                 return self.response_formatter.format_response(intent, message_type="processing", message=message)
             elif result.status == PaymentStatus.SUCCESS:
                 message = self._get_success_message(intent, slots, result)
-                return self.response_formatter.format_response(intent, message_type="success", message=message)
+                
+                # Store successful transaction for potential payflow saving
+                state = self.conversation_manager.get_conversation_state(user_id)
+                state.last_successful_transaction = {
+                    "intent": intent,
+                    "slots": slots,
+                    "transaction_id": result.transactionId,
+                    "amount": slots.get('amount') or slots.get('loan_amount'),
+                    "timestamp": datetime.now().isoformat()
+                }
+                self.conversation_manager._save_conversation_state(state)
+                
+                # Add payflow saving suggestion to the success message
+                payflow_suggestion = (
+                    "\n\n💾 Would you like to save this as a payment template for quick reuse? "
+                    "Just say 'Save as [template name]' (e.g., 'Save as Mom Payment')"
+                )
+                
+                full_message = message + payflow_suggestion
+                return self.response_formatter.format_response(intent, message_type="success", message=full_message)
             else:
                 error_msg = result.responseDescription or "Payment processing failed"
                 return self.response_formatter.format_response(intent, message_type="error", message=error_msg)
@@ -785,7 +986,11 @@ class AutobusNLUSystem:
     def _process_non_payment_intent(self, user_id: str, intent: str, user_message: str, conversation_history: List[Dict], slots: Dict) -> str:
         """Process non-payment intents"""
         """Route intent to the appropriate processor"""
-        conversational_intents = AGENT_CATEGORIES["conversational"]
+        conversational_intents = INTENT_CATEGORIES["conversational"]
+        financial_tips_intents = INTENT_CATEGORIES["financial_tips"]
+        expense_report_intents = INTENT_CATEGORIES["expense_report"]
+        beneficiaries_intents = INTENT_CATEGORIES["beneficiaries"]
+        user_management_intents = INTENT_CATEGORIES.get("user_management", [])
 
         user_data = self._get_user_data(user_id)
         
@@ -797,9 +1002,194 @@ class AutobusNLUSystem:
                 slots,
                 user_data
             )
+        elif intent in financial_tips_intents:
+            return self.intent_processor.process_financial_tips_intent(
+                intent,
+                user_message, 
+                conversation_history, 
+                slots,
+                user_data
+            )
+        elif intent in expense_report_intents:
+            # Check if time_period was already extracted from the user message
+            time_period = slots.get("time_period")
+            
+            if time_period:
+                # User provided a time period (e.g., "show my expenses for today")
+                # Convert it to corresponding date options automatically
+                logger.info(f"[EXPENSE_REPORT] User {user_id} provided time_period in message: '{time_period}'")
+                
+                mapped_options = self.date_selection_manager.convert_time_period_to_options(time_period)
+                
+                if mapped_options:
+                    # We have valid date options - process expense report directly
+                    logger.info(f"[EXPENSE_REPORT] Mapped time_period to {len(mapped_options)} option(s): {[opt.label for opt in mapped_options]}")
+                    
+                    # Merge date ranges from the mapped options
+                    start_date, end_date = self.date_selection_manager.merge_date_ranges(mapped_options)
+                    summary = self.date_selection_manager.format_selected_dates_summary(mapped_options)
+                    
+                    # Update slots with the determined date range
+                    slots["time_period_start"] = start_date.isoformat()
+                    slots["time_period_end"] = end_date.isoformat()
+                    slots["time_period"] = summary
+                    
+                    # Process expense report with the extracted dates (skip menu)
+                    response = self.intent_processor.process_expense_report_intent(
+                        intent="expense_report",
+                        user_message=user_message,
+                        conversation_history=conversation_history,
+                        slots=slots,
+                        user_data=user_data
+                    )
+                    return response
+                else:
+                    # Could not map the time_period - show menu as fallback
+                    logger.warning(f"[EXPENSE_REPORT] Could not map time_period '{time_period}', showing menu instead")
+            
+            # No time_period extracted (or mapping failed) - show date selection menu
+            state = self.conversation_manager.get_conversation_state(user_id)
+            
+            # Generate date options
+            date_options = self.date_selection_manager.generate_date_options()
+            
+            # Store date options in state for later retrieval
+            state.pending_expense_dates = [opt.to_dict() for opt in date_options]
+            state.waiting_for_expense_date_selection = True
+            state.current_intent = intent
+            self.conversation_manager._save_conversation_state(state)
+            
+            # Generate and return the menu
+            menu_text = self.date_selection_manager.generate_menu_text(date_options)
+            return menu_text
+        elif intent in beneficiaries_intents:
+            return self.intent_processor.process_beneficiaries_intent(
+                intent,
+                user_message,
+                conversation_history,
+                slots,
+                user_data
+            )
+        elif intent in user_management_intents:
+            return self._process_user_management_intent(user_id, intent, slots)
         else:
             # Fallback for unhandled intents
             return self.response_formatter.format_response(intent, "error", message="Intent not supported")
+    
+    def _process_user_management_intent(self, user_id: str, intent: str, slots: Dict) -> str:
+        """Process user management intents (update profile, view profile, update username, update phone)"""
+        db = SessionLocal()
+        try:
+            from core.user.service.user_service import UserService
+            user_service = UserService(db)
+            
+            if intent == "update_username":
+                # Handle username update (focused single-field update)
+                new_username = slots.get("new_username")
+                
+                if not new_username:
+                    return self.response_formatter.format_response(
+                        intent, "error", message="No new username provided."
+                    )
+                
+                # Update only username field
+                update_data = {"username": new_username}
+                user_service.update_user_details(user_id, update_data)
+                
+                response = self.response_formatter.format_response(
+                    intent, "success", 
+                    message=f"Your username has been updated to '{new_username}' successfully! ✅"
+                )
+                logger.info(f"User {user_id} username updated to {new_username}")
+                
+            elif intent == "update_phone_number":
+                # Handle phone number update (focused single-field update)
+                phone_number = slots.get("phone_number")
+                
+                if not phone_number:
+                    return self.response_formatter.format_response(
+                        intent, "error", message="No phone number provided."
+                    )
+                
+                # Update only phone field (mapped from phone_number slot)
+                update_data = {"phone": phone_number}
+                user_service.update_user_details(user_id, update_data)
+                
+                response = self.response_formatter.format_response(
+                    intent, "success",
+                    message=f"Your phone number has been updated to '{phone_number}' successfully! ✅"
+                )
+                logger.info(f"User {user_id} phone number updated to {phone_number}")
+            
+            elif intent == "update_user_details":
+                # Handle generic profile update (multiple fields)
+                update_fields = {
+                    "first_name", "last_name", "phone_number", "location", 
+                    "occupation", "income_level", "financial_goals", "risk_tolerance"
+                }
+                # Map slot names to user model field names
+                slot_to_field = {
+                    "phone_number": "phone"
+                }
+                
+                update_data = {}
+                for slot, value in slots.items():
+                    if slot in update_fields and value is not None:
+                        field_name = slot_to_field.get(slot, slot)
+                        update_data[field_name] = value
+                        logger.info(f"Preparing to update {field_name} for user {user_id}")
+                
+                if not update_data:
+                    return self.response_formatter.format_response(
+                        intent, "error", message="No valid fields to update provided."
+                    )
+                
+                # Update user details
+                user_service.update_user_details(user_id, update_data)
+                response = self.response_formatter.format_response(intent, "success", message="Your profile has been updated successfully! ✅")
+                logger.info(f"User {user_id} profile updated with fields: {list(update_data.keys())}")
+                
+            elif intent == "view_user_profile":
+                # Get user profile
+                profile = user_service.get_user_profile(user_id)
+                
+                # Format profile details for display
+                profile_details = f"""
+                📋 *Your Profile:*
+                - Name: {profile.get('first_name', 'N/A')} {profile.get('last_name', 'N/A')}
+                - Username: {profile.get('username', 'N/A')}
+                - Email: {profile.get('email', 'N/A')}
+                - Phone: {profile.get('phone', 'N/A')}
+                - Location: {profile.get('location', 'N/A')}
+                - Occupation: {profile.get('occupation', 'N/A')}
+                - Income Level: {profile.get('income_level', 'N/A')}
+                - Financial Goals: {profile.get('financial_goals', 'N/A')}
+                - Risk Tolerance: {profile.get('risk_tolerance', 'N/A')}
+                """
+                response = self.response_formatter.format_response(
+                    intent, "success", message=profile_details
+                )
+                logger.info(f"User {user_id} viewed their profile")
+            
+            else:
+                response = self.response_formatter.format_response(
+                    intent, "error", message="Unknown user management intent."
+                )
+            
+            return response
+            
+        except HTTPException as e:
+            logger.error(f"HTTP Error in user management intent: {str(e)}")
+            return self.response_formatter.format_response(
+                intent, "error", message=str(e.detail)
+            )
+        except Exception as e:
+            logger.error(f"Error processing user management intent: {str(e)}", exc_info=True)
+            return self.response_formatter.format_response(
+                intent, "error", message="An error occurred while processing your request."
+            )
+        finally:
+            db.close()
         
     def generate_receipt_after_payment(self, transaction_id: str, user_id: str, intent: str,
                                   amount: Decimal, status: str, sender: str, receiver: str,
@@ -860,21 +1250,16 @@ class AutobusNLUSystem:
             date_str = timestamp.strftime("%Y%m%d_%H%M%S")
             filename = f"receipts/{date_str}_{user_id}_{transaction_id}.png"
             
-            # Upload to Azure Blob Storage (if enabled)
+            # Upload to Azure Blob Storage
             storage_service = StorageService()
-            if storage_service.enabled:
-                blob_url = storage_service.upload_file(
-                    file_obj=image_file,
-                    file_name=filename,
-                    content_type="image/png"
-                )
-                if blob_url:
-                    logger.info(f"[RECEIPT] Receipt saved to Azure Storage: {blob_url}")
-                    return blob_url
+            blob_url = storage_service.upload_file(
+                file_obj=image_file,
+                file_name=filename,
+                content_type="image/png"
+            )
             
-            # If storage is disabled or upload failed, return empty string
-            logger.info(f"[RECEIPT] Receipt generation complete, but storage is not available")
-            return ""
+            logger.info(f"[RECEIPT] Receipt saved to Azure Storage: {blob_url}")
+            return blob_url
 
         except Exception as e:
             logger.error(f"[RECEIPT] Error generating/saving receipt: {str(e)}")
@@ -890,7 +1275,7 @@ class AutobusNLUSystem:
             return f"Your Transfer to {recipient_phone} ({receiver_name}) on {receiver_provider} is being processed. Transaction ID: {result.transactionId}"
 
         processing_messages = {
-            "buy_airtime": f"Airtime purchase of GHS {slots.get('amount')} for {slots.get('phone')} is being processed. Transaction ID: {result.transactionId}",
+            "buy_airtime": f"Airtime purchase of GHS {slots.get('amount')} for {slots.get('phone_number')} is being processed. Transaction ID: {result.transactionId}",
             "pay_bill": f"Bill payment of GHS {slots.get('amount')} is being processed. Transaction ID: {result.transactionId}",
             "get_loan": f"Loan application for GHS {slots.get('loan_amount')} is being processed. Transaction ID: {result.transactionId}"
         }
@@ -905,7 +1290,7 @@ class AutobusNLUSystem:
             return f"Your Transfer to {recipient_phone} ({receiver_name}) on {receiver_provider} has been successfully completed"
 
         success_messages = {
-            "buy_airtime": f"✅ Airtime of GHS {slots.get('amount')} sent to {slots.get('phone')}. Transaction ID: {result.transactionId}",
+            "buy_airtime": f"✅ Airtime of GHS {slots.get('amount')} sent to {slots.get('phone_number')}. Transaction ID: {result.transactionId}",
             "pay_bill": f"✅ Bill payment of GHS {slots.get('amount')} processed. Transaction ID: {result.transactionId}",
             "get_loan": f"✅ Loan of GHS {slots.get('loan_amount')} application submitted. Transaction ID: {result.transactionId}"
         }
@@ -927,12 +1312,8 @@ class AutobusNLUSystem:
                     "user_id": user.phone,
                     # `db_user_id` is the internal primary key used for relational FK lookups.
                     "db_user_id": user.id,
-                    "fullname": user.fullname,
                     "email": user.email,
-                    "phone": user.phone,
-                    "nationality": user.nationality,
-                    "gender": user.gender,
-                    "address": user.address,
+                    "created_at": user.created_at.isoformat() if user.created_at else None,
                     # Add any additional user fields you need
                 }
                 
@@ -961,19 +1342,31 @@ class AutobusNLUSystem:
         audio_url: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Process multimodal inputs (images and audio)
+        Process multimodal inputs (images and audio) from WhatsApp or direct URLs.
+        
+        Handles:
+        - Images: Converts to base64 and extracts MIME type
+        - Audio: Downloads/processes and prepares for transcription
         
         Args:
             user_id: User identifier
             image_media_id: WhatsApp media ID for image
-            image_url: Direct URL to image
+            image_url: Direct URL to image (fallback if media_id not available)
             audio_media_id: WhatsApp media ID for audio
-            audio_url: Direct URL to audio
+            audio_url: Direct URL to audio (fallback if media_id not available)
             
         Returns:
-            Dictionary with processed media context
+            Dictionary with processed media context:
+            {
+                'image_base64': base64-encoded image data,
+                'image_url': URL to image,
+                'image_mime_type': MIME type of image,
+                'audio_bytes': Raw audio bytes,
+                'audio_filename': Filename for audio,
+                'audio_mime_type': MIME type of audio
+            }
         """
-        from core.llmclient.media_processor import MediaProcessor
+        from core.nlu.service.media_processor import MediaProcessor
         
         media_processor = MediaProcessor()
         media_context = {}
@@ -981,7 +1374,7 @@ class AutobusNLUSystem:
         # Process image if provided
         if image_media_id or image_url:
             try:
-                logger.info(f"[MEDIA_PROCESSING] Processing image for user {user_id}")
+                logger.info(f"[MEDIA_PROCESSING] Processing image for user {user_id} (media_id: {bool(image_media_id)}, url: {bool(image_url)})")
                 image_data = media_processor.process_image(
                     media_id=image_media_id or "",
                     media_url=image_url
@@ -991,17 +1384,20 @@ class AutobusNLUSystem:
                     media_context["image_base64"] = image_data.get("base64")
                     media_context["image_url"] = image_data.get("url")
                     media_context["image_mime_type"] = image_data.get("mime_type")
-                    logger.info(f"[MEDIA_PROCESSING] Image processed successfully")
+                    logger.info(
+                        f"[MEDIA_PROCESSING] Image processed successfully for user {user_id} "
+                        f"(type: {image_data.get('mime_type')}, has_base64: {bool(image_data.get('base64'))})"
+                    )
                 else:
-                    logger.warning(f"[MEDIA_PROCESSING] Failed to process image")
+                    logger.warning(f"[MEDIA_PROCESSING] Failed to process image for user {user_id} (no data returned)")
                     
             except Exception as e:
-                logger.error(f"[MEDIA_PROCESSING] Error processing image: {e}")
+                logger.error(f"[MEDIA_PROCESSING] Error processing image for user {user_id}: {str(e)}", exc_info=True)
         
         # Process audio if provided
         if audio_media_id or audio_url:
             try:
-                logger.info(f"[MEDIA_PROCESSING] Processing audio for user {user_id}")
+                logger.info(f"[MEDIA_PROCESSING] Processing audio for user {user_id} (media_id: {bool(audio_media_id)}, url: {bool(audio_url)})")
                 audio_data = media_processor.process_audio(
                     media_id=audio_media_id or "",
                     media_url=audio_url
@@ -1011,11 +1407,20 @@ class AutobusNLUSystem:
                     media_context["audio_bytes"] = audio_data.get("bytes")
                     media_context["audio_filename"] = audio_data.get("filename")
                     media_context["audio_mime_type"] = audio_data.get("mime_type")
-                    logger.info(f"[MEDIA_PROCESSING] Audio processed successfully: {audio_data.get('size')} bytes")
+                    audio_size_kb = audio_data.get('size', 0) / 1024
+                    logger.info(
+                        f"[MEDIA_PROCESSING] Audio processed successfully for user {user_id} "
+                        f"(type: {audio_data.get('mime_type')}, size: {audio_size_kb:.1f}KB, filename: {audio_data.get('filename')})"
+                    )
                 else:
-                    logger.warning(f"[MEDIA_PROCESSING] Failed to process audio")
+                    logger.warning(f"[MEDIA_PROCESSING] Failed to process audio for user {user_id} (no data returned)")
                     
             except Exception as e:
-                logger.error(f"[MEDIA_PROCESSING] Error processing audio: {e}")
+                logger.error(f"[MEDIA_PROCESSING] Error processing audio for user {user_id}: {str(e)}", exc_info=True)
+        
+        if media_context:
+            logger.info(f"[MEDIA_PROCESSING] Media context prepared for user {user_id}: {list(media_context.keys())}")
+        else:
+            logger.warning(f"[MEDIA_PROCESSING] No media context could be created for user {user_id}")
         
         return media_context
