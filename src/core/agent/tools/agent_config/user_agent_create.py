@@ -1,8 +1,13 @@
-from smolagents.tools import Tool
 from typing import Any, Dict, Optional
-from sqlalchemy.orm import Session
 import json
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from langchain.tools import BaseTool
+import logging
+
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
+
+logger = logging.getLogger(__name__)
 
 
 def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -26,57 +31,41 @@ def _sanitize_params(params: Dict[str, Any]) -> Dict[str, Any]:
     return sanitized
 
 
-class CreateAgentTool(Tool):
-    """Tool for creating or updating an agent configuration."""
+class CreateAgentToolInput(BaseModel):
+    """Input schema for CreateAgentTool"""
+    user_id: str = Field(..., description="The unique identifier of the user")
+    agent_name: str = Field(..., description="The name of the agent to create or update")
+    params: Dict[str, Any] = Field(..., description="Dictionary of parameters required by the agent")
+    status: Optional[str] = Field(default="active", description="Status of the agent ('active' or 'inactive')")
+    description: Optional[str] = Field(default=None, description="Human-readable description of the agent configuration")
+
+
+class CreateAgentTool(BaseTool):
+    """LangChain tool for creating or updating agent configurations."""
     
-    name = "user_agent_config_create_tool"
-    description = (
+    name: str = "user_agent_config_create_tool"
+    description: str = (
         "Create or update an agent configuration for the user. "
         "Stores agent parameters and metadata needed for the agent to function properly. "
         "Use this to configure a new agent or update existing agent settings."
     )
-    inputs = {
-        "user_id": {
-            "type": "string",
-            "description": "The unique identifier of the user.",
-            "required": True
-        },
-        "agent_name": {
-            "type": "string",
-            "description": "The name of the agent to create or update.",
-            "required": True
-        },
-        "params": {
-            "type": "object",
-            "description": "Dictionary of parameters required by the agent (e.g., API keys, configuration settings).",
-            "required": True
-        },
-        "status": {
-            "type": "string",
-            "description": "Status of the agent ('active' or 'inactive'). Defaults to 'active'.",
-            "required": False,
-            "nullable": True
-        },
-        "description": {
-            "type": "string",
-            "description": "Human-readable description of what this agent configuration does.",
-            "required": False,
-            "nullable": True
-        }
-    }
-    output_type = "string"
+    args_schema: type[BaseModel] = CreateAgentToolInput
+    
+    db_session: Optional[Session] = None
+    service: Optional[AgentConfigService] = None
 
-    def __init__(self, db_session: Optional[Session] = None):
+    def __init__(self, db_session: Optional[Session] = None, **kwargs):
         """Initialize the tool with a database session.
         
         Args:
             db_session: SQLAlchemy database session for performing queries.
+            **kwargs: Additional arguments for BaseTool
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.db_session = db_session
         self.service = AgentConfigService(db_session) if db_session else None
 
-    def forward(
+    def _run(
         self,
         user_id: str,
         agent_name: str,
@@ -119,4 +108,16 @@ class CreateAgentTool(Tool):
             else:
                 return json.dumps({"ok": False, "message": result.get("message")})
         except Exception as e:
+            logger.error(f"Error creating agent: {e}", exc_info=True)
             return json.dumps({"ok": False, "message": f"Error creating agent: {str(e)}"})
+
+    async def _arun(
+        self,
+        user_id: str,
+        agent_name: str,
+        params: Dict[str, Any],
+        status: str = "active",
+        description: Optional[str] = None
+    ) -> str:
+        """Async version of _run"""
+        return self._run(user_id, agent_name, params, status, description)

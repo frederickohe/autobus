@@ -1,44 +1,47 @@
-from smolagents.tools import Tool
 from typing import Any, Dict, Optional
-from sqlalchemy.orm import Session
 import json
+from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from langchain.tools import BaseTool
+import logging
+
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
 
+logger = logging.getLogger(__name__)
 
-class GetAgentTool(Tool):
-    """Tool for retrieving an agent configuration."""
+
+class GetAgentToolInput(BaseModel):
+    """Input schema for GetAgentTool"""
+    user_id: str = Field(..., description="The unique identifier of the user")
+    agent_name: str = Field(..., description="The name of the agent to retrieve")
+
+
+class GetAgentTool(BaseTool):
+    """LangChain tool for retrieving an agent configuration."""
     
-    name = "user_agent_config_get_tool"
-    description = (
+    name: str = "user_agent_config_get_tool"
+    description: str = (
         "Retrieve a specific agent configuration for a user. "
         "Returns the agent's parameters and metadata. "
         "Use this to check if an agent is configured or to review agent settings."
     )
-    inputs = {
-        "user_id": {
-            "type": "string",
-            "description": "The unique identifier of the user.",
-            "required": True
-        },
-        "agent_name": {
-            "type": "string",
-            "description": "The name of the agent to retrieve.",
-            "required": True
-        }
-    }
-    output_type = "string"
+    args_schema: type[BaseModel] = GetAgentToolInput
+    
+    db_session: Optional[Session] = None
+    service: Optional[AgentConfigService] = None
 
-    def __init__(self, db_session: Optional[Session] = None):
+    def __init__(self, db_session: Optional[Session] = None, **kwargs):
         """Initialize the tool with a database session.
         
         Args:
             db_session: SQLAlchemy database session for performing queries.
+            **kwargs: Additional arguments for BaseTool
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.db_session = db_session
         self.service = AgentConfigService(db_session) if db_session else None
 
-    def forward(self, user_id: str, agent_name: str) -> str:
+    def _run(self, user_id: str, agent_name: str) -> str:
         """Get a specific agent configuration.
         
         Args:
@@ -59,4 +62,14 @@ class GetAgentTool(Tool):
             else:
                 return json.dumps({"ok": False, "message": result.get("message")})
         except Exception as e:
+            logger.error(f"Error retrieving agent: {e}", exc_info=True)
             return json.dumps({"ok": False, "message": f"Error retrieving agent: {str(e)}"})
+
+    async def _arun(self, user_id: str, agent_name: str) -> str:
+        """Async version of _run"""
+        return self._run(user_id, agent_name)
+    
+    # Legacy method for backward compatibility
+    def forward(self, user_id: str, agent_name: str) -> str:
+        """Legacy forward method for backward compatibility"""
+        return self._run(user_id, agent_name)

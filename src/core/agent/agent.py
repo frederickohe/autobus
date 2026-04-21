@@ -1,4 +1,4 @@
-from smolagents import ToolCallingAgent, InferenceClientModel
+from smolagents import ToolCallingAgent
 from smolagents.agent_types import AgentImage, AgentAudio
 import yaml
 import logging
@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from core.agent.tools.answer.final_answer import FinalAnswerTool
 from core.conversationmanager.service.conversation_manager import ConversationManager
 from core.agent.utils.image_storage import ImageStorageManager
+from core.llmclient.openai_model_wrapper import OpenAIModelForSmolagents
+import OpenAIModelForSmolagents as OpenAI
 
 # Import sub-agents
 from core.agent.agents import (
@@ -16,9 +18,9 @@ from core.agent.agents import (
     EmailAgent,
     ImageGenerationAgent,
     VideoGenerationAgent,
-    ProductsAgent,
     ChatbotAgent,
     WebSearchAgent,
+    ProductsAgent,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,10 +56,11 @@ class AutoBus:
             prompts_path: Path to the prompts YAML configuration file.
             db_session: Optional SQLAlchemy database session for agent config operations.
         """
-        self.model = InferenceClientModel(
-            max_tokens=2096,
+        # Initialize OpenAI model for smolagents
+        self.model = OpenAI(
+            model="gpt-4",
             temperature=0.5,
-            model_id='meta-llama/Llama-3.1-70B-Instruct',
+            max_tokens=2096
         )
         
         with open(prompts_path, 'r') as stream:
@@ -83,29 +86,16 @@ class AutoBus:
         self.email_agent = EmailAgent(self.model, db_session)
         self.image_generation_agent = ImageGenerationAgent(self.model, db_session)
         self.video_generation_agent = VideoGenerationAgent(self.model, db_session)
-        self.products_agent = ProductsAgent(self.model, db_session)
         self.chatbot_agent = ChatbotAgent(self.model, db_session)
         self.web_search_agent = WebSearchAgent(self.model, db_session)
+        self.products_agent = ProductsAgent(self.model, db_session)
         
         # Initialize the manager agent with direct access to FinalAnswerTool and managed sub-agents
-        self.agent = ToolCallingAgent(
-            model=self.model,
-            tools=[self.final_answer],  # Manager agent has direct access to answer tool only
-            managed_agents=[
-                self.config_agent.agent,
-                self.email_agent.agent,
-                self.image_generation_agent.agent,
-                self.video_generation_agent.agent,
-                self.products_agent.agent,
-                self.chatbot_agent.agent,
-                self.web_search_agent.agent,
-            ],
-            max_steps=6,
-            verbosity_level=1,
-            planning_interval=None,
-            name="autobus_manager",
-            description="Autobus Manager Agent - Coordinates specialized sub-agents for various tasks",
-            prompt_templates=prompt_templates
+        self.agent = initialize_agent(
+            tools=[self.final_answer],
+            llm=self.model,
+            agent="zero-shot-react-description",
+            verbose=True
         )
     
     def process_user_message(self, userid: str, message: str, agent_name: str) -> str:
@@ -116,7 +106,6 @@ class AutoBus:
         - email_agent: Email operations
         - image_generation_agent: Image generation requests
         - video_generation_agent: Video generation requests
-        - products_agent: Product management and inventory
         - chatbot_agent: RAG-based question answering
         - web_search_agent: Web search and page retrieval
         

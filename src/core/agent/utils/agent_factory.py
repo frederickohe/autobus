@@ -1,11 +1,11 @@
 """Factory utility for creating agents with proper configuration."""
 
-from typing import Dict, Any, List, Optional
-from smolagents import ToolCallingAgent, InferenceClientModel, Tool
+from typing import Dict, Any, List, Optional, Union
+from smolagents import ToolCallingAgent, Tool
 
 
 def create_agent_with_defaults(
-    model: InferenceClientModel,
+    model: Union[Any, object],
     tools: List[Tool],
     name: str,
     description: str,
@@ -16,7 +16,7 @@ def create_agent_with_defaults(
     """Create a ToolCallingAgent with default authorized_imports.
     
     Args:
-        model: The InferenceClientModel to use.
+        model: The model to use (e.g., InferenceClientModel or OpenAIModelForSmolagents).
         tools: List of tools available to the agent.
         name: Name of the agent.
         description: Description of the agent.

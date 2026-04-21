@@ -2,8 +2,11 @@
 
 Handles model training, fine-tuning, and AI-related operations."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel
+from langchain import OpenAI
+from langchain.chains import LLMChain
+from langchain.agents import Tool, initialize_agent
 from sqlalchemy.orm import Session
+from typing import Union
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,26 +15,29 @@ logger = logging.getLogger(__name__)
 class AITrainingAgent:
     """Sub-agent for AI training and model operations."""
     
-    def __init__(self, model: InferenceClientModel, db_session: Session):
+    def __init__(self, model: Union[object, None], db_session: Session):
         """Initialize the AI Training Agent.
         
         Args:
-            model: The InferenceClientModel to use for this agent.
+            model: The model to use for this agent (e.g., InferenceClientModel or OpenAI wrapper).
             db_session: SQLAlchemy database session for database operations.
         """
-        self.model = model
+        self.model = OpenAI(
+            model="gpt-4",
+            temperature=0.5,
+            max_tokens=2096
+        )
         self.db_session = db_session
         
         # Initialize AI training tools (can be extended with actual training tools)
         self.tools = []
         
         # Initialize the agent
-        self.agent = ToolCallingAgent(
+        self.agent = initialize_agent(
             tools=self.tools,
-            model=model,
-            max_steps=10,
-            name="ai_training_agent",
-            description="Handles AI model training, fine-tuning, and AI-related operations. Can manage training jobs and model optimization.",
+            llm=self.model,
+            agent="zero-shot-react-description",
+            verbose=True
         )
     
     def process(self, message: str, user_id: str = None) -> str:

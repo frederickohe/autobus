@@ -2,8 +2,9 @@
 
 Handles web searching and page content retrieval."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel, WebSearchTool, tool
+from smolagents import ToolCallingAgent, WebSearchTool, tool
 from sqlalchemy.orm import Session
+from typing import Union
 import logging
 import re
 import requests
@@ -45,11 +46,11 @@ def visit_webpage(url: str) -> str:
 class WebSearchAgent:
     """Sub-agent for web search operations."""
     
-    def __init__(self, model: InferenceClientModel, db_session: Session):
+    def __init__(self, model: Union[object, None], db_session: Session):
         """Initialize the Web Search Agent.
         
         Args:
-            model: The InferenceClientModel to use for this agent.
+            model: The model to use for this agent (e.g., InferenceClientModel or OpenAI wrapper).
             db_session: SQLAlchemy database session for database operations.
         """
         self.model = model

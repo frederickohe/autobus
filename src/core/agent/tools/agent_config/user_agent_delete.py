@@ -1,43 +1,47 @@
-from smolagents.tools import Tool
-from typing import Any, Dict, Optional
+from typing import Optional
+import json
 from sqlalchemy.orm import Session
+from pydantic import BaseModel, Field
+from langchain.tools import BaseTool
+import logging
+
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
 
+logger = logging.getLogger(__name__)
 
-class DeleteAgentTool(Tool):
-    """Tool for deleting an agent configuration."""
+
+class DeleteAgentToolInput(BaseModel):
+    """Input schema for DeleteAgentTool"""
+    user_id: str = Field(..., description="The unique identifier of the user")
+    agent_name: str = Field(..., description="The name of the agent to delete")
+
+
+class DeleteAgentTool(BaseTool):
+    """LangChain tool for deleting an agent configuration."""
     
-    name = "user_agent_config_delete_tool"
-    description = (
+    name: str = "user_agent_config_delete_tool"
+    description: str = (
         "Delete an agent configuration for a user. "
         "Removes the agent and all its settings from the user's account. "
         "Use this to remove agents that are no longer needed."
     )
-    inputs = {
-        "user_id": {
-            "type": "string",
-            "description": "The unique identifier of the user.",
-            "required": True
-        },
-        "agent_name": {
-            "type": "string",
-            "description": "The name of the agent to delete.",
-            "required": True
-        }
-    }
-    output_type = "string"
+    args_schema: type[BaseModel] = DeleteAgentToolInput
+    
+    db_session: Optional[Session] = None
+    service: Optional[AgentConfigService] = None
 
-    def __init__(self, db_session: Optional[Session] = None):
+    def __init__(self, db_session: Optional[Session] = None, **kwargs):
         """Initialize the tool with a database session.
         
         Args:
             db_session: SQLAlchemy database session for performing queries.
+            **kwargs: Additional arguments for BaseTool
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.db_session = db_session
         self.service = AgentConfigService(db_session) if db_session else None
 
-    def forward(self, user_id: str, agent_name: str) -> str:
+    def _run(self, user_id: str, agent_name: str) -> str:
         """Delete an agent configuration.
         
         Args:
@@ -54,8 +58,18 @@ class DeleteAgentTool(Tool):
             result = self.service.delete_agent(user_id=user_id, agent_name=agent_name)
             
             if result.get("ok"):
-                return f'{{"ok": true, "message": "Agent {agent_name} deleted successfully"}}'
+                return json.dumps({"ok": True, "message": f"Agent {agent_name} deleted successfully"})
             else:
-                return f'{{"ok": false, "message": "{result.get("message")}"}}'
+                return json.dumps({"ok": False, "message": result.get("message")})
         except Exception as e:
-            return f'{{"ok": false, "message": "Error deleting agent: {str(e)}"}}'
+            logger.error(f"Error deleting agent: {e}", exc_info=True)
+            return json.dumps({"ok": False, "message": f"Error deleting agent: {str(e)}"})
+
+    async def _arun(self, user_id: str, agent_name: str) -> str:
+        """Async version of _run"""
+        return self._run(user_id, agent_name)
+    
+    # Legacy method for backward compatibility
+    def forward(self, user_id: str, agent_name: str) -> str:
+        """Legacy forward method for backward compatibility"""
+        return self._run(user_id, agent_name)

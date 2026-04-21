@@ -2,8 +2,9 @@
 
 Handles email composition and sending operations."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel
+from smolagents import ToolCallingAgent
 from sqlalchemy.orm import Session
+from typing import Union
 import logging
 
 from core.agent.tools.email.email import EmailTool
@@ -14,11 +15,11 @@ logger = logging.getLogger(__name__)
 class EmailAgent:
     """Sub-agent for email operations."""
     
-    def __init__(self, model: InferenceClientModel, db_session: Session):
+    def __init__(self, model: Union[object, None], db_session: Session):
         """Initialize the Email Agent.
         
         Args:
-            model: The InferenceClientModel to use for this agent.
+            model: The model to use for this agent (e.g., InferenceClientModel or OpenAI wrapper).
             db_session: SQLAlchemy database session for database operations.
         """
         self.model = model

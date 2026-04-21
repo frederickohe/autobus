@@ -2,8 +2,9 @@
 
 Handles video generation and processing."""
 
-from smolagents import ToolCallingAgent, InferenceClientModel, load_tool
+from smolagents import ToolCallingAgent, load_tool
 from sqlalchemy.orm import Session
+from typing import Union
 import logging
 
 from core.agent.utils.image_storage import ImageStorageManager
@@ -14,11 +15,11 @@ logger = logging.getLogger(__name__)
 class VideoGenerationAgent:
     """Sub-agent for video generation operations."""
     
-    def __init__(self, model: InferenceClientModel, db_session: Session):
+    def __init__(self, model: Union[object, None], db_session: Session):
         """Initialize the Video Generation Agent.
         
         Args:
-            model: The InferenceClientModel to use for this agent.
+            model: The model to use for this agent (e.g., InferenceClientModel or OpenAI wrapper).
             db_session: SQLAlchemy database session for database operations.
         """
         self.model = model
