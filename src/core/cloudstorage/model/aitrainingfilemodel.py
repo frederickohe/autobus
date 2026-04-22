@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 from utilities.dbconfig import Base
@@ -10,6 +10,7 @@ class AITrainingFileModel(Base):
     user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
     file_name = Column(String, index=True)
     file_url = Column(String)
+    content = Column(Text, nullable=True, comment="Extracted text content from the uploaded file")
     subfolder = Column(String, default="ai-training-files/", index=True)
     upload_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     file_size = Column(Integer, nullable=True)

@@ -10,6 +10,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from core.cloudstorage.model.aitrainingfilemodel import AITrainingFileModel
 from core.cloudstorage.service.storageservice import StorageService
+from core.cloudstorage.service.file_content_extractor import FileContentExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,9 @@ class DocumentService:
             file_size = len(file_content)
             file_type = file.content_type or "application/octet-stream"
             
+            # Extract text content from the file
+            extracted_content = FileContentExtractor.extract_content(file, file_content)
+            
             # Upload to cloud storage
             file_url = self.storage_service.upload_file(
                 file.file,
@@ -75,11 +79,12 @@ class DocumentService:
                 subfolder="ai-training-files/"
             )
             
-            # Create document record in database
+            # Create document record in database with extracted content
             doc_record = AITrainingFileModel(
                 user_id=user_id,
                 file_name=file_name,
                 file_url=file_url,
+                content=extracted_content,
                 subfolder="ai-training-files/",
                 file_size=file_size,
                 file_type=file_type
@@ -89,6 +94,10 @@ class DocumentService:
             self.db_session.commit()
             
             logger.info(f"Successfully uploaded document {file_name} for user {user_id}")
+            if extracted_content:
+                logger.info(f"Extracted {len(extracted_content)} characters from {file_name}")
+            else:
+                logger.warning(f"Could not extract content from {file_name}")
             
             # Re-process user's documents for retriever
             self._reprocess_user_documents(user_id)
@@ -186,18 +195,20 @@ class DocumentService:
                 logger.info(f"No documents for user {user_id}, skipping processing")
                 return
             
-            # For now, we'll store document metadata as langchain Documents
-            # In production, you'd want to read the actual file content from storage
+            # Create langchain Documents with actual extracted content
             source_docs = []
             for doc in documents:
-                # Create a placeholder document with metadata
-                # In production, download and read the actual content
+                # Use extracted content if available, otherwise use metadata
+                page_content = doc.content if doc.content else f"Document: {doc.file_name}"
+                
                 source_doc = Document(
-                    page_content=f"Document: {doc.file_name}\nURL: {doc.file_url}\nType: {doc.file_type}",
+                    page_content=page_content,
                     metadata={
                         "source": doc.file_name,
                         "file_url": doc.file_url,
-                        "uploaded_at": doc.upload_timestamp.isoformat()
+                        "file_type": doc.file_type,
+                        "uploaded_at": doc.upload_timestamp.isoformat(),
+                        "doc_id": doc.id
                     }
                 )
                 source_docs.append(source_doc)

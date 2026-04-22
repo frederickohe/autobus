@@ -3,6 +3,20 @@
 # Set Python path to include the app directory
 export PYTHONPATH="${PYTHONPATH}:/app"
 
+# Check if requirements.txt has changed and reinstall if needed
+if [ -f /app/.requirements.hash ]; then
+    CURRENT_HASH=$(md5sum /app/requirements.txt | awk '{print $1}')
+    PREVIOUS_HASH=$(cat /app/.requirements.hash)
+    if [ "$CURRENT_HASH" != "$PREVIOUS_HASH" ]; then
+        echo "📦 requirements.txt changed. Reinstalling dependencies..."
+        pip install -r /app/requirements.txt --no-cache-dir
+        echo $CURRENT_HASH > /app/.requirements.hash
+        echo "✓ Dependencies updated"
+    fi
+else
+    echo $(md5sum /app/requirements.txt | awk '{print $1}') > /app/.requirements.hash
+fi
+
 # Wait for Postgres to be available (tries for ~60s)
 echo "Waiting for PostgreSQL to become available..."
 TRIES=0
