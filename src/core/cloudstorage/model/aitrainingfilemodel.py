@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey
+from pgvector.sqlalchemy import Vector
 from datetime import datetime
 from utilities.dbconfig import Base
 
@@ -13,3 +14,4 @@ class AITrainingFileModel(Base):
     upload_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     file_size = Column(Integer, nullable=True)
     file_type = Column(String, nullable=True)
+    embedding = Column(Vector(1536), nullable=True, comment="Vector embedding for semantic search")

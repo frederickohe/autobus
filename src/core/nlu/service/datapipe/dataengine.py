@@ -152,7 +152,7 @@ class FinancialDataQueryEngine:
     def _get_counterparty_display_name(self, counterparty_phone: str, transactions: List[Dict], user_identifier: str) -> str:
         """Get the display name for a counterparty (phone + best available name)
         
-        Priority order: beneficiary_name > receiver_name for sent, sender_name for received
+        Priority order: customer_name > receiver_name for sent, sender_name for received
         """
         best_name = None
         
@@ -160,9 +160,9 @@ class FinancialDataQueryEngine:
             direction = self._get_transaction_direction(tx, user_identifier)
             
             if direction == TransactionDirection.SENT:
-                # For sent transactions, prefer beneficiary_name over receiver_name
-                if tx.get('beneficiary_name'):
-                    best_name = tx.get('beneficiary_name')
+                # For sent transactions, prefer customer_name over receiver_name
+                if tx.get('customer_name'):
+                    best_name = tx.get('customer_name')
                     break  # Found best, stop searching
                 elif not best_name and tx.get('receiver_name'):
                     best_name = tx.get('receiver_name')
@@ -467,7 +467,7 @@ def test_query_engine():
             'amountPaid': 50.00,
             'senderPhone': '233501234567',
             'receiver_name': '233247654321',
-            'beneficiaryName': 'John Doe',
+            'customerName': 'John Doe',
             'reference': 'Food',
             'date_paid': '2024-01-15T10:30:00'
         },
@@ -477,7 +477,7 @@ def test_query_engine():
             'amountPaid': 30.00,
             'senderPhone': '233501234567',
             'receiver_name': '233247654321',
-            'beneficiaryName': 'John Doe',
+            'customerName': 'John Doe',
             'reference': 'Transport',
             'date_paid': '2024-01-20T14:20:00'
         },
@@ -487,7 +487,7 @@ def test_query_engine():
             'amountPaid': 10.00,
             'senderPhone': '233501234567',
             'phone_number': '233247654321',
-            'beneficiaryName': 'John Doe',
+            'customerName': 'John Doe',
             'reference': 'Airtime',
             'network': 'MTN',
             'date_paid': '2024-01-25T09:15:00'

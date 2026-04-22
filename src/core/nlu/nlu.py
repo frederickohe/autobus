@@ -35,7 +35,7 @@ from core.payments.service.paymentservice import PaymentService
 from core.user.model.User import User
 from utilities.uniqueidgenerator import UniqueIdGenerator
 from decimal import Decimal
-from core.beneficiaries.utility.network_detector import NetworkDetector
+from core.customers.utility.network_detector import NetworkDetector
 
 
 logger = logging.getLogger(__name__)
@@ -58,14 +58,15 @@ class ReceiptData:
     penalty_rate: Optional[str] = None
 
 class AutobusNLUSystem:
-    def __init__(self):
+    def __init__(self, db_session=None):
         self.intent_detector = IntentDetector()
         self.slot_manager = SlotManager()
         self.conversation_manager = ConversationManager()
         self.security_manager = SecurityManager()
         self.response_formatter = ResponseFormatter()
-        self.intent_processor = IntentProcessor()
+        self.intent_processor = IntentProcessor(db_session=db_session)
         self.date_selection_manager = DateSelectionManager()
+        self.db_session = db_session
     
     def process_message(
         self, 
@@ -168,10 +169,10 @@ class AutobusNLUSystem:
         # Check for missing required slots
         current_missing = self.slot_manager.get_missing_slots(intent, state.collected_slots)
 
-        # For beneficiary edits, guide the user through a strict field-selection flow.
-        if intent == "update_beneficiary":
+        # For customer edits, guide the user through a strict field-selection flow.
+        if intent == "update_customer":
             if not state.collected_slots.get("update_field"):
-                if state.collected_slots.get("new_beneficiary_name"):
+                if state.collected_slots.get("new_customer_name"):
                     state.collected_slots["update_field"] = "name"
                 elif state.collected_slots.get("customer_number"):
                     state.collected_slots["update_field"] = "number"
@@ -180,9 +181,9 @@ class AutobusNLUSystem:
 
             update_field = (state.collected_slots.get("update_field") or "").lower().strip()
             field_map = {
-                "name": "new_beneficiary_name",
-                "rename": "new_beneficiary_name",
-                "new name": "new_beneficiary_name",
+                "name": "new_customer_name",
+                "rename": "new_customer_name",
+                "new name": "new_customer_name",
                 "number": "customer_number",
                 "phone": "customer_number",
                 "phone number": "customer_number",
@@ -526,22 +527,22 @@ class AutobusNLUSystem:
 
             print(f"[PAYMENT_INTENT] Creating PaymentDto for intent: {intent}")
 
-            # Resolve beneficiary for buy_airtime and send_money if beneficiary_name slot exists
+            # Resolve customer for buy_airtime and send_money if customer_name slot exists
             if intent == "buy_airtime" or intent == "send_money":
-                beneficiary_name = slots.get('beneficiary_name')
+                customer_name = slots.get('customer_name')
                 needs_lookup = (not slots.get('phone_number')) if intent == "buy_airtime" else (not slots.get('recipient'))
-                if beneficiary_name and needs_lookup:
-                    logger.info(f"[BENEFICIARY_RESOLUTION] Resolving beneficiary for {intent}: {beneficiary_name}")
-                    beneficiary_info = self._resolve_beneficiary(user_id, beneficiary_name, db)
-                    if beneficiary_info:
-                        # Update slots with resolved beneficiary information
-                        slots['phone_number'] = beneficiary_info['customer_number']
-                        slots['network'] = beneficiary_info['network']
-                        slots['beneficiary_matched'] = beneficiary_info['name']
-                        slots['beneficiary_id'] = beneficiary_info['id']
-                        logger.info(f"[BENEFICIARY_RESOLUTION] Beneficiary resolved: {beneficiary_info['name']} → {beneficiary_info['customer_number']}")
+                if customer_name and needs_lookup:
+                    logger.info(f"[BENEFICIARY_RESOLUTION] Resolving customer for {intent}: {customer_name}")
+                    customer_info = self._resolve_customer(user_id, customer_name, db)
+                    if customer_info:
+                        # Update slots with resolved customer information
+                        slots['phone_number'] = customer_info['customer_number']
+                        slots['network'] = customer_info['network']
+                        slots['customer_matched'] = customer_info['name']
+                        slots['customer_id'] = customer_info['id']
+                        logger.info(f"[BENEFICIARY_RESOLUTION] Customer resolved: {customer_info['name']} → {customer_info['customer_number']}")
                     else:
-                        return self.response_formatter.format_response(intent, "error", message=f"Beneficiary '{beneficiary_name}' not found in your saved contacts. Please provide the phone number directly or save this beneficiary first.")
+                        return self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first.")
 
             # Create PaymentDto based on intent
             if intent == "buy_airtime":
@@ -572,8 +573,7 @@ class AutobusNLUSystem:
                     receiverName=slots.get('receiver_name'),  # Verified account holder name from account inquiry
                     senderProvider=slots.get('sender_provider'),  # Provider for sender
                     receiverProvider=slots.get('receiver_provider'),  # Provider for receiver
-                    beneficiaryId=slots.get('beneficiary_id'),
-                    beneficiaryName=slots.get('beneficiary_matched'),
+                    customerId=slots.get('customer_id')
                 )
 
             elif intent == "send_money":
@@ -604,8 +604,7 @@ class AutobusNLUSystem:
                     receiverProvider=slots.get('receiver_provider'),  # Provider for receiver
                     serviceName=f"Money Transfer to {slots.get('recipient')}",
                     reference=slots.get('reference'),
-                    beneficiaryId=slots.get('beneficiary_id'),
-                    beneficiaryName=slots.get('beneficiary_matched'),
+                    customerId=slots.get('customer_id'),
                     amountPaid=Decimal(slots.get('amount', '0')),
                     transactionId=str(UniqueIdGenerator.generate())
                 )
@@ -806,35 +805,35 @@ class AutobusNLUSystem:
             if intent == "send_money" and not state.pending_payment_dto:
                 logger.info(f"[ACCOUNT_INQUIRY] Performing account inquiry for send_money")
                 
-                # First, resolve beneficiary if beneficiary_name slot exists
-                beneficiary_name = slots.get('beneficiary_name')
-                if beneficiary_name and not slots.get('recipient'):
-                    logger.info(f"[BENEFICIARY_RESOLUTION] Resolving beneficiary: {beneficiary_name}")
-                    beneficiary_info = self._resolve_beneficiary(user_id, beneficiary_name, db)
-                    if beneficiary_info:
-                        # Update slots with resolved beneficiary information
-                        slots['recipient'] = beneficiary_info['customer_number']
-                        slots['network'] = beneficiary_info['network']
-                        slots['beneficiary_matched'] = beneficiary_info['name']
-                        slots['beneficiary_id'] = beneficiary_info['id']
-                        logger.info(f"[BENEFICIARY_RESOLUTION] Beneficiary resolved: {beneficiary_info['name']} → {beneficiary_info['customer_number']}")
+                # First, resolve customer if customer_name slot exists
+                customer_name = slots.get('customer_name')
+                if customer_name and not slots.get('recipient'):
+                    logger.info(f"[BENEFICIARY_RESOLUTION] Resolving customer: {customer_name}")
+                    customer_info = self._resolve_customer(user_id, customer_name, db)
+                    if customer_info:
+                        # Update slots with resolved customer information
+                        slots['recipient'] = customer_info['customer_number']
+                        slots['network'] = customer_info['network']
+                        slots['customer_matched'] = customer_info['name']
+                        slots['customer_id'] = customer_info['id']
+                        logger.info(f"[BENEFICIARY_RESOLUTION] Customer resolved: {customer_info['name']} → {customer_info['customer_number']}")
                     else:
-                        return self.response_formatter.format_response(intent, "error", message=f"Beneficiary '{beneficiary_name}' not found in your saved contacts. Please provide the phone number directly or save this beneficiary first.")
+                        return self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first.")
 
                 # Fallback: if no recipient yet but we have a reference, try regex matching on raw message
                 if not slots.get('recipient') and slots.get('reference'):
-                    regex_match = self._resolve_beneficiary_from_message(user_id, user_message, db)
+                    regex_match = self._resolve_customer_from_message(user_id, user_message, db)
                     if regex_match:
                         slots['recipient'] = regex_match['customer_number']
                         slots['network'] = slots.get('network') or regex_match['network']
-                        slots['beneficiary_matched'] = regex_match['name']
-                        slots['beneficiary_id'] = regex_match['id']
-                        slots['beneficiary_name'] = slots.get('beneficiary_name') or regex_match['name']
+                        slots['customer_matched'] = regex_match['name']
+                        slots['customer_id'] = regex_match['id']
+                        slots['customer_name'] = slots.get('customer_name') or regex_match['name']
                     else:
                         return self.response_formatter.format_response(
                             intent,
                             "missing_slots",
-                            prompt="Please provide the recipient's phone number or a saved beneficiary name."
+                            prompt="Please provide the recipient's phone number or a saved customer name."
                         )
                 
                 try:
@@ -989,8 +988,15 @@ class AutobusNLUSystem:
         conversational_intents = INTENT_CATEGORIES["conversational"]
         financial_tips_intents = INTENT_CATEGORIES["financial_tips"]
         expense_report_intents = INTENT_CATEGORIES["expense_report"]
-        beneficiaries_intents = INTENT_CATEGORIES["beneficiaries"]
+        customers_intents = INTENT_CATEGORIES["customers"]
         user_management_intents = INTENT_CATEGORIES.get("user_management", [])
+        email_intents = INTENT_CATEGORIES.get("email", [])
+        video_generation_intents = INTENT_CATEGORIES.get("video_generation", [])
+        image_generation_intents = INTENT_CATEGORIES.get("image_generation", [])
+        product_management_intents = INTENT_CATEGORIES.get("product_management", [])
+        order_management_intents = INTENT_CATEGORIES.get("order_management", [])
+        
+        logger.info(f"Processing non-payment intent '{intent}' for user {user_id}")
 
         user_data = self._get_user_data(user_id)
         
@@ -1000,7 +1006,9 @@ class AutobusNLUSystem:
                 user_message, 
                 conversation_history, 
                 slots,
-                user_data
+                user_id=user_id,
+                user_data=user_data,
+                use_rag=False  # Let the processor auto-detect RAG if needed
             )
         elif intent in financial_tips_intents:
             return self.intent_processor.process_financial_tips_intent(
@@ -1062,13 +1070,44 @@ class AutobusNLUSystem:
             # Generate and return the menu
             menu_text = self.date_selection_manager.generate_menu_text(date_options)
             return menu_text
-        elif intent in beneficiaries_intents:
-            return self.intent_processor.process_beneficiaries_intent(
+        elif intent in customers_intents:
+            return self.intent_processor.process_customers_intent(
                 intent,
                 user_message,
                 conversation_history,
                 slots,
                 user_data
+            )
+        elif intent in email_intents:
+            # Route email intents to EmailTool
+            return self.intent_processor.process_email_intent(
+                intent,
+                user_message,
+                conversation_history,
+                slots,
+                user_id=user_id,
+                agent_name="email_agent",
+                user_data=user_data
+            )
+        elif intent in product_management_intents:
+            # Route product management intents
+            return self.intent_processor.process_product_management_intent(
+                intent,
+                user_message,
+                conversation_history,
+                slots,
+                user_id=user_id,
+                user_data=user_data
+            )
+        elif intent in order_management_intents:
+            # Route order management intents
+            return self.intent_processor.process_order_management_intent(
+                intent,
+                user_message,
+                conversation_history,
+                slots,
+                user_id=user_id,
+                user_data=user_data
             )
         elif intent in user_management_intents:
             return self._process_user_management_intent(user_id, intent, slots)

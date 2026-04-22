@@ -7,20 +7,6 @@ import re
 from typing import Optional, Any
 from sqlalchemy.orm import Session
 
-from core.agent.tools.answer.final_answer import FinalAnswerTool
-from core.agent.utils.image_storage import ImageStorageManager
-
-# Import sub-agents
-from core.agent.agents import (
-    ConfigAgent,
-    EmailAgent,
-    ImageGenerationAgent,
-    VideoGenerationAgent,
-    ChatbotAgent,
-    WebSearchAgent,
-    ProductsAgent,
-)
-
 logger = logging.getLogger(__name__)
 
 def normalize_file_paths(text: str) -> str:
@@ -68,22 +54,7 @@ class AutoBus:
         if 'authorized_imports' not in prompt_templates:
             prompt_templates['authorized_imports'] = "math, datetime, json, re, csv, os, sys, collections, itertools, functools, operator, statistics, requests, pandas, numpy, pathlib, typing, urllib"
         
-        # Initialize image storage manager for handling agent-generated media
-        self.image_storage = ImageStorageManager()
-        
         self.db_session = db_session
-        
-        # Initialize the FinalAnswerTool directly for the manager agent
-        self.final_answer = FinalAnswerTool()
-        
-        # Initialize all sub-agents
-        self.config_agent = ConfigAgent(self.model, db_session)
-        self.email_agent = EmailAgent(self.model, db_session)
-        self.image_generation_agent = ImageGenerationAgent(self.model, db_session)
-        self.video_generation_agent = VideoGenerationAgent(self.model, db_session)
-        self.chatbot_agent = ChatbotAgent(self.model, db_session)
-        self.web_search_agent = WebSearchAgent(self.model, db_session)
-        self.products_agent = ProductsAgent(self.model, db_session)
         
         # Create system prompt for manager agent
         manager_system_prompt = """You are AutoBus, a sophisticated multi-agent orchestrator.
@@ -102,7 +73,7 @@ When a user asks for something, determine which agent(s) to use and coordinate t
 Always provide clear, helpful responses."""
         
         # Create tools list for the manager agent
-        tools = [self.final_answer]
+        tools = []
         
         # Create the manager agent using ReAct pattern
         self.agent = create_react_agent(
@@ -148,11 +119,6 @@ Always provide clear, helpful responses."""
             
             # Add user message to history
             logger.info("Received message from %s: %s", userid, (message or '')[:200])
-
-            # Build complete prompt with conversation history and user context
-            # For RAG: set user documents in chatbot agent
-            if hasattr(self.chatbot_agent, 'retriever_tool') and self.chatbot_agent.retriever_tool:
-                self.chatbot_agent.retriever_tool.set_user_docs(userid)
             
             complete_message = f"User ID: {userid}, agent_name: {agent_name}\n\nCurrent Message: {message}"
             

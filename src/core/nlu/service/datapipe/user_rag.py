@@ -118,7 +118,7 @@ class UserRAGManager:
                     "receiver_phone": tx.receiver_phone,
                     "network": tx.network,
                     "reference": tx.reference or None,
-                    "receiver_name": " ".join(filter(None, [tx.beneficiary_name, tx.receiver_name])),          
+                    "receiver_name": " ".join(filter(None, [tx.customer_name, tx.receiver_name])),          
                     "date_paid": tx.date_paid.isoformat() if tx.date_paid else None,
                 })
             

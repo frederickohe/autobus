@@ -17,7 +17,7 @@ def test_zeptomail_send():
     email_tool = EmailTool()
     
     # Test parameters
-    sender_email = "frederickohe@gmail.com"
+    sender_email = "noreply@useautobus.com"
     to_email = "cto@greenbraintech.com"
     subject = "Test Email from Autobus"
     body = "Hello! This is a test email from the Autobus email tool."

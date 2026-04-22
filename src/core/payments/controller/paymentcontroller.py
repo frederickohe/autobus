@@ -197,7 +197,7 @@ def send_money_direct(
     """
     from utilities.uniqueidgenerator import UniqueIdGenerator
     from utilities.phone_utils import convert_to_local_ghana_format
-    from core.beneficiaries.utility.network_detector import NetworkDetector
+    from core.customers.utility.network_detector import NetworkDetector
 
     try:
         # Validate inputs
@@ -708,7 +708,7 @@ def ctm_test_endpoint(
     try:
         logger.info(f"[CTM_TEST] Testing CTM request from {customer_phone}, Amount: GHS {amount}")
 
-        from core.beneficiaries.utility.network_detector import NetworkDetector
+        from core.customers.utility.network_detector import NetworkDetector
         from utilities.uniqueidgenerator import UniqueIdGenerator
 
         # Detect network from customer phone

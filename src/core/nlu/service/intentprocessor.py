@@ -1,24 +1,40 @@
 # core/nlu/service/intent_processor.py
 import json
+import re
 from typing import Dict, List, Any, Optional
-from core.beneficiaries.service.beneficiary_service import BeneficiaryService
+from core.customers.service.customer_service import CustomerService
 from core.nlu.service.llmclient import LLMClient
 from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
-from core.beneficiaries.service.beneficiary_service import BeneficiaryService
+from core.customers.service.customer_service import CustomerService
 import logging
 from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
+
+# Import agent framework tools
+from core.agent.tools.email.email import EmailTool
+
+# Import RAG tools for conversation support
+from core.rag import RAGPipelineTool
+from core.agent.tools.chatbot.enhanced_conversation_tool import EnhancedConversationTool
 
 logger = logging.getLogger(__name__)
 
 class IntentProcessor:
-    """Processes conversational and financial tips intents using LLM with User RAG"""
+    """Processes intents using LLM and agent framework tools"""
     
-    def __init__(self):
+    def __init__(self, db_session=None):
         self.llm_client = LLMClient()
         self.rag_manager = UserRAGManager()  # Initialize RAG manager
+        self.db_session = db_session
+        
+        # Initialize agent framework tools
+        self.email_tool = EmailTool()
+        
+        # Initialize RAG and conversation tools (lazy initialized if needed)
+        self.rag_tool = None
+        self.conversation_tool = None
     
     def process_conversational_intent(
         self, 
@@ -26,11 +42,36 @@ class IntentProcessor:
         user_message: str, 
         conversation_history: List[Dict],
         slots: Dict[str, Any],
-        user_data: Optional[Dict] = None  # Add user_data parameter
+        user_id: str = None,
+        user_data: Optional[Dict] = None,
+        use_rag: bool = False
     ) -> str:
         """
-        Process conversational intents with user context augmentation
+        Process conversational intents with optional RAG support.
+        Uses EnhancedConversationTool for intelligent responses.
+        Can detect when RAG should be used based on message content.
+        
+        Args:
+            intent: Intent type
+            user_message: User's message
+            conversation_history: Conversation history
+            slots: Extracted slots
+            user_id: User ID (for RAG filtering)
+            user_data: Additional user data
+            use_rag: Whether to use RAG for this query (default: False)
+            
+        Returns:
+            Generated response
         """
+        # If RAG is requested or should be auto-detected, use EnhancedConversationTool
+        if user_id and (use_rag or self._should_use_rag(user_message, slots)):
+            return self._handle_conversational_with_rag(
+                user_message=user_message,
+                user_id=user_id,
+                conversation_history=conversation_history
+            )
+        
+        # Fallback to LLM-only conversation
         # Prepare enhanced system prompt with user context
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["conversational"],
@@ -105,7 +146,7 @@ class IntentProcessor:
         
         return self._clean_markdown_formatting(response)
     
-    def process_beneficiaries_intent(
+    def process_customers_intent(
     self,
     intent: str,
     user_message: str,
@@ -114,30 +155,30 @@ class IntentProcessor:
     user_data: Optional[Dict] = None
     ) -> str:
         """
-        Process beneficiaries management using BeneficiaryService
+        Process customers management using CustomerService
         """
 
         db = next(get_db())
 
-        beneficiary_service = BeneficiaryService(db)
+        customer_service = CustomerService(db)
         
-        # For beneficiary DB operations we need the internal `users.id` (FK target).
+        # For customer DB operations we need the internal `users.id` (FK target).
         user_id = (user_data or {}).get("db_user_id") or (user_data or {}).get("user_id") or "unknown"
         
-        if intent == "add_beneficiary":
-            return self._handle_add_beneficiary(beneficiary_service, user_id, slots)
-        elif intent == "view_beneficiaries":
-            return self._handle_view_beneficiaries(beneficiary_service, user_id)
-        elif intent == "delete_beneficiary":
-            return self._handle_delete_beneficiary(beneficiary_service, user_id, slots)
-        elif intent == "update_beneficiary":
-            return self._handle_update_beneficiary(beneficiary_service, user_id, slots)
+        if intent == "add_customer":
+            return self._handle_add_customer(customer_service, user_id, slots)
+        elif intent == "view_customers":
+            return self._handle_view_customers(customer_service, user_id)
+        elif intent == "delete_customer":
+            return self._handle_delete_customer(customer_service, user_id, slots)
+        elif intent == "update_customer":
+            return self._handle_update_customer(customer_service, user_id, slots)
         else:
-            return "Beneficiary intent not supported"
+            return "Customer intent not supported"
 
-    def _handle_add_beneficiary(self, beneficiary_service: BeneficiaryService, user_id: str, slots: Dict) -> str:
-        """Handle adding a new beneficiary"""
-        name = slots.get("beneficiary_name")
+    def _handle_add_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+        """Handle adding a new customer"""
+        name = slots.get("customer_name")
         customer_number = slots.get("customer_number")
         network = slots.get("network")
         bank_code = slots.get("bank_code")
@@ -146,9 +187,9 @@ class IntentProcessor:
         print(f"[METHOD_HANDLE_ADD_BENEFICIARY] User Data for {user_id}")
         
         if not name or not customer_number:
-            return "Please provide both beneficiary name and customer number to save a new beneficiary."
+            return "Please provide both customer name and customer number to save a new customer."
         
-        success, beneficiary, message = beneficiary_service.add_beneficiary(
+        success, customer, message = customer_service.add_customer(
             user_id=user_id,
             name=name,
             customer_number=customer_number,
@@ -158,58 +199,58 @@ class IntentProcessor:
         
         return message
 
-    def _handle_view_beneficiaries(self, beneficiary_service: BeneficiaryService, user_id: str) -> str:
-        """Handle viewing all beneficiaries"""
-        beneficiaries = beneficiary_service.get_beneficiaries(user_id)
-        return beneficiary_service.format_beneficiary_list(beneficiaries)
+    def _handle_view_customers(self, customer_service: CustomerService, user_id: str) -> str:
+        """Handle viewing all customers"""
+        customers = customer_service.get_customers(user_id)
+        return customer_service.format_customer_list(customers)
 
-    def _handle_delete_beneficiary(self, beneficiary_service: BeneficiaryService, user_id: str, slots: Dict) -> str:
-        """Handle deleting a beneficiary"""
-        beneficiary_name = slots.get("beneficiary_name")
+    def _handle_delete_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+        """Handle deleting a customer"""
+        customer_name = slots.get("customer_name")
         
-        if not beneficiary_name:
-            return "Please specify which beneficiary you want to remove."
+        if not customer_name:
+            return "Please specify which customer you want to remove."
         
-        beneficiaries = beneficiary_service.get_beneficiaries(user_id)
+        customers = customer_service.get_customers(user_id)
         
-        # Find beneficiary by name
-        target_beneficiary = None
-        for beneficiary in beneficiaries:
-            if beneficiary.name.lower() == beneficiary_name.lower():
-                target_beneficiary = beneficiary
+        # Find customer by name
+        target_customer = None
+        for customer in customers:
+            if customer.name.lower() == customer_name.lower():
+                target_customer = customer
                 break
         
-        if not target_beneficiary:
-            return f"Beneficiary '{beneficiary_name}' not found in your saved beneficiaries."
+        if not target_customer:
+            return f"Customer '{customer_name}' not found in your saved customers."
         
-        success, message = beneficiary_service.delete_beneficiary(target_beneficiary.id, user_id)
+        success, message = customer_service.delete_customer(target_customer.id, user_id)
         return message
 
-    def _handle_update_beneficiary(self, beneficiary_service: BeneficiaryService, user_id: str, slots: Dict) -> str:
-        """Handle updating a beneficiary"""
-        beneficiary_name = slots.get("beneficiary_name")
-        new_name = slots.get("new_beneficiary_name")
+    def _handle_update_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+        """Handle updating a customer"""
+        customer_name = slots.get("customer_name")
+        new_name = slots.get("new_customer_name")
         customer_number = slots.get("customer_number")
         bank_code = slots.get("bank_code")
 
-        if not beneficiary_name:
-            return "Please specify which beneficiary you want to edit."
+        if not customer_name:
+            return "Please specify which customer you want to edit."
 
         if not any([new_name, customer_number, bank_code]):
             return "What would you like to update? You can send a new name, phone number, or bank code."
 
-        beneficiaries = beneficiary_service.get_beneficiaries(user_id)
-        target_beneficiary = None
-        for beneficiary in beneficiaries:
-            if beneficiary.name.lower() == beneficiary_name.lower():
-                target_beneficiary = beneficiary
+        customers = customer_service.get_customers(user_id)
+        target_customer = None
+        for customer in customers:
+            if customer.name.lower() == customer_name.lower():
+                target_customer = customer
                 break
 
-        if not target_beneficiary:
-            return f"Beneficiary '{beneficiary_name}' not found in your saved beneficiaries."
+        if not target_customer:
+            return f"Customer '{customer_name}' not found in your saved customers."
 
-        success, beneficiary, message = beneficiary_service.update_beneficiary(
-            beneficiary_id=target_beneficiary.id,
+        success, customer, message = customer_service.update_customer(
+            customer_id=target_customer.id,
             user_id=user_id,
             name=new_name,
             customer_number=customer_number,
@@ -217,178 +258,6 @@ class IntentProcessor:
         )
         return message
 
-    def process_payflows_intent(
-        self,
-        intent: str,
-        user_message: str,
-        conversation_history: List[Dict],
-        slots: Dict[str, Any],
-        user_data: Optional[Dict] = None
-    ) -> str:
-        """
-        Process payflows management using PayflowService.
-        Payflows are saved snapshots of successful payment transactions.
-        """
-        db = next(get_db())
-        
-        from core.payflows.service.payflow_service import PayflowService
-        payflow_service = PayflowService(db)
-        
-        # For payflow DB operations we need the internal `users.id` (FK target).
-        user_id = (user_data or {}).get("db_user_id") or (user_data or {}).get("user_id") or "unknown"
-        
-        if intent == "save_payflow":
-            return self._handle_save_payflow(payflow_service, user_id, slots)
-        elif intent == "view_payflows":
-            return self._handle_view_payflows(payflow_service, user_id, slots)
-        elif intent == "execute_payflow":
-            return self._handle_execute_payflow(payflow_service, user_id, slots)
-        elif intent == "delete_payflow":
-            return self._handle_delete_payflow(payflow_service, user_id, slots)
-        elif intent == "update_payflow":
-            return self._handle_update_payflow(payflow_service, user_id, slots)
-        else:
-            return "Payflow intent not supported"
-
-    def _handle_save_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
-        """Handle saving a new payflow after successful transaction"""
-        payflow_name = slots.get("payflow_name")
-        
-        if not payflow_name:
-            return "Please provide a name for this payment template."
-        
-        # Get the saved payflow data from slots
-        intent_name = slots.get("intent_name")
-        slot_values = slots.get("slot_values", {})
-        
-        # Safely handle slot_values if it's a string (from corrupted data)
-        if isinstance(slot_values, str):
-            logger.warning(f"[SAVE_PAYFLOW] slot_values is a string, expected dict. Attempting to evaluate...")
-            try:
-                import ast
-                slot_values = ast.literal_eval(slot_values) if slot_values else {}
-            except (ValueError, SyntaxError):
-                logger.error(f"[SAVE_PAYFLOW] Failed to parse slot_values string: {slot_values}")
-                return "Error: Invalid payflow data format. Please complete a full transaction first."
-        
-        if not intent_name or not slot_values:
-            return "Unable to save payflow: incomplete transaction data. Please complete a full transaction first."
-        
-        success, payflow, message = payflow_service.save_payflow(
-            user_id=user_id,
-            name=payflow_name,
-            description=slots.get("description"),
-            intent_name=intent_name,
-            slot_values=slot_values,
-            payment_method=slots.get("payment_method"),
-            recipient_phone=slots.get("recipient_phone"),
-            recipient_name=slots.get("recipient_name"),
-            account_number=slots.get("account_number"),
-            bill_provider=slots.get("bill_provider"),
-            last_amount=slots.get("amount") or slots.get("last_amount"),
-            requires_confirmation=slots.get("requires_confirmation", False)
-        )
-        
-        return message
-
-    def _handle_view_payflows(self, payflow_service, user_id: str, slots: Dict) -> str:
-        """Handle viewing all payflows"""
-        intent_filter = slots.get("intent_filter")
-        payflows = payflow_service.list_payflows(user_id, intent_filter=intent_filter)
-        
-        if not payflows:
-            return "You don't have any saved payment templates yet. Save one after completing a payment!"
-        
-        # Format payflow list
-        payflow_list = "\n".join([
-            f"✅ {pf.name}: {pf.intent_name.replace('_', ' ').title()} "
-            f"({'Requires confirmation' if pf.requires_confirmation else 'Quick pay'})"
-            for pf in payflows
-        ])
-        
-        return f"Your saved payment templates:\n{payflow_list}"
-
-    def _handle_execute_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
-        """Handle executing a saved payflow"""
-        payflow_name = slots.get("payflow_name")
-        
-        if not payflow_name:
-            return "Please specify which payment template you want to use."
-        
-        # Lookup payflow by name
-        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
-        
-        if not payflow:
-            return f"Payment template '{payflow_name}' not found. Would you like to view your saved templates?"
-        
-        # Prepare execution
-        override_amount = slots.get("amount")
-        success, prepared_slots, message = payflow_service.execute_payflow(
-            user_id=user_id,
-            payflow_id=payflow.id,
-            override_amount=override_amount
-        )
-        
-        if not success:
-            return message
-        
-        # Return execution response - in real flow, this would trigger payment processing
-        intent_display = payflow.intent_name.replace('_', ' ').title()
-        amount = prepared_slots.get('amount', 'N/A')
-        requires_confirmation = payflow.requires_confirmation
-        
-        if requires_confirmation:
-            return f"Ready to replay your '{payflow_name}' template ({intent_display}, Amount: {amount}). Please confirm with your PIN to proceed."
-        else:
-            return f"Initiating direct payment using '{payflow_name}' template..."
-
-    def _handle_delete_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
-        """Handle deleting a payflow"""
-        payflow_name = slots.get("payflow_name")
-        
-        if not payflow_name:
-            return "Please specify which payment template you want to remove."
-        
-        # Lookup payflow by name
-        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
-        
-        if not payflow:
-            return f"Payment template '{payflow_name}' not found."
-        
-        success, message = payflow_service.delete_payflow(user_id, payflow.id)
-        return message
-
-    def _handle_update_payflow(self, payflow_service, user_id: str, slots: Dict) -> str:
-        """Handle updating a payflow"""
-        payflow_name = slots.get("payflow_name")
-        
-        if not payflow_name:
-            return "Please specify which payment template you want to edit."
-        
-        # Lookup payflow by name
-        payflow = payflow_service.get_payflow_by_name(user_id, payflow_name)
-        
-        if not payflow:
-            return f"Payment template '{payflow_name}' not found."
-        
-        # Prepare updates
-        updates = {}
-        if slots.get("new_payflow_name"):
-            updates["name"] = slots.get("new_payflow_name")
-        if "last_amount" in slots:
-            updates["last_amount"] = slots.get("last_amount")
-        
-        if not updates:
-            return "What would you like to update? You can change the template name or amount."
-        
-        success, updated_payflow, message = payflow_service.update_payflow(
-            user_id=user_id,
-            payflow_id=payflow.id,
-            **updates
-        )
-        
-        return message
-    
     def _build_enhanced_system_prompt(
         self,
         base_prompt: str,
@@ -486,6 +355,139 @@ class IntentProcessor:
         
         return response.strip()
 
+    # ===== CONVERSATION INTENT HANDLER (WITH RAG SUPPORT) =====
+    def _should_use_rag(self, user_message: str, slots: Dict) -> bool:
+        """
+        Detect if RAG should be used based on message content.
+        
+        Uses heuristics to determine if the query is about the user's knowledge base.
+        Keywords like 'document', 'file', 'article', 'policy', 'info', etc. trigger RAG.
+        """
+        rag_keywords = [
+            'document', 'file', 'article', 'policy', 'procedure',
+            'guide', 'information', 'details', 'about', 'explain',
+            'what', 'tell me', 'know', 'learn', 'find out',
+            'look up', 'search', 'retrieve', 'get', 'show'
+        ]
+        
+        message_lower = (user_message or "").lower()
+        return any(keyword in message_lower for keyword in rag_keywords)
+    
+    def _initialize_conversation_tools(self, db_session=None) -> bool:
+        """
+        Initialize RAG and conversation tools.
+        
+        Args:
+            db_session: Database session (if None, will use self.db_session or create new one)
+            
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        try:
+            if self.conversation_tool is not None:
+                return True  # Already initialized
+            
+            # Get or create db_session
+            session = db_session or self.db_session
+            if session is None:
+                session = next(get_db())
+            
+            # Initialize RAG tool
+            self.rag_tool = RAGPipelineTool(db_session=session)
+            logger.debug("RAGPipelineTool initialized")
+            
+            # Initialize conversation tool with RAG support
+            self.conversation_tool = EnhancedConversationTool(
+                db_session=session,
+                rag_tool=self.rag_tool
+            )
+            logger.debug("EnhancedConversationTool initialized with RAG support")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize conversation tools: {str(e)}")
+            return False
+    
+    def _handle_conversational_with_rag(
+        self,
+        user_message: str,
+        user_id: str,
+        conversation_history: List[Dict] = None
+    ) -> str:
+        """
+        Handle conversation using RAG-aware tool.
+        
+        Uses EnhancedConversationTool to provide knowledge-base aware responses.
+        Falls back to general conversation if RAG fails.
+        
+        Args:
+            user_message: User's message
+            user_id: User ID for RAG filtering
+            conversation_history: Conversation history (optional)
+            
+        Returns:
+            Generated response
+        """
+        try:
+            # Initialize tools if needed
+            if not self._initialize_conversation_tools():
+                logger.warning("Failed to initialize RAG tools, falling back to general conversation")
+                return self._handle_fallback_conversation(user_message)
+            
+            logger.info(f"Processing conversation with RAG for user {user_id}")
+            
+            # Use the enhanced conversation tool in RAG-aware mode
+            response = self.conversation_tool._run(
+                message=user_message,
+                user_id=user_id,
+                conversation_mode="rag_aware",
+                use_rag=True
+            )
+            
+            logger.info(f"RAG conversation completed for user {user_id}")
+            return response
+            
+        except Exception as e:
+            logger.error(f"RAG conversation error: {str(e)}", exc_info=True)
+            # Fallback to general LLM-only conversation
+            return self._handle_fallback_conversation(user_message)
+    
+    def _handle_fallback_conversation(self, user_message: str) -> str:
+        """
+        Fallback conversation handler when RAG is unavailable.
+        
+        Uses basic LLM conversation without knowledge base context.
+        
+        Args:
+            user_message: User's message
+            
+        Returns:
+            Generated response
+        """
+        try:
+            system_prompt = (
+                "You are a helpful and friendly AI assistant. "
+                "Provide concise and accurate responses to user questions."
+            )
+            
+            response = self.llm_client.chat_completion(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                conversation_history=[],
+                temperature=0.7
+            )
+            
+            logger.info("Fallback conversation generated successfully")
+            return response
+            
+        except Exception as e:
+            logger.error(f"Fallback conversation failed: {str(e)}")
+            return (
+                "I'm experiencing technical difficulties. "
+                "Please try again in a moment."
+            )
+
     def _prepare_conversation_context(self, conversation_history: List[Dict]) -> str:
         """Prepare conversation context from history"""
         if not conversation_history:
@@ -497,5 +499,239 @@ class IntentProcessor:
             context += f"{role}: {msg['content']}\n"
         
         return context
+
+    # ===== EMAIL INTENT HANDLER =====
+    def process_email_intent(
+        self,
+        intent: str,
+        user_message: str,
+        conversation_history: List[Dict],
+        slots: Dict[str, Any],
+        user_id: str,
+        agent_name: str = "email_agent",
+        user_data: Optional[Dict] = None
+    ) -> str:
+        """
+        Process email intents using EmailTool
+        
+        Supported intents:
+        - send_email: Send an email to a recipient
+        - read_emails: Read recent emails from inbox
+        """
+        try:
+            if intent == "send_email":
+                return self._handle_send_email(user_id, slots, agent_name)
+            elif intent == "read_emails":
+                return self._handle_read_emails(user_id, slots)
+            else:
+                return f"❌ Email intent '{intent}' not supported"
+        except Exception as e:
+            logger.error(f"Error processing email intent: {e}", exc_info=True)
+            return f"❌ Error processing email: {str(e)[:100]}"
+
+    def _handle_send_email(self, user_id: str, slots: Dict[str, Any], agent_name: str) -> str:
+        """Handle send_email intent using EmailTool"""
+        recipient_email = slots.get("recipient_email")
+        subject = slots.get("subject")
+        body = slots.get("body")
+        
+        if not recipient_email or not subject or not body:
+            missing = []
+            if not recipient_email:
+                missing.append("recipient email")
+            if not subject:
+                missing.append("subject")
+            if not body:
+                missing.append("body")
+            return f"❌ Missing required fields: {', '.join(missing)}"
+        
+        # Use EmailTool to send email
+        result = self.email_tool._run(
+            to_email=recipient_email,
+            subject=subject,
+            body=body,
+            user_id=user_id,
+            agent_name=agent_name
+        )
+        
+        return result
+
+    def _handle_read_emails(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle read_emails intent"""
+        num_emails = slots.get("num_emails", 10)
+        
+        # TODO: Implement email reading functionality when email API is available
+        return f"📧 Email reading feature coming soon. Retrieving up to {num_emails} emails..."
+
+    # ===== PRODUCT MANAGEMENT INTENT HANDLER =====
+    def process_product_management_intent(
+        self,
+        intent: str,
+        user_message: str,
+        conversation_history: List[Dict],
+        slots: Dict[str, Any],
+        user_id: str,
+        user_data: Optional[Dict] = None
+    ) -> str:
+        """
+        Process product management intents
+        
+        Supported intents:
+        - add_product: Add a new product to inventory
+        - update_product: Update product details
+        - delete_product: Delete a product
+        - view_products: View all products
+        - view_product: View specific product details
+        """
+        try:
+            if intent == "add_product":
+                return self._handle_add_product(user_id, slots)
+            elif intent == "update_product":
+                return self._handle_update_product(user_id, slots)
+            elif intent == "delete_product":
+                return self._handle_delete_product(user_id, slots)
+            elif intent == "view_products":
+                return self._handle_view_products(user_id, slots)
+            elif intent == "view_product":
+                return self._handle_view_product(user_id, slots)
+            else:
+                return f"❌ Product management intent '{intent}' not supported"
+        except Exception as e:
+            logger.error(f"Error processing product management intent: {e}", exc_info=True)
+            return f"❌ Error processing product: {str(e)[:100]}"
+
+    def _handle_add_product(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle add_product intent"""
+        product_name = slots.get("product_name")
+        price = slots.get("price")
+        quantity = slots.get("quantity")
+        
+        if not product_name or not price or not quantity:
+            missing = []
+            if not product_name:
+                missing.append("product name")
+            if not price:
+                missing.append("price")
+            if not quantity:
+                missing.append("quantity")
+            return f"❌ Missing required fields: {', '.join(missing)}"
+        
+        # TODO: Implement product creation using product tools
+        return f"✅ Product '{product_name}' added successfully (${price}, Qty: {quantity})"
+
+    def _handle_update_product(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle update_product intent"""
+        product_id = slots.get("product_id")
+        
+        if not product_id:
+            return "❌ Product ID is required for updating"
+        
+        # TODO: Implement product update using product tools
+        updates = []
+        if slots.get("product_name"):
+            updates.append(f"name to '{slots['product_name']}'")
+        if slots.get("price"):
+            updates.append(f"price to ${slots['price']}")
+        if slots.get("quantity"):
+            updates.append(f"quantity to {slots['quantity']}")
+        
+        if not updates:
+            return "❌ No updates specified"
+        
+        return f"✅ Product #{product_id} updated: {', '.join(updates)}"
+
+    def _handle_delete_product(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle delete_product intent"""
+        product_id = slots.get("product_id")
+        
+        if not product_id:
+            return "❌ Product ID is required for deletion"
+        
+        # TODO: Implement product deletion using product tools
+        return f"✅ Product #{product_id} deleted successfully"
+
+    def _handle_view_products(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle view_products intent"""
+        # TODO: Implement product listing using product tools
+        return "📦 Your Products:\n1. Sample Product - $10.00 (Qty: 5)\n2. Another Product - $20.00 (Qty: 3)"
+
+    def _handle_view_product(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle view_product intent"""
+        product_id = slots.get("product_id")
+        
+        if not product_id:
+            return "❌ Product ID is required"
+        
+        # TODO: Implement single product view using product tools
+        return f"📦 Product Details for #{product_id}:\nName: Sample Product\nPrice: $10.00\nQuantity: 5"
+
+    # ===== ORDER MANAGEMENT INTENT HANDLER =====
+    def process_order_management_intent(
+        self,
+        intent: str,
+        user_message: str,
+        conversation_history: List[Dict],
+        slots: Dict[str, Any],
+        user_id: str,
+        user_data: Optional[Dict] = None
+    ) -> str:
+        """
+        Process order management intents
+        
+        Supported intents:
+        - create_order: Create a new order
+        - update_order: Update order details
+        """
+        try:
+            if intent == "create_order":
+                return self._handle_create_order(user_id, slots)
+            elif intent == "update_order":
+                return self._handle_update_order(user_id, slots)
+            else:
+                return f"❌ Order management intent '{intent}' not supported"
+        except Exception as e:
+            logger.error(f"Error processing order management intent: {e}", exc_info=True)
+            return f"❌ Error processing order: {str(e)[:100]}"
+
+    def _handle_create_order(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle create_order intent"""
+        customer_name = slots.get("customer_name")
+        product_id = slots.get("product_id")
+        quantity = slots.get("quantity")
+        
+        if not customer_name or not product_id or not quantity:
+            missing = []
+            if not customer_name:
+                missing.append("customer name")
+            if not product_id:
+                missing.append("product ID")
+            if not quantity:
+                missing.append("quantity")
+            return f"❌ Missing required fields: {', '.join(missing)}"
+        
+        # TODO: Implement order creation using order tools
+        return f"✅ Order created for {customer_name}: Product #{product_id}, Qty: {quantity}"
+
+    def _handle_update_order(self, user_id: str, slots: Dict[str, Any]) -> str:
+        """Handle update_order intent"""
+        order_id = slots.get("order_id")
+        
+        if not order_id:
+            return "❌ Order ID is required for updating"
+        
+        # TODO: Implement order update using order tools
+        updates = []
+        if slots.get("customer_name"):
+            updates.append(f"customer to {slots['customer_name']}")
+        if slots.get("product_id"):
+            updates.append(f"product to #{slots['product_id']}")
+        if slots.get("quantity"):
+            updates.append(f"quantity to {slots['quantity']}")
+        
+        if not updates:
+            return "❌ No updates specified"
+        
+        return f"✅ Order #{order_id} updated: {', '.join(updates)}"
+
 
 

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15  # Changed from postgres:15-alpine
     container_name: autobus_db
     restart: unless-stopped
     environment:

@@ -3,9 +3,6 @@
 # Set Python path to include the app directory
 export PYTHONPATH="${PYTHONPATH}:/app"
 
-# Install dependencies (if needed)
-pip install -r requirements.txt 2>/dev/null || true
-
 # Wait for Postgres to be available (tries for ~60s)
 echo "Waiting for PostgreSQL to become available..."
 TRIES=0

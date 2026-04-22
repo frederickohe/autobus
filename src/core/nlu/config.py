@@ -151,7 +151,7 @@ INTENTS = {
     # ===== TRANSACTIONAL INTENTS =====
     "send_money": {
         "description": "Send money to another person",
-        "slots": ["recipient", "amount", "network", "reference", "beneficiary_name"],
+        "slots": ["recipient", "amount", "network", "reference", "customer_name"],
         "required_slots": ["recipient", "amount", "reference"],
         "category": "transactional"
     },
@@ -199,8 +199,7 @@ SYSTEM_PROMPTS = {
     Through simple, natural interactions (text, voice, and image messages), 
     users will ask you to help them with a variety of tasks related to their business operations and financial management.
     Core features:
-
-        1.	Financial Management: Help users manage their finances, including sending money, paying bills, tracking expenses, and providing financial advice.
+        1.  Conversational Assistance: Engage users in natural conversations to understand their needs and provide assistance with various business and financial tasks.
         2.  Email Handling: Assist users with sending and reading emails.
         3.  Image and Video Generation: Create images and videos based on user prompts for
         4.  Product Management: Help users manage their product inventory, including adding, updating, deleting, and viewing products.
@@ -252,7 +251,7 @@ SYSTEM_PROMPTS = {
         - If specific time periods are mentioned, focus on those.
         - Keep response very short and concise.
         - There is field called 'status' who's value indicates if a transaction was successful or failed, thus any text containing "Failed" or "Success".
-        - The beneficiary_name field indicates the name of the recipient for a transaction, if available.
+        - The customer_name field indicates the name of the recipient for a transaction, if available.
         - Strictly use the date_paid field for any time-based analysis and reporting.
     """,
 
@@ -272,12 +271,12 @@ SYSTEM_PROMPTS = {
     Missing slots: {missing_slots}
     """,
 
-    "beneficiaries": """
-    You are Autobus, a financial assistant for users in Ghana. You can help users with managing beneficiaries.
+    "customers": """
+    You are Autobus, a financial assistant for users in Ghana. You can help users with managing customers.
     Focus on:
-    - Adding new beneficiaries
-    - Viewing saved beneficiaries
-    - Deleting beneficiaries
+    - Adding new customers
+    - Viewing saved customers
+    - Deleting customers
 
     Current User Context: {context}
     Missing slots: {missing_slots}
@@ -349,14 +348,14 @@ RESPONSE_TEMPLATES = {
         "error": "I apologize, but I'm having trouble processing your request. Please try again.",
         "success": "Your {intent} has been processed successfully! {details}"
     },
-    "beneficiaries": {
-        "add_beneficiary": "The beneficiary {beneficiary_name} has been added successfully.",
-        "view_beneficiaries": "Here are your saved beneficiaries: {beneficiaries_list}",
-        "delete_beneficiary": "The beneficiary {beneficiary_name} has been removed successfully.",
-        "update_beneficiary": "The beneficiary {beneficiary_name} has been updated successfully."
+    "customers": {
+        "add_customer": "The customer {customer_name} has been added successfully.",
+        "view_customers": "Here are your saved customers: {customers_list}",
+        "delete_customer": "The customer {customer_name} has been removed successfully.",
+        "update_customer": "The customer {customer_name} has been updated successfully."
     },
     "system": {
-        "intent_not_clear": "I'm not quite sure what you're asking. Could you please rephrase or provide more details? I can help you with: sending money, buying airtime, paying bills, tracking expenses, managing beneficiaries, or getting financial tips."
+        "intent_not_clear": "I'm not quite sure what you're asking. Could you please rephrase or provide more details? I can help you with: sending money, buying airtime, paying bills, tracking expenses, managing customers, or getting financial tips."
     },
     "user_management": {
         "update_user_details": "Your profile information has been updated successfully.",
@@ -380,7 +379,7 @@ INTENT_CATEGORIES = {
     "financial_tips": ["financial_tips", "budgeting_advice", "savings_tips", "investment_advice", "debt_management"],
     "transactional": ["send_money", "buy_airtime", "pay_bill", "check_balance", "get_loan", "track_expenses", "set_budget"],
     "expense_report": ["expense_report", "generate_expense_report", "monthly_expense_summary",  "annual_expense_report", "daily_expense_report","transaction_info"],
-    "beneficiaries": ["add_beneficiary", "view_beneficiaries", "delete_beneficiary", "update_beneficiary"],
+    "customers": ["add_customer", "view_customers", "delete_customer", "update_customer"],
     "user_management": ["update_user_details", "update_username", "update_phone_number", "view_user_profile"],
     "system": ["intent_not_clear"]
 }

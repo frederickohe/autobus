@@ -52,7 +52,7 @@ class PaymentService:
         # For receiver, we need to detect their network from their phone number
         receiver_network = None
         if payment_dto.receiverPhone:
-            from core.beneficiaries.utility.network_detector import NetworkDetector
+            from core.customers.utility.network_detector import NetworkDetector
             detected_network, _ = NetworkDetector.detect_network_from_phone(payment_dto.receiverPhone)
             # Map the detected network string to Network enum
             if detected_network:
@@ -468,7 +468,7 @@ class PaymentService:
         Detects the correct network based on receiver's phone number.
         """
         from utilities.phone_utils import convert_to_local_ghana_format
-        from core.beneficiaries.utility.network_detector import NetworkDetector
+        from core.customers.utility.network_detector import NetworkDetector
 
         amount = payment.amount_paid if isinstance(payment.amount_paid, Decimal) else Decimal(str(payment.amount_paid))
 
@@ -667,7 +667,7 @@ class PaymentService:
         Detects the correct network based on receiver's phone number.
         """
         from utilities.phone_utils import convert_to_local_ghana_format
-        from core.beneficiaries.utility.network_detector import NetworkDetector
+        from core.customers.utility.network_detector import NetworkDetector
 
         amount = payment.amount_paid if isinstance(payment.amount_paid, Decimal) else Decimal(str(payment.amount_paid))
 
@@ -839,7 +839,7 @@ class PaymentService:
         Detects the correct network based on sender's phone number.
         """
         from utilities.phone_utils import convert_to_local_ghana_format
-        from core.beneficiaries.utility.network_detector import NetworkDetector
+        from core.customers.utility.network_detector import NetworkDetector
 
         amount = payment.amount_paid if isinstance(payment.amount_paid, Decimal) else Decimal(str(payment.amount_paid))
 
@@ -1063,7 +1063,7 @@ class PaymentService:
         # Build base request (all transaction types need these)
         # Ensure amount_paid is a Decimal before formatting
         from utilities.phone_utils import convert_to_local_ghana_format
-        from core.beneficiaries.utility.network_detector import NetworkDetector
+        from core.customers.utility.network_detector import NetworkDetector
 
         # Detect network from sender's phone number
         detected_network, network_message = NetworkDetector.detect_network_from_phone(payment.sender_phone)

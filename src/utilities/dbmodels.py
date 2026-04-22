@@ -11,7 +11,7 @@ from utilities.dbconfig import Base
 # List of model modules to import (module path relative to `src`)
 _model_modules = [
 	"core.user.model.User",
-	"core.beneficiaries.model.beneficiary",
+	"core.customers.model.customer",
 	"core.cloudstorage.model.filemodel",
 	"core.cloudstorage.model.aitrainingfilemodel",
 	"core.subscription.model.user_subscription",

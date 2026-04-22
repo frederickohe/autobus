@@ -44,11 +44,11 @@ class IntentDetector:
         # {self._format_intents_for_prompt()}
         
         # IMPORTANT RULES FOR BENEFICIARY DETECTION:
-        # - For send_money and buy_airtime intents: If the user mentions a NAME (not a phone number), extract it as "beneficiary_name" slot
+        # - For send_money and buy_airtime intents: If the user mentions a NAME (not a phone number), extract it as "customer_name" slot
         # - Examples of names: "Send to John", "Buy airtime for Mom", "Send money to Ama"
         # - If a phone number is provided directly, use it as "recipient" or "phone_number" slot
-        # - Both name and number can be provided; if name is provided, prefer extracting the name as beneficiary_name slot
-        # - The system will look up the saved beneficiary by name and extract the phone number automatically
+        # - Both name and number can be provided; if name is provided, prefer extracting the name as customer_name slot
+        # - The system will look up the saved customer by name and extract the phone number automatically
 
         # IMPORTANT RULE FOR REFERENCE EXTRACTION:
         # - Extract "for [purpose]" phrases as the reference slot, WITHOUT the "for" keyword
@@ -68,9 +68,9 @@ class IntentDetector:
         # SLOTS: [json_object_with_slots]
         # MISSING: [comma_separated_missing_slots]
         
-        # Example with beneficiary name:
+        # Example with customer name:
         # INTENT: send_money
-        # SLOTS: {{"amount": "50", "beneficiary_name": "John", "reference": "food"}}
+        # SLOTS: {{"amount": "50", "customer_name": "John", "reference": "food"}}
         # MISSING: 
         
         # Example with direct phone number:
