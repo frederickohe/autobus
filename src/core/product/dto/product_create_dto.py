@@ -1,38 +1,32 @@
 """Product Create DTO"""
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import Optional
 
 
 class ProductCreateDTO(BaseModel):
     """Request model for creating a new product."""
     
-    # Product Description
+    # Product Details
+    photo: str = Field(..., min_length=1, max_length=2048, description="Product photo URL")
     name: str = Field(..., min_length=1, max_length=255, description="Product name")
     description: Optional[str] = Field(None, description="Product description")
+    price: float = Field(..., ge=0, description="Product price")
     category: Optional[str] = Field(None, max_length=100, description="Product category")
-    brand: Optional[str] = Field(None, max_length=100, description="Brand name")
-    
-    # Optional Identifiers
-    barcode: Optional[str] = Field(None, max_length=100, description="UPC/EAN barcode")
-    
-    # Metadata
-    tags: Optional[List[str]] = Field(None, description="Tags for categorization")
-    attributes: Optional[dict] = Field(None, description="Product-specific attributes (flexible JSON)")
+    condition: str = Field(..., min_length=1, max_length=100, description="Product condition")
+    number_in_stock: Optional[int] = Field(None, ge=0, description="Current number in stock")
+    link: Optional[str] = Field(None, max_length=2048, description="Optional external link")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "name": "Premium Wireless Headphones",
                 "description": "High-quality wireless headphones with noise cancellation",
+                "photo": "https://cdn.example.com/products/wireless-headphones.jpg",
+                "price": 199.99,
                 "category": "Electronics",
-                "brand": "AudioPro",
-                "barcode": "978-0-596-00712-6",
-                "tags": ["audio", "wireless", "premium"],
-                "attributes": {
-                    "color": "Black",
-                    "battery_life": "30 hours",
-                    "weight": "250g"
-                }
+                "condition": "New",
+                "number_in_stock": 10,
+                "link": "https://shop.example.com/products/wireless-headphones"
             }
         }
 
@@ -44,12 +38,18 @@ class ProductCreateDTO(BaseModel):
             raise ValueError('name cannot be empty')
         return v.strip()
 
-    @field_validator('barcode')
+    @field_validator('photo')
     @classmethod
-    def validate_barcode(cls, v):
-        """Validate barcode format."""
-        if v:
-            v = v.strip()
-            if not v:
-                return None
-        return v
+    def validate_photo(cls, v):
+        """Validate photo URL is not blank."""
+        if not v or not v.strip():
+            raise ValueError('photo cannot be empty')
+        return v.strip()
+
+    @field_validator('condition')
+    @classmethod
+    def validate_condition(cls, v):
+        """Validate condition is not blank."""
+        if not v or not v.strip():
+            raise ValueError('condition cannot be empty')
+        return v.strip()

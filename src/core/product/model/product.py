@@ -3,8 +3,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Column, DateTime, String, ARRAY, JSON, ForeignKey,
-    Text
+    DateTime, String, ForeignKey, Text, Numeric, Integer
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -15,7 +14,7 @@ from utilities.dbconfig import Base
 class Product(Base):
     """
     Product model for managing product catalog.
-    Stores product metadata, inventory ID, barcode, tags, and attributes.
+    Stores storefront details and optional stock/link metadata.
     """
     __tablename__ = "products"
 
@@ -27,17 +26,16 @@ class Product(Base):
         index=True
     )
     inventory_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
-    barcode: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True)
 
-    # Product Description
+    # Product Details
+    photo: Mapped[str] = mapped_column(String(2048), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    price: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
     category: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    brand: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
-    # Metadata
-    tags: Mapped[Optional[list]] = mapped_column(ARRAY(String), nullable=True)
-    attributes: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    condition: Mapped[str] = mapped_column(String(100), nullable=False)
+    number_in_stock: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    link: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
 
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)

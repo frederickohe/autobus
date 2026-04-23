@@ -3,7 +3,7 @@ from email.message import EmailMessage
 port = 587
 smtp_server = "smtp.zeptomail.com"
 username="emailapikey"
-password = "wSsVR61/+hWlC/8ulTaqL+humghWA17zFBh7ilShuCf1GKrB8cdvk0XMUVL2G/VNEzJuHTMRo7t6mEoDgDcMiIgomwoJWyiF9mqRe1U4J3x17qnvhDzDW2VbkBSAKIoOzg9tk2lmE8gr+g=="
+password = "wSsVR61y8xL5W64rnTD7dLw9n1hUUg/zHB4ujFOm7iP6Fv2UoMdol03KUQCnGPAfQm9rF2ZEoO5/mhxUhzRdjNkpw1tSXCiF9mqRe1U4J3x17qnvhDzIWW5bmxKLLY4Nxw5unWhmEsAq+g=="
 message = "Test email sent successfully."
 msg = EmailMessage()
 msg['Subject'] = "Test Email"

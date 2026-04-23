@@ -1,8 +1,15 @@
 # core/nlu/service/intent_processor.py
 import json
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Any, Optional
 from core.customers.service.customer_service import CustomerService
+from core.product.service.product_service import ProductService
+from core.product.dto.product_create_dto import ProductCreateDTO
+from core.product.dto.product_update_dto import ProductUpdateDTO
+from core.orders.service.order_service import OrderService
+from core.orders.dto.order_create_dto import OrderCreateDTO
+from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.nlu.service.llmclient import LLMClient
 from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
@@ -615,55 +622,155 @@ class IntentProcessor:
             if not quantity:
                 missing.append("quantity")
             return f"❌ Missing required fields: {', '.join(missing)}"
-        
-        # TODO: Implement product creation using product tools
-        return f"✅ Product '{product_name}' added successfully (${price}, Qty: {quantity})"
+
+        db = next(get_db())
+        product_service = ProductService(db)
+
+        try:
+            product_data = ProductCreateDTO(
+                photo=slots.get("photo") or "https://placeholder.local/product.png",
+                name=product_name,
+                description=slots.get("description"),
+                price=self._to_float(price, default=0.0),
+                category=slots.get("category"),
+                condition=slots.get("condition") or "New",
+                number_in_stock=self._to_int(quantity, default=0),
+                link=slots.get("link")
+            )
+        except Exception as e:
+            return f"❌ Invalid product details: {str(e)}"
+
+        success, product, message = product_service.create_product(product_data)
+        if not success:
+            return f"❌ {message}"
+        if not product:
+            return "❌ Product was created but could not be retrieved."
+
+        return (
+            f"✅ {message}\n"
+            f"Product: {product.name}\n"
+            f"Inventory ID: {product.inventory_id}\n"
+            f"Price: {product.price}\n"
+            f"Stock: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}"
+        )
 
     def _handle_update_product(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle update_product intent"""
         product_id = slots.get("product_id")
-        
-        if not product_id:
-            return "❌ Product ID is required for updating"
-        
-        # TODO: Implement product update using product tools
-        updates = []
-        if slots.get("product_name"):
-            updates.append(f"name to '{slots['product_name']}'")
-        if slots.get("price"):
-            updates.append(f"price to ${slots['price']}")
-        if slots.get("quantity"):
-            updates.append(f"quantity to {slots['quantity']}")
-        
-        if not updates:
+
+        db = next(get_db())
+        product_service = ProductService(db)
+
+        product = self._find_product(product_service, slots)
+        if not product:
+            if product_id:
+                return f"❌ Product '{product_id}' not found"
+            return "❌ Product ID, inventory ID, or product name is required for updating"
+
+        update_payload = {}
+        if slots.get("product_name") is not None:
+            update_payload["name"] = slots.get("product_name")
+        if slots.get("price") is not None:
+            update_payload["price"] = self._to_float(slots.get("price"))
+        if slots.get("quantity") is not None:
+            update_payload["number_in_stock"] = self._to_int(slots.get("quantity"))
+        if slots.get("condition") is not None:
+            update_payload["condition"] = slots.get("condition")
+        if slots.get("category") is not None:
+            update_payload["category"] = slots.get("category")
+        if slots.get("description") is not None:
+            update_payload["description"] = slots.get("description")
+        if slots.get("photo") is not None:
+            update_payload["photo"] = slots.get("photo")
+        if slots.get("link") is not None:
+            update_payload["link"] = slots.get("link")
+
+        if not update_payload:
             return "❌ No updates specified"
-        
-        return f"✅ Product #{product_id} updated: {', '.join(updates)}"
+
+        try:
+            update_data = ProductUpdateDTO(**update_payload)
+        except Exception as e:
+            return f"❌ Invalid update fields: {str(e)}"
+
+        success, updated_product, message = product_service.update_product(str(product.product_id), update_data)
+        if not success:
+            return f"❌ {message}"
+        if not updated_product:
+            return "❌ Product was updated but could not be retrieved."
+
+        return (
+            f"✅ {message}\n"
+            f"Product: {updated_product.name}\n"
+            f"Inventory ID: {updated_product.inventory_id}"
+        )
 
     def _handle_delete_product(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle delete_product intent"""
         product_id = slots.get("product_id")
-        
-        if not product_id:
-            return "❌ Product ID is required for deletion"
-        
-        # TODO: Implement product deletion using product tools
-        return f"✅ Product #{product_id} deleted successfully"
+
+        db = next(get_db())
+        product_service = ProductService(db)
+
+        product = self._find_product(product_service, slots)
+        if not product:
+            if product_id:
+                return f"❌ Product '{product_id}' not found"
+            return "❌ Product ID, inventory ID, or product name is required for deletion"
+
+        success, message = product_service.delete_product(str(product.product_id))
+        if not success:
+            return f"❌ {message}"
+
+        return f"✅ {message} (Removed: {product.name} - {product.inventory_id})"
 
     def _handle_view_products(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle view_products intent"""
-        # TODO: Implement product listing using product tools
-        return "📦 Your Products:\n1. Sample Product - $10.00 (Qty: 5)\n2. Another Product - $20.00 (Qty: 3)"
+        db = next(get_db())
+        product_service = ProductService(db)
+
+        category = slots.get("category")
+        products = product_service.get_all_products(category=category)
+        if not products:
+            return "📦 No products found in your inventory yet."
+
+        lines = ["📦 Your Products:"]
+        for index, product in enumerate(products[:20], 1):
+            lines.append(
+                f"{index}. {product.name} | ID: {product.product_id} | "
+                f"Inventory: {product.inventory_id} | Price: {product.price} | "
+                f"Stock: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}"
+            )
+
+        if len(products) > 20:
+            lines.append(f"...and {len(products) - 20} more products.")
+        return "\n".join(lines)
 
     def _handle_view_product(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle view_product intent"""
         product_id = slots.get("product_id")
-        
-        if not product_id:
-            return "❌ Product ID is required"
-        
-        # TODO: Implement single product view using product tools
-        return f"📦 Product Details for #{product_id}:\nName: Sample Product\nPrice: $10.00\nQuantity: 5"
+
+        db = next(get_db())
+        product_service = ProductService(db)
+
+        product = self._find_product(product_service, slots)
+        if not product:
+            if product_id:
+                return f"❌ Product '{product_id}' not found"
+            return "❌ Product ID, inventory ID, or product name is required"
+
+        return (
+            "📦 Product Details:\n"
+            f"ID: {product.product_id}\n"
+            f"Inventory ID: {product.inventory_id}\n"
+            f"Name: {product.name}\n"
+            f"Price: {product.price}\n"
+            f"Quantity: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}\n"
+            f"Category: {product.category or 'N/A'}\n"
+            f"Condition: {product.condition}\n"
+            f"Description: {product.description or 'N/A'}\n"
+            f"Link: {product.link or 'N/A'}"
+        )
 
     # ===== ORDER MANAGEMENT INTENT HANDLER =====
     def process_order_management_intent(
@@ -696,42 +803,168 @@ class IntentProcessor:
     def _handle_create_order(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle create_order intent"""
         customer_name = slots.get("customer_name")
-        product_id = slots.get("product_id")
+        item_name = slots.get("item_name")
         quantity = slots.get("quantity")
         
-        if not customer_name or not product_id or not quantity:
+        if not customer_name or not item_name or not quantity:
             missing = []
             if not customer_name:
                 missing.append("customer name")
-            if not product_id:
-                missing.append("product ID")
+            if not item_name:
+                missing.append("item name")
             if not quantity:
                 missing.append("quantity")
             return f"❌ Missing required fields: {', '.join(missing)}"
-        
-        # TODO: Implement order creation using order tools
-        return f"✅ Order created for {customer_name}: Product #{product_id}, Qty: {quantity}"
+
+        db = next(get_db())
+        order_service = OrderService(db)
+
+        line_quantity = self._to_int(quantity, default=0)
+        if line_quantity <= 0:
+            return "❌ Quantity must be greater than 0."
+
+        unit_price = self._to_decimal(slots.get("unit_price"), default=Decimal("0"))
+        subtotal = self._to_decimal(slots.get("subtotal_amount"), default=(unit_price * line_quantity))
+
+        try:
+            order_data = OrderCreateDTO(
+                customer_name=customer_name,
+                customer_phone=slots.get("customer_phone") or "N/A",
+                customer_email=slots.get("customer_email"),
+                customer_location=slots.get("customer_location"),
+                order_type=(slots.get("order_type") or "sale").lower(),
+                item_name=item_name,
+                quantity=line_quantity,
+                order_source=slots.get("order_source") or "chat",
+                subtotal_amount=subtotal,
+                discount_amount=self._to_decimal(slots.get("discount_amount"), default=Decimal("0")),
+                tax_amount=self._to_decimal(slots.get("tax_amount"), default=Decimal("0")),
+                shipping_amount=self._to_decimal(slots.get("shipping_amount"), default=Decimal("0")),
+                currency_code=(slots.get("currency_code") or "GHS").upper(),
+                payment_method=slots.get("payment_method"),
+                payment_reference=slots.get("payment_reference"),
+                payment_details=slots.get("payment_details"),
+                notes=slots.get("notes"),
+                tags=slots.get("tags"),
+                custom_metadata=slots.get("custom_metadata")
+            )
+        except Exception as e:
+            return f"❌ Invalid order details: {str(e)}"
+
+        success, order, message = order_service.create_order(order_data)
+        if not success:
+            return f"❌ {message}"
+        if not order:
+            return "❌ Order was created but could not be retrieved."
+
+        return (
+            f"✅ {message}\n"
+            f"Order Number: {order.order_number}\n"
+            f"Customer: {order.customer_name}\n"
+            f"Total Amount: {order.total_amount} {order.currency_code}"
+        )
 
     def _handle_update_order(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle update_order intent"""
         order_id = slots.get("order_id")
-        
+
         if not order_id:
             return "❌ Order ID is required for updating"
-        
-        # TODO: Implement order update using order tools
-        updates = []
-        if slots.get("customer_name"):
-            updates.append(f"customer to {slots['customer_name']}")
-        if slots.get("product_id"):
-            updates.append(f"product to #{slots['product_id']}")
-        if slots.get("quantity"):
-            updates.append(f"quantity to {slots['quantity']}")
-        
-        if not updates:
+
+        db = next(get_db())
+        order_service = OrderService(db)
+
+        update_payload = {}
+        for field in [
+            "order_status", "payment_status", "fulfillment_status", "payment_method",
+            "payment_reference", "payment_details", "customer_name", "customer_phone",
+            "customer_email", "customer_location", "notes", "tags", "custom_metadata"
+        ]:
+            if slots.get(field) is not None:
+                update_payload[field] = slots.get(field)
+
+        if slots.get("subtotal_amount") is not None:
+            update_payload["subtotal_amount"] = self._to_decimal(slots.get("subtotal_amount"))
+        if slots.get("discount_amount") is not None:
+            update_payload["discount_amount"] = self._to_decimal(slots.get("discount_amount"))
+        if slots.get("tax_amount") is not None:
+            update_payload["tax_amount"] = self._to_decimal(slots.get("tax_amount"))
+        if slots.get("shipping_amount") is not None:
+            update_payload["shipping_amount"] = self._to_decimal(slots.get("shipping_amount"))
+
+        if slots.get("quantity") is not None or slots.get("item_name") is not None:
+            item_qty = self._to_int(slots.get("quantity"), default=None)
+            if item_qty is not None and item_qty <= 0:
+                return "❌ Quantity must be greater than 0."
+
+            if slots.get("item_name") is not None:
+                update_payload["item_name"] = slots.get("item_name")
+
+            if item_qty is not None:
+                update_payload["quantity"] = item_qty
+
+        if not update_payload:
             return "❌ No updates specified"
-        
-        return f"✅ Order #{order_id} updated: {', '.join(updates)}"
+
+        try:
+            update_data = OrderUpdateDTO(**update_payload)
+        except Exception as e:
+            return f"❌ Invalid order update details: {str(e)}"
+
+        success, order, message = order_service.update_order(order_id, update_data)
+        if not success:
+            return f"❌ {message}"
+        if not order:
+            return "❌ Order was updated but could not be retrieved."
+
+        return (
+            f"✅ {message}\n"
+            f"Order Number: {order.order_number}\n"
+            f"Status: {order.order_status} | Payment: {order.payment_status} | Fulfillment: {order.fulfillment_status}"
+        )
+
+    def _find_product(self, product_service: ProductService, slots: Dict[str, Any]):
+        """Resolve a product from supported slot keys."""
+        product_id = slots.get("product_id")
+        if product_id:
+            product = product_service.get_product_by_id(str(product_id))
+            if product:
+                return product
+            return product_service.get_product_by_inventory_id(str(product_id))
+
+        inventory_id = slots.get("inventory_id")
+        if inventory_id:
+            return product_service.get_product_by_inventory_id(str(inventory_id))
+
+        product_name = slots.get("product_name")
+        if product_name:
+            products = product_service.get_product_by_name(str(product_name), limit=1)
+            return products[0] if products else None
+        return None
+
+    def _to_int(self, value: Any, default: Optional[int] = None) -> Optional[int]:
+        if value is None:
+            return default
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _to_float(self, value: Any, default: Optional[float] = None) -> Optional[float]:
+        if value is None:
+            return default
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _to_decimal(self, value: Any, default: Optional[Decimal] = None) -> Optional[Decimal]:
+        if value is None:
+            return default
+        try:
+            return Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return default
 
 
 

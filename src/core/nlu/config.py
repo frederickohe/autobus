@@ -81,14 +81,14 @@ INTENTS = {
     #==== PRODUCT MANAGEMENT AGENT INTENTS =====
     "add_product": {
         "description": "Add a new product to the inventory",
-        "slots": ["product_name", "price", "quantity"],
-        "required_slots": ["product_name", "price", "quantity"],
+        "slots": ["product_name", "price", "quantity","condition","category","description","photo","link"],
+        "required_slots": ["product_name", "price", "quantity","condition","category","description"],
         "category": "product_management"
     },
     "update_product": {
         "description": "Update details of an existing product",
-        "slots": ["product_id", "product_name", "price", "quantity"],
-        "required_slots": ["product_id"],
+        "slots": ["product_id", "product_name", "price", "quantity","condition","category","description","photo","link"],
+        "required_slots": ["product_id", "product_name", "price", "quantity","condition","category","description"],
         "category": "product_management"
     },
     "delete_product": {
@@ -112,13 +112,13 @@ INTENTS = {
     #==== ORDER MANAGEMENT AGENT INTENTS =====
     "create_order": {
         "description": "Create a new order",
-        "slots": ["customer_name", "product_id", "quantity"],
-        "required_slots": ["customer_name", "product_id", "quantity"],
+        "slots": ["customer_name", "item_name", "quantity"],
+        "required_slots": ["customer_name", "item_name", "quantity"],
         "category": "order_management"
     },
     "update_order": {
         "description": "Update details of an existing order",
-        "slots": ["order_id", "customer_name", "product_id", "quantity"],
+        "slots": ["order_id", "customer_name", "item_name", "quantity"],
         "required_slots": ["order_id"],
         "category": "order_management"
     },
@@ -323,7 +323,7 @@ RESPONSE_TEMPLATES = {
     },
     
     "order_management": {
-        "create_order": "✅ Order created successfully!\nCustomer: {customer_name}\nProduct ID: {product_id}\nQuantity: {quantity}\nOrder ID: {order_id}",
+        "create_order": "✅ Order created successfully!\nCustomer: {customer_name}\nItem: {item_name}\nQuantity: {quantity}\nOrder ID: {order_id}",
         "update_order": "✅ Order (ID: {order_id}) has been updated successfully.",
         "missing_slots": "I'd be happy to help with order management. Please provide: {missing_slots}",
         "error": "I apologize, but I encountered an error processing your order. Please try again."

@@ -46,7 +46,7 @@ class OrderService:
             Tuple of (success, order_object, message)
         """
         try:
-            logger.info(f"[ORDER_SERVICE] Creating order for customer: {order_data.customer_id}")
+            logger.info(f"[ORDER_SERVICE] Creating order for customer phone: {order_data.customer_phone}")
 
             # Validate order type
             try:
@@ -74,6 +74,7 @@ class OrderService:
                 order_data.shipping_amount -
                 order_data.discount_amount
             )
+            total_quantity = int(order_data.quantity)
 
             if total_amount < 0:
                 return False, None, "Total amount cannot be negative"
@@ -84,13 +85,19 @@ class OrderService:
             # Create order
             order = Order(
                 order_number=order_number,
-                customer_id=uuid.UUID(order_data.customer_id),
+                customer_id=None,
+                customer_name=order_data.customer_name,
+                customer_phone=order_data.customer_phone,
                 customer_email=order_data.customer_email,
+                customer_location=order_data.customer_location,
                 order_type=order_data.order_type,
+                # Persist as structured JSON internally while exposing simplified DTO fields.
+                order_items=[{"name": order_data.item_name, "quantity": int(order_data.quantity)}],
                 order_status=OrderStatus.PENDING.value,
                 payment_status=OrderPaymentStatus.PENDING.value,
                 fulfillment_status=FulfillmentStatus.UNFULFILLED.value,
                 subtotal_amount=order_data.subtotal_amount,
+                total_quantity=total_quantity,
                 discount_amount=order_data.discount_amount,
                 tax_amount=order_data.tax_amount,
                 shipping_amount=order_data.shipping_amount,
@@ -142,7 +149,7 @@ class OrderService:
         try:
             logger.info(f"[ORDER_SERVICE] Fetching orders for customer: {customer_id}")
             orders = self.db.query(Order).filter(
-                Order.customer_id == uuid.UUID(customer_id)
+                Order.customer_id == customer_id
             ).order_by(desc(Order.order_date)).offset(skip).limit(limit).all()
             logger.info(f"[ORDER_SERVICE] Found {len(orders)} orders for customer")
             return orders
@@ -237,6 +244,8 @@ class OrderService:
 
             if update_data.subtotal_amount:
                 order.subtotal_amount = update_data.subtotal_amount
+            if update_data.quantity is not None:
+                order.total_quantity = update_data.quantity
 
             if update_data.discount_amount is not None:
                 order.discount_amount = update_data.discount_amount
@@ -255,9 +264,29 @@ class OrderService:
 
             if update_data.payment_details:
                 order.payment_details = update_data.payment_details
+            if update_data.item_name is not None or update_data.quantity is not None:
+                current_item = {}
+                if isinstance(order.order_items, list) and order.order_items and isinstance(order.order_items[0], dict):
+                    current_item = order.order_items[0].copy()
+                elif isinstance(order.order_items, dict):
+                    current_item = order.order_items.copy()
+
+                if update_data.item_name is not None:
+                    current_item["name"] = update_data.item_name
+                if update_data.quantity is not None:
+                    current_item["quantity"] = int(update_data.quantity)
+                    order.total_quantity = int(update_data.quantity)
+
+                order.order_items = [current_item]
 
             if update_data.customer_email:
                 order.customer_email = update_data.customer_email
+            if update_data.customer_name:
+                order.customer_name = update_data.customer_name
+            if update_data.customer_phone:
+                order.customer_phone = update_data.customer_phone
+            if update_data.customer_location is not None:
+                order.customer_location = update_data.customer_location
 
             if update_data.notes is not None:
                 order.notes = update_data.notes

@@ -13,11 +13,16 @@ class OrderResponseDTO(BaseModel):
     order_number: str
     
     # Customer Relationship
-    customer_id: str
+    customer_id: Optional[str] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
     customer_email: Optional[str] = None
+    customer_location: Optional[str] = None
     
     # Order Details
     order_type: str
+    item_name: Optional[str] = None
+    quantity: Optional[int] = None
     order_status: str
     payment_status: str
     fulfillment_status: str
@@ -55,9 +60,14 @@ class OrderResponseDTO(BaseModel):
             "example": {
                 "order_id": "550e8400-e29b-41d4-a716-446655440000",
                 "order_number": "ORD-2026-00001",
-                "customer_id": "550e8400-e29b-41d4-a716-446655440001",
+                "customer_id": None,
+                "customer_name": "Jane Doe",
+                "customer_phone": "+233201234567",
                 "customer_email": "customer@example.com",
+                "customer_location": "Accra, Ghana",
                 "order_type": "sale",
+                "item_name": "Rice Bag 5kg",
+                "quantity": 2,
                 "order_status": "confirmed",
                 "payment_status": "paid",
                 "fulfillment_status": "shipped",
@@ -86,12 +96,28 @@ class OrderResponseDTO(BaseModel):
     @classmethod
     def from_order(cls, order):
         """Convert Order model to response DTO."""
+        item_name = None
+        quantity = None
+        if isinstance(order.order_items, list) and order.order_items:
+            first_item = order.order_items[0]
+            if isinstance(first_item, dict):
+                item_name = first_item.get("name")
+                quantity = first_item.get("quantity")
+        elif isinstance(order.order_items, dict):
+            item_name = order.order_items.get("name")
+            quantity = order.order_items.get("quantity")
+
         return cls(
             order_id=str(order.order_id),
             order_number=order.order_number,
-            customer_id=str(order.customer_id),
+            customer_id=order.customer_id,
+            customer_name=order.customer_name,
+            customer_phone=order.customer_phone,
             customer_email=order.customer_email,
+            customer_location=order.customer_location,
             order_type=order.order_type.value if hasattr(order.order_type, 'value') else order.order_type,
+            item_name=item_name,
+            quantity=quantity if quantity is not None else order.total_quantity,
             order_status=order.order_status.value if hasattr(order.order_status, 'value') else order.order_status,
             payment_status=order.payment_status.value if hasattr(order.payment_status, 'value') else order.payment_status,
             fulfillment_status=order.fulfillment_status.value if hasattr(order.fulfillment_status, 'value') else order.fulfillment_status,

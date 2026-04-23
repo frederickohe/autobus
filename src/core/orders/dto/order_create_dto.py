@@ -1,22 +1,42 @@
 """Order Create DTO"""
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 
 class OrderCreateDTO(BaseModel):
     """Request model for creating a new order."""
-    
+
+    @staticmethod
+    def _to_decimal(v, field_name: str) -> Decimal:
+        """Convert supported numeric inputs into Decimal."""
+        if isinstance(v, Decimal):
+            return v
+        if isinstance(v, (int, float, str)):
+            try:
+                return Decimal(str(v))
+            except (InvalidOperation, ValueError):
+                raise ValueError(f'{field_name} must be a valid number')
+        raise ValueError(f'{field_name} must be a valid number')
+
     # Customer Relationship
-    customer_id: str = Field(..., description="UUID of the customer")
+    customer_name: str = Field(..., min_length=1, max_length=150, description="Customer full name")
+    customer_phone: str = Field(..., min_length=1, max_length=30, description="Customer phone number")
     customer_email: Optional[str] = Field(None, description="Customer email address")
+    customer_location: Optional[str] = Field(None, max_length=255, description="Customer location or address")
     
     # Order Details
     order_type: str = Field(..., description="Order type: sale, refund, exchange, wholesale, dropship")
+    item_name: str = Field(..., min_length=1, max_length=255, description="Name of item ordered")
+    quantity: int = Field(..., gt=0, description="Quantity ordered")
     order_source: Optional[str] = Field(None, description="Order source: chat, web, phone, in-person")
     
     # Financials
-    subtotal_amount: Decimal = Field(..., gt=0, description="Subtotal amount before discounts and taxes")
+    subtotal_amount: Optional[Decimal] = Field(
+        default=Decimal("0"),
+        ge=0,
+        description="Subtotal amount before discounts and taxes"
+    )
     discount_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Discount amount")
     tax_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Tax amount")
     shipping_amount: Decimal = Field(default=Decimal("0"), ge=0, description="Shipping amount")
@@ -35,9 +55,13 @@ class OrderCreateDTO(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "customer_id": "550e8400-e29b-41d4-a716-446655440001",
+                "customer_name": "Jane Doe",
+                "customer_phone": "+233201234567",
                 "customer_email": "customer@example.com",
+                "customer_location": "Accra, Ghana",
                 "order_type": "sale",
+                "item_name": "Rice Bag 5kg",
+                "quantity": 2,
                 "order_source": "web",
                 "subtotal_amount": "150.00",
                 "discount_amount": "10.00",
@@ -56,11 +80,12 @@ class OrderCreateDTO(BaseModel):
     @field_validator('subtotal_amount', mode='before')
     @classmethod
     def validate_subtotal(cls, v):
-        """Ensure subtotal is positive."""
-        if isinstance(v, (int, float)):
-            v = Decimal(str(v))
-        if v <= 0:
-            raise ValueError('subtotal_amount must be greater than 0')
+        """Ensure subtotal is non-negative."""
+        if v is None:
+            return Decimal("0")
+        v = cls._to_decimal(v, 'subtotal_amount')
+        if v < 0:
+            raise ValueError('subtotal_amount must be non-negative')
         return v
 
     @field_validator('discount_amount', 'tax_amount', 'shipping_amount', mode='before')
@@ -69,8 +94,7 @@ class OrderCreateDTO(BaseModel):
         """Ensure amounts are non-negative."""
         if v is None:
             return Decimal("0")
-        if isinstance(v, (int, float)):
-            v = Decimal(str(v))
+        v = cls._to_decimal(v, 'Amount')
         if v < 0:
             raise ValueError('Amount must be non-negative')
         return v

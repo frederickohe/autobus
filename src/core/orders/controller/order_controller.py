@@ -25,7 +25,7 @@ def create_order(
 ):
     """Create a new order."""
     try:
-        logger.info(f"[ORDER_CONTROLLER] Creating order for customer: {request.customer_id}")
+        logger.info(f"[ORDER_CONTROLLER] Creating order for customer phone: {request.customer_phone}")
 
         order_service = OrderService(db)
         success, order, message = order_service.create_order(request)

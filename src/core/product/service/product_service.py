@@ -62,7 +62,7 @@ class ProductService:
             logger.info(f"[PRODUCT_SERVICE] Creating product: {product_data.name}")
 
             # Check if product with exact name already exists
-            existing_by_name = self.get_product_by_name(product_data.name)
+            existing_by_name = self.db.query(Product).filter(Product.name == product_data.name).first()
             if existing_by_name:
                 logger.info(f"[PRODUCT_SERVICE] Product with name '{product_data.name}' already exists, returning existing product")
                 return True, existing_by_name, f"Product '{product_data.name}' already exists. Returning existing product."
@@ -75,22 +75,17 @@ class ProductService:
             if existing:
                 return False, None, f"Product with inventory_id {inventory_id} already exists. Try a different product name."
 
-            # Check if barcode already exists (if provided)
-            if product_data.barcode:
-                existing = self.db.query(Product).filter(Product.barcode == product_data.barcode).first()
-                if existing:
-                    return False, None, f"Product with barcode {product_data.barcode} already exists"
-
             # Create product
             product = Product(
                 inventory_id=inventory_id,
-                barcode=product_data.barcode,
+                photo=product_data.photo,
                 name=product_data.name,
                 description=product_data.description,
+                price=product_data.price,
                 category=product_data.category,
-                brand=product_data.brand,
-                tags=product_data.tags,
-                attributes=product_data.attributes
+                condition=product_data.condition,
+                number_in_stock=product_data.number_in_stock,
+                link=product_data.link
             )
 
             self.db.add(product)
@@ -161,16 +156,6 @@ class ProductService:
             logger.error(f"[PRODUCT_SERVICE] Error fetching products by name: {str(e)}", exc_info=True)
             return []
 
-    def get_product_by_barcode(self, barcode: str) -> Optional[Product]:
-        """Get a product by its barcode."""
-        try:
-            logger.info(f"[PRODUCT_SERVICE] Fetching product by barcode: {barcode}")
-            product = self.db.query(Product).filter(Product.barcode == barcode).first()
-            return product
-        except Exception as e:
-            logger.error(f"[PRODUCT_SERVICE] Error fetching product: {str(e)}", exc_info=True)
-            return None
-
     def get_all_products(self, skip: int = 0, limit: int = 100, category: Optional[str] = None) -> List[Product]:
         """Get all products with optional filtering."""
         try:
@@ -204,36 +189,30 @@ class ProductService:
             if not product:
                 return False, None, "Product not found"
 
-            # Check barcode uniqueness if being updated
-            if update_data.barcode and update_data.barcode != product.barcode:
-                existing = self.db.query(Product).filter(
-                    Product.barcode == update_data.barcode,
-                    Product.product_id != uuid.UUID(product_id)
-                ).first()
-                if existing:
-                    return False, None, f"Product with barcode {update_data.barcode} already exists"
-
             # Update fields
+            if update_data.photo is not None:
+                product.photo = update_data.photo
+
             if update_data.name:
                 product.name = update_data.name
 
             if update_data.description is not None:
                 product.description = update_data.description
 
+            if update_data.price is not None:
+                product.price = update_data.price
+
             if update_data.category:
                 product.category = update_data.category
 
-            if update_data.brand:
-                product.brand = update_data.brand
+            if update_data.condition is not None:
+                product.condition = update_data.condition
 
-            if update_data.barcode is not None:
-                product.barcode = update_data.barcode
+            if update_data.number_in_stock is not None:
+                product.number_in_stock = update_data.number_in_stock
 
-            if update_data.tags is not None:
-                product.tags = update_data.tags
-
-            if update_data.attributes is not None:
-                product.attributes = update_data.attributes
+            if update_data.link is not None:
+                product.link = update_data.link
 
             product.updated_at = datetime.utcnow()
 
