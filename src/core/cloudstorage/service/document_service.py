@@ -11,6 +11,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from core.cloudstorage.model.aitrainingfilemodel import AITrainingFileModel
 from core.cloudstorage.service.storageservice import StorageService
 from core.cloudstorage.service.file_content_extractor import FileContentExtractor
+from core.rag.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,19 @@ class DocumentService:
             file_size = len(file_content)
             file_type = file.content_type or "application/octet-stream"
             
+            logger.info(
+                f"[DOC UPLOAD] Starting upload - user_id={user_id}, "
+                f"file_name={file_name}, size={file_size}, type={file_type}"
+            )
+            
             # Extract text content from the file
             extracted_content = FileContentExtractor.extract_content(file, file_content)
+            
+            logger.debug(
+                f"[DOC UPLOAD] Content extraction - "
+                f"success={extracted_content is not None}, "
+                f"content_length={len(extracted_content) if extracted_content else 0}"
+            )
             
             # Upload to cloud storage
             file_url = self.storage_service.upload_file(
@@ -78,6 +90,8 @@ class DocumentService:
                 content_type=file_type,
                 subfolder="ai-training-files/"
             )
+            
+            logger.info(f"[DOC UPLOAD] File uploaded to S3 - url={file_url}")
             
             # Create document record in database with extracted content
             doc_record = AITrainingFileModel(
@@ -93,14 +107,51 @@ class DocumentService:
             self.db_session.add(doc_record)
             self.db_session.commit()
             
-            logger.info(f"Successfully uploaded document {file_name} for user {user_id}")
+            doc_id = doc_record.id
+            logger.info(
+                f"[DOC UPLOAD] Document record created - id={doc_id}, user_id={user_id}"
+            )
+            
             if extracted_content:
-                logger.info(f"Extracted {len(extracted_content)} characters from {file_name}")
+                logger.info(
+                    f"[DOC UPLOAD] Extracted {len(extracted_content)} characters from {file_name}"
+                )
             else:
-                logger.warning(f"Could not extract content from {file_name}")
+                logger.warning(f"[DOC UPLOAD] Could not extract content from {file_name}")
+            
+            # Generate embedding for RAG
+            try:
+                logger.info(f"[DOC UPLOAD] Generating embedding for doc_id={doc_id}")
+                
+                embedding_service = EmbeddingService()
+                
+                # Generate embedding from extracted content (or file_name if no content)
+                content_to_embed = extracted_content if extracted_content else file_name
+                embedding = embedding_service.generate_embedding(content_to_embed)
+                
+                # Store embedding in database
+                doc_record.embedding = embedding
+                self.db_session.commit()
+                
+                logger.info(
+                    f"[DOC UPLOAD] Embedding generated and stored successfully - "
+                    f"doc_id={doc_id}, dimensions={len(embedding)}"
+                )
+                
+            except Exception as e:
+                logger.error(
+                    f"[DOC UPLOAD] Failed to generate embedding for doc_id={doc_id}: {str(e)}", 
+                    exc_info=True
+                )
+                logger.info(
+                    f"[DOC UPLOAD] Document stored without embedding. "
+                    f"It will not be searchable via RAG until embedding is generated."
+                )
             
             # Re-process user's documents for retriever
             self._reprocess_user_documents(user_id)
+            
+            logger.info(f"[DOC UPLOAD] Upload complete - doc_id={doc_id}, user_id={user_id}")
             
             return {
                 "file_name": file_name,
@@ -111,7 +162,10 @@ class DocumentService:
             }
             
         except Exception as e:
-            logger.error(f"Error uploading document for user {user_id}: {str(e)}", exc_info=True)
+            logger.error(
+                f"[DOC UPLOAD] Error uploading document for user {user_id}: {str(e)}", 
+                exc_info=True
+            )
             self.db_session.rollback()
             raise
     
@@ -129,19 +183,35 @@ class DocumentService:
                 AITrainingFileModel.user_id == user_id
             ).order_by(AITrainingFileModel.upload_timestamp.desc()).all()
             
-            return [
-                {
+            logger.info(
+                f"[DOC UPLOAD] Retrieved {len(documents)} documents for user {user_id}"
+            )
+            
+            result = []
+            for doc in documents:
+                has_embedding = doc.embedding is not None
+                doc_info = {
                     "id": doc.id,
                     "file_name": doc.file_name,
                     "file_url": doc.file_url,
                     "file_size": doc.file_size,
                     "file_type": doc.file_type,
-                    "uploaded_at": doc.upload_timestamp.isoformat()
+                    "uploaded_at": doc.upload_timestamp.isoformat(),
+                    "has_embedding": has_embedding
                 }
-                for doc in documents
-            ]
+                result.append(doc_info)
+                
+                logger.debug(
+                    f"[DOC UPLOAD] Document - id={doc.id}, name={doc.file_name}, "
+                    f"has_embedding={has_embedding}"
+                )
+            
+            return result
         except Exception as e:
-            logger.error(f"Error retrieving documents for user {user_id}: {str(e)}")
+            logger.error(
+                f"[DOC UPLOAD] Error retrieving documents for user {user_id}: {str(e)}", 
+                exc_info=True
+            )
             return []
     
     def delete_document(self, user_id: str, doc_id: int) -> bool:
@@ -161,8 +231,15 @@ class DocumentService:
             ).first()
             
             if not doc:
-                logger.warning(f"Document {doc_id} not found for user {user_id}")
+                logger.warning(
+                    f"[DOC UPLOAD] Document not found - id={doc_id}, user_id={user_id}"
+                )
                 return False
+            
+            logger.info(
+                f"[DOC UPLOAD] Deleting document - id={doc_id}, user_id={user_id}, "
+                f"file_name={doc.file_name}"
+            )
             
             self.db_session.delete(doc)
             self.db_session.commit()
@@ -170,11 +247,16 @@ class DocumentService:
             # Re-process user's documents
             self._reprocess_user_documents(user_id)
             
-            logger.info(f"Deleted document {doc_id} for user {user_id}")
+            logger.info(
+                f"[DOC UPLOAD] Document deleted successfully - id={doc_id}, user_id={user_id}"
+            )
             return True
             
         except Exception as e:
-            logger.error(f"Error deleting document {doc_id} for user {user_id}: {str(e)}")
+            logger.error(
+                f"[DOC UPLOAD] Error deleting document - id={doc_id}, user_id={user_id}: {str(e)}", 
+                exc_info=True
+            )
             self.db_session.rollback()
             return False
     

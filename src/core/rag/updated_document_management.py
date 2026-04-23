@@ -105,10 +105,14 @@ class UpdatedUploadDocumentTool(BaseTool):
             if not file_name:
                 return "Error: file_name is required"
             
-            logger.info(f"Uploading document for user {user_id}: {file_name}")
+            logger.info(
+                f"[RAG DEBUG] Upload started - user_id={user_id}, "
+                f"file_name={file_name}, content_length={len(file_content)}, type={file_type}"
+            )
             
             # Store document metadata in database
             try:
+                logger.debug(f"[RAG DEBUG] Creating file record in database")
                 file_record = AITrainingFileModel(
                     user_id=user_id,
                     file_name=file_name,
@@ -122,13 +126,24 @@ class UpdatedUploadDocumentTool(BaseTool):
                 file_id = file_record.id
                 self.db.commit()
                 
+                logger.info(
+                    f"[RAG DEBUG] File record created successfully - "
+                    f"file_id={file_id}, user_id={user_id}"
+                )
+                
             except Exception as e:
-                logger.error(f"Failed to store file metadata: {str(e)}")
+                logger.error(
+                    f"[RAG DEBUG] Failed to store file metadata: {str(e)}", 
+                    exc_info=True
+                )
                 self.db.rollback()
                 return f"Error storing file metadata: {str(e)}"
             
             # Generate embedding for the document
             try:
+                logger.info(
+                    f"[RAG DEBUG] Starting embedding generation for file_id={file_id}"
+                )
                 success = self.document_processor.embed_and_store_document(
                     file_id=file_id,
                     document_content=file_content,
@@ -136,25 +151,35 @@ class UpdatedUploadDocumentTool(BaseTool):
                 )
                 
                 if not success:
-                    logger.warning(f"Failed to generate embedding for file {file_id}")
+                    logger.warning(
+                        f"[RAG DEBUG] Failed to generate embedding for file_id={file_id}"
+                    )
                     # Don't fail - document is uploaded but without embedding
                     return (
                         f"Document '{file_name}' uploaded successfully. "
-                        f"(Size: {file_size} bytes, Type: {file_type}) "
+                        f"(Size: {len(file_content)} bytes, Type: {file_type}) "
                         f"Note: Embedding generation failed, semantic search may not work optimally."
                     )
                 
+                logger.info(
+                    f"[RAG DEBUG] Embedding generation completed successfully "
+                    f"for file_id={file_id}"
+                )
+                
             except Exception as e:
-                logger.error(f"Failed to generate embedding: {str(e)}")
+                logger.error(
+                    f"[RAG DEBUG] Failed to generate embedding: {str(e)}", 
+                    exc_info=True
+                )
                 # Still return success - document is stored even if embedding fails
                 logger.info(
-                    f"Document stored but embedding failed. "
+                    f"[RAG DEBUG] Document stored but embedding failed. "
                     f"Can be reprocessed later."
                 )
             
             logger.info(
-                f"Document uploaded and embedded successfully: "
-                f"file_id={file_id}, user_id={user_id}"
+                f"[RAG DEBUG] Document upload complete - "
+                f"file_id={file_id}, user_id={user_id}, file_name={file_name}"
             )
             
             return (
@@ -164,7 +189,10 @@ class UpdatedUploadDocumentTool(BaseTool):
             )
             
         except Exception as e:
-            logger.error(f"Document upload error: {str(e)}", exc_info=True)
+            logger.error(
+                f"[RAG DEBUG] Document upload error: {str(e)}", 
+                exc_info=True
+            )
             return f"Error uploading document: {str(e)}"
     
     async def _arun(

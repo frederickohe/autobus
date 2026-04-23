@@ -64,8 +64,58 @@ class VectorRetrieval:
             raise ValueError("Query embedding must be a list")
         
         try:
+            # Log pre-search statistics
+            logger.info(f"[RAG DEBUG] Starting vector search for user: {user_id}")
+            logger.debug(f"[RAG DEBUG] Query embedding dimensions: {len(query_embedding)}")
+            logger.debug(f"[RAG DEBUG] Search parameters - top_k: {top_k}, threshold: {threshold}")
+            
+            # Get statistics BEFORE search
+            stats_query = text("""
+                SELECT 
+                    COUNT(*) as total_docs,
+                    COUNT(*) FILTER (WHERE embedding IS NOT NULL) as docs_with_embeddings,
+                    COUNT(*) FILTER (WHERE embedding IS NULL) as docs_without_embeddings
+                FROM ai_training_files
+                WHERE user_id = :user_id
+            """)
+            
+            stats = self.db.execute(
+                stats_query,
+                {"user_id": user_id}
+            ).fetchone()
+            
+            logger.info(
+                f"[RAG DEBUG] Pre-search stats for user {user_id}: "
+                f"total_docs={stats[0]}, docs_with_embeddings={stats[1]}, "
+                f"docs_without_embeddings={stats[2]}"
+            )
+            
             # Convert embedding to pgvector format: '[0.1, 0.2, ..., 0.5]'
             embedding_str = str(query_embedding)
+            
+            # Log ALL documents for this user (for debugging)
+            all_docs_query = text("""
+                SELECT id, file_name, embedding IS NOT NULL as has_embedding, 
+                       COALESCE(1 - (embedding <-> :query_embedding), 0) as similarity
+                FROM ai_training_files
+                WHERE user_id = :user_id
+                ORDER BY similarity DESC
+            """)
+            
+            all_docs = self.db.execute(
+                all_docs_query,
+                {
+                    "query_embedding": embedding_str,
+                    "user_id": user_id
+                }
+            ).fetchall()
+            
+            logger.debug(f"[RAG DEBUG] All documents for user {user_id}:")
+            for doc in all_docs:
+                logger.debug(
+                    f"  - ID: {doc[0]}, Name: {doc[1]}, "
+                    f"Has Embedding: {doc[2]}, Similarity: {doc[3]:.4f}"
+                )
             
             # Raw SQL query using pgvector's <-> operator (cosine distance)
             # Formula: similarity = 1 - cosine_distance
@@ -84,6 +134,10 @@ class VectorRetrieval:
                 LIMIT :top_k
             """)
             
+            logger.debug(
+                f"[RAG DEBUG] Executing search with threshold={threshold}, top_k={top_k}"
+            )
+            
             results = self.db.execute(
                 query,
                 {
@@ -94,21 +148,37 @@ class VectorRetrieval:
                 }
             ).fetchall()
             
-            # Format results
+            logger.info(
+                f"[RAG DEBUG] Search returned {len(results)} results for user {user_id}"
+            )
+            
+            # Format results and log each one
             formatted_results = [
                 (row[3], row[4], row[1])  # (content, similarity, file_name)
                 for row in results
             ]
             
+            if formatted_results:
+                for i, (content, similarity, file_name) in enumerate(formatted_results, 1):
+                    logger.debug(
+                        f"[RAG DEBUG] Result {i}: file={file_name}, "
+                        f"similarity={similarity:.4f}, content_length={len(content)}"
+                    )
+            else:
+                logger.warning(
+                    f"[RAG DEBUG] No documents found matching threshold {threshold} "
+                    f"for user {user_id}"
+                )
+            
             logger.info(
-                f"Found {len(formatted_results)} similar documents for user {user_id} "
-                f"with threshold {threshold}"
+                f"[RAG DEBUG] Search complete: Found {len(formatted_results)} similar documents "
+                f"for user {user_id} with threshold {threshold}"
             )
             
             return formatted_results
             
         except Exception as e:
-            logger.error(f"Vector search failed: {str(e)}")
+            logger.error(f"[RAG DEBUG] Vector search failed: {str(e)}", exc_info=True)
             raise
     
     def search_by_text(
@@ -131,14 +201,23 @@ class VectorRetrieval:
             List of dictionaries with keys: content, similarity, file_name, file_url
         """
         try:
+            logger.info(
+                f"[RAG DEBUG] search_by_text called - query_text='{query_text}', "
+                f"user_id={user_id}, top_k={top_k}"
+            )
+            
             results = self.search_similar_documents(
                 query_embedding=query_embedding,
                 user_id=user_id,
                 top_k=top_k
             )
             
+            logger.info(
+                f"[RAG DEBUG] search_by_text results: {len(results)} documents returned"
+            )
+            
             # Convert to dict format
-            return [
+            dict_results = [
                 {
                     "content": content,
                     "similarity": float(similarity),
@@ -147,8 +226,13 @@ class VectorRetrieval:
                 for content, similarity, file_name in results
             ]
             
+            return dict_results
+            
         except Exception as e:
-            logger.error(f"Text-based search failed for query: {query_text}")
+            logger.error(
+                f"[RAG DEBUG] Text-based search failed for query: {query_text}",
+                exc_info=True
+            )
             logger.error(str(e))
             raise
     
@@ -177,14 +261,26 @@ class VectorRetrieval:
                 {"user_id": user_id}
             ).fetchone()
             
-            return {
+            stats = {
                 "total_documents": result[0],
                 "documents_with_embeddings": result[1],
                 "documents_without_embeddings": result[2]
             }
             
+            logger.info(
+                f"[RAG DEBUG] Embedding statistics for user {user_id}: "
+                f"total={stats['total_documents']}, "
+                f"with_embeddings={stats['documents_with_embeddings']}, "
+                f"without_embeddings={stats['documents_without_embeddings']}"
+            )
+            
+            return stats
+            
         except Exception as e:
-            logger.error(f"Failed to get embedding statistics: {str(e)}")
+            logger.error(
+                f"[RAG DEBUG] Failed to get embedding statistics: {str(e)}", 
+                exc_info=True
+            )
             raise
     
     def hybrid_search(

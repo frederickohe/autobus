@@ -87,14 +87,23 @@ class DocumentProcessor:
         """
         try:
             if not document_content or not document_content.strip():
-                logger.warning(f"Document {file_id} is empty")
+                logger.warning(f"[RAG DEBUG] Document {file_id} is empty")
                 return False
             
-            logger.info(f"Processing document {file_id} for user {user_id}")
+            logger.info(
+                f"[RAG DEBUG] Processing document file_id={file_id} for user {user_id}, "
+                f"content_length={len(document_content)}"
+            )
             
             # Generate embedding for entire document
             # For better results, could use document summary
+            logger.debug(f"[RAG DEBUG] Generating embedding for file_id={file_id}")
             embedding = self.embedding_service.generate_embedding(document_content)
+            
+            logger.debug(
+                f"[RAG DEBUG] Embedding generated successfully for file_id={file_id}, "
+                f"dimensions={len(embedding)}"
+            )
             
             # Update database record with embedding
             file_record = self.db.query(AITrainingFileModel).filter(
@@ -102,17 +111,26 @@ class DocumentProcessor:
             ).first()
             
             if not file_record:
-                logger.error(f"File record {file_id} not found")
+                logger.error(
+                    f"[RAG DEBUG] File record {file_id} not found in database"
+                )
                 return False
             
+            logger.debug(f"[RAG DEBUG] Storing embedding for file_id={file_id}")
             file_record.embedding = embedding
             self.db.commit()
             
-            logger.info(f"Successfully embedded document {file_id}")
+            logger.info(
+                f"[RAG DEBUG] Successfully embedded and stored document file_id={file_id} "
+                f"for user {user_id}"
+            )
             return True
             
         except Exception as e:
-            logger.error(f"Failed to embed document {file_id}: {str(e)}")
+            logger.error(
+                f"[RAG DEBUG] Failed to embed document file_id={file_id}: {str(e)}", 
+                exc_info=True
+            )
             self.db.rollback()
             return False
     

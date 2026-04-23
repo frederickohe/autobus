@@ -96,29 +96,61 @@ class UpdatedRetrieverTool(BaseTool):
             if similarity_threshold < 0 or similarity_threshold > 1:
                 similarity_threshold = 0.5
             
-            logger.info(f"Retrieving documents for user {user_id}, query: {query}")
+            logger.info(
+                f"[RAG DEBUG] Retriever._run called - query='{query}', "
+                f"user_id={user_id}, top_k={top_k}, threshold={similarity_threshold}"
+            )
+            
+            # Check document stats BEFORE generating embedding
+            try:
+                pre_stats = self.vector_retrieval.get_embedding_statistics(user_id)
+                logger.info(
+                    f"[RAG DEBUG] Pre-retrieval stats: user {user_id} has "
+                    f"{pre_stats['documents_with_embeddings']} documents with embeddings "
+                    f"({pre_stats['total_documents']} total)"
+                )
+            except Exception as e:
+                logger.warning(f"[RAG DEBUG] Could not get pre-retrieval stats: {str(e)}")
             
             # Generate query embedding
             try:
+                logger.debug(f"[RAG DEBUG] Generating embedding for query: '{query}'")
                 query_embedding = self.embedding_service.generate_embedding(query)
+                logger.debug(
+                    f"[RAG DEBUG] Query embedding generated successfully "
+                    f"(dimensions: {len(query_embedding)})"
+                )
             except Exception as e:
-                logger.error(f"Failed to generate query embedding: {str(e)}")
+                logger.error(
+                    f"[RAG DEBUG] Failed to generate query embedding: {str(e)}",
+                    exc_info=True
+                )
                 return f"Error generating embedding: {str(e)}"
             
             # Search for similar documents
             try:
+                logger.info(
+                    f"[RAG DEBUG] Starting vector search with threshold={similarity_threshold}"
+                )
                 results = self.vector_retrieval.search_by_text(
                     query_text=query,
                     query_embedding=query_embedding,
                     user_id=user_id,
                     top_k=top_k
                 )
+                logger.info(f"[RAG DEBUG] Vector search returned {len(results)} results")
             except Exception as e:
-                logger.error(f"Vector search failed: {str(e)}")
+                logger.error(
+                    f"[RAG DEBUG] Vector search failed: {str(e)}", 
+                    exc_info=True
+                )
                 return f"Error searching documents: {str(e)}"
             
             if not results:
-                logger.info(f"No relevant documents found for user {user_id}")
+                logger.warning(
+                    f"[RAG DEBUG] No relevant documents found for user {user_id} "
+                    f"with query '{query}' and threshold {similarity_threshold}"
+                )
                 return (
                     "No relevant documents found. Please upload documents related to your query."
                 )
@@ -131,14 +163,24 @@ class UpdatedRetrieverTool(BaseTool):
                     f"Source: {doc['file_name']}\n"
                     f"Content: {doc['content'][:500]}...\n"
                 )
+                logger.debug(
+                    f"[RAG DEBUG] Result {i}: {doc['file_name']}, "
+                    f"similarity={doc['similarity']:.4f}"
+                )
             
             output = "\n".join(output_parts)
-            logger.info(f"Retrieved {len(results)} documents for user {user_id}")
+            logger.info(
+                f"[RAG DEBUG] Retrieval complete: Retrieved {len(results)} documents "
+                f"for user {user_id}"
+            )
             
             return output
             
         except Exception as e:
-            logger.error(f"Retriever error: {str(e)}")
+            logger.error(
+                f"[RAG DEBUG] Retriever error: {str(e)}", 
+                exc_info=True
+            )
             return f"Error retrieving documents: {str(e)}"
     
     async def _arun(
