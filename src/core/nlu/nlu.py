@@ -1001,12 +1001,26 @@ class AutobusNLUSystem:
         user_data = self._get_user_data(user_id)
         
         if intent in conversational_intents:
+            # Use internal UUID for conversational intent instead of phone number
+            internal_user_id = user_data.get("db_user_id") if user_data else None
+            if not internal_user_id:
+                # Fallback: fetch user to get internal ID
+                try:
+                    db = SessionLocal()
+                    user_service = UserService(db)
+                    user = user_service.get_user_by_phone(user_id)
+                    internal_user_id = str(user.id) if user else user_id
+                    db.close()
+                except Exception as e:
+                    logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
+                    internal_user_id = user_id
+            
             return self.intent_processor.process_conversational_intent(
                 intent,
                 user_message, 
                 conversation_history, 
                 slots,
-                user_id=user_id,
+                user_id=internal_user_id,
                 user_data=user_data,
                 use_rag=False  # Let the processor auto-detect RAG if needed
             )
