@@ -19,7 +19,7 @@ class VectorRetrieval:
     
     # Similarity search defaults
     DEFAULT_TOP_K = 5  # Number of results to return
-    SIMILARITY_THRESHOLD = 0.5  # Minimum cosine similarity (0 = orthogonal, 1 = identical)
+    SIMILARITY_THRESHOLD = 0.05  # Minimum cosine similarity - lowered significantly due to low similarity scores observed
     
     def __init__(self, db_session: Session):
         """
@@ -67,6 +67,12 @@ class VectorRetrieval:
             # Log pre-search statistics
             logger.info(f"[RAG DEBUG] Starting vector search for user: {user_id}")
             logger.debug(f"[RAG DEBUG] Query embedding dimensions: {len(query_embedding)}")
+            logger.debug(f"[RAG DEBUG] Query embedding (first 10 values): {query_embedding[:10]}")
+            logger.debug(f"[RAG DEBUG] Query embedding (last 5 values): {query_embedding[-5:]}")
+            # Calculate query embedding magnitude
+            import math
+            query_magnitude = math.sqrt(sum(x**2 for x in query_embedding))
+            logger.debug(f"[RAG DEBUG] Query embedding magnitude: {query_magnitude:.4f}")
             logger.debug(f"[RAG DEBUG] Search parameters - top_k: {top_k}, threshold: {threshold}")
             
             # Get statistics BEFORE search
@@ -92,11 +98,14 @@ class VectorRetrieval:
             
             # Convert embedding to pgvector format: '[0.1, 0.2, ..., 0.5]'
             embedding_str = str(query_embedding)
+            logger.debug(f"[RAG DEBUG] Query embedding string (first 100 chars): {embedding_str[:100]}")
+            logger.debug(f"[RAG DEBUG] Query embedding string length: {len(embedding_str)}")
             
             # Log ALL documents for this user (for debugging)
             all_docs_query = text("""
                 SELECT id, file_name, embedding IS NOT NULL as has_embedding, 
-                       COALESCE(1 - (embedding <-> :query_embedding), 0) as similarity
+                       COALESCE(1 - (embedding <-> :query_embedding), 0) as similarity,
+                       embedding
                 FROM ai_training_files
                 WHERE user_id = :user_id
                 ORDER BY similarity DESC
@@ -112,9 +121,44 @@ class VectorRetrieval:
             
             logger.debug(f"[RAG DEBUG] All documents for user {user_id}:")
             for doc in all_docs:
+                embedding_preview = "None"
+                embedding_dims = 0
+                embedding_magnitude = 0
+                if doc[4] is not None:
+                    try:
+                        # Handle pgvector format (could be list, string, or custom object)
+                        if isinstance(doc[4], str):
+                            # Parse string representation like "[0.1, 0.2, ...]"
+                            embedding_list = [float(x.strip()) for x in doc[4].strip('[]').split(',')]
+                        elif isinstance(doc[4], (list, tuple)):
+                            embedding_list = [float(x) for x in doc[4]]
+                        else:
+                            # Try to convert other types to list
+                            embedding_list = [float(x) for x in list(doc[4])]
+                        
+                        embedding_dims = len(embedding_list)
+                        import math
+                        embedding_magnitude = math.sqrt(sum(x**2 for x in embedding_list))
+                        if len(embedding_list) > 0:
+                            embedding_preview = f"[{float(embedding_list[0]):.4f}, {float(embedding_list[1]):.4f}, ..., {float(embedding_list[-1]):.4f}]"
+                        else:
+                            embedding_preview = "[]"
+                    except Exception as e:
+                        logger.error(f"[RAG DEBUG] Error parsing embedding: {str(e)}")
+                        embedding_preview = f"Error: {str(e)}"
+                        embedding_dims = 0
+                
+                # Check for dimension mismatch
+                if embedding_dims > 0 and embedding_dims != len(query_embedding):
+                    logger.warning(
+                        f"[RAG DEBUG] DIMENSION MISMATCH - {doc[1]}: "
+                        f"stored_dims={embedding_dims}, query_dims={len(query_embedding)}"
+                    )
+                
                 logger.debug(
                     f"  - ID: {doc[0]}, Name: {doc[1]}, "
-                    f"Has Embedding: {doc[2]}, Similarity: {doc[3]:.4f}"
+                    f"Dims: {embedding_dims}, Magnitude: {embedding_magnitude:.4f}, "
+                    f"Embedding: {embedding_preview}, Similarity: {doc[3]:.4f}"
                 )
             
             # Raw SQL query using pgvector's <-> operator (cosine distance)
@@ -152,6 +196,14 @@ class VectorRetrieval:
                 f"[RAG DEBUG] Search returned {len(results)} results for user {user_id}"
             )
             
+            # Log threshold filtering info
+            if len(all_docs) > 0:
+                max_similarity = max([doc[3] for doc in all_docs])
+                logger.info(
+                    f"[RAG DEBUG] Similarity range: max={max_similarity:.4f}, "
+                    f"threshold={threshold}, docs_above_threshold={len(results)}"
+                )
+            
             # Format results and log each one
             formatted_results = [
                 (row[3], row[4], row[1])  # (content, similarity, file_name)
@@ -169,6 +221,13 @@ class VectorRetrieval:
                     f"[RAG DEBUG] No documents found matching threshold {threshold} "
                     f"for user {user_id}"
                 )
+                # Log all similarities to understand why they failed
+                if all_docs:
+                    logger.warning("[RAG DEBUG] Documents below threshold:")
+                    for doc in all_docs:
+                        logger.warning(
+                            f"  - {doc[1]}: similarity={doc[3]:.4f} (threshold={threshold})"
+                        )
             
             logger.info(
                 f"[RAG DEBUG] Search complete: Found {len(formatted_results)} similar documents "
