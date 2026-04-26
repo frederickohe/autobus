@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
+from typing import Any, Dict
+import uuid
 
 from another_fastapi_jwt_auth import AuthJWT
 from core.socialmedia.dto.socialmedia_dto import (
@@ -21,6 +23,11 @@ from core.socialmedia.service.post_publishing_service import PostPublishingServi
 from core.socialmedia.service.blotato_api_service import (
     BlotatoAPIClient, BlotatoOAuthManager
 )
+from core.socialmedia.service.postiz_api_service import PostizClient, PostizAPIError, derive_postiz_password
+from core.socialmedia.service.postiz_org_service import PostizOrgService
+from core.socialmedia.model.PostizOrganization import PostizOrganization
+from core.user.model.User import User
+from utilities.crypto import encrypt_secret
 from utilities.dbconfig import get_db
 
 logger = logging.getLogger(__name__)
@@ -41,6 +48,64 @@ blotato_client = BlotatoAPIClient(
     client_id=BLOTATO_CLIENT_ID,
     client_secret=BLOTATO_CLIENT_SECRET
 )
+
+def _resolve_postiz_api_key(user_id: str, db: Session) -> Optional[str]:
+    """
+    Resolve Postiz Public API key for proxy routes.
+    Priority:
+      1) user-specific key stored in postiz_organizations
+      2) global fallback key from env (for manual Postiz setup)
+    """
+    user_scoped_key = PostizOrgService(db).get_public_api_key_for_user(user_id)
+    if user_scoped_key:
+        return user_scoped_key
+
+    return (
+        os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
+        or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
+        or None
+    )
+
+
+async def _ensure_postiz_api_key(user_id: str, db: Session) -> Optional[str]:
+    """
+    Ensure the user has a Postiz org mapping + public API key.
+    Returns API key when available.
+    """
+    existing_key = _resolve_postiz_api_key(user_id, db)
+    if existing_key:
+        return existing_key
+
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        return None
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        return None
+
+    company_name = (user.company or user.fullname or "Autobus Client").strip()
+    postiz_password = derive_postiz_password(
+        user_id=user.id,
+        email=user.email,
+        autobus_password_hash=user.hashed_password,
+    )
+    client = PostizClient(base_url=postiz_base_url)
+    postiz_org_id, postiz_api_key = await client.provision_org_and_get_public_api_key(
+        email=user.email,
+        company=company_name,
+        password=postiz_password,
+    )
+
+    mapping = PostizOrganization(
+        id=f"po_{str(uuid.uuid4())[:12]}",
+        user_id=user.id,
+        postiz_org_id=postiz_org_id,
+        postiz_public_api_key_encrypted=encrypt_secret(postiz_api_key) or postiz_api_key,
+    )
+    db.add(mapping)
+    db.commit()
+    return postiz_api_key
 
 
 # Dependency for token validation
@@ -86,6 +151,59 @@ async def initiate_oauth_flow(
                 detail=f"Unsupported platform. Supported: {', '.join(valid_platforms)}"
             )
         
+        # Prefer Postiz flow for Facebook when Postiz is configured.
+        postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+        if platform_upper == "FACEBOOK" and postiz_base_url:
+            try:
+                api_key = await _ensure_postiz_api_key(user_id, db)
+            except Exception as postiz_error:
+                logger.warning(f"[SOCIAL] Postiz provisioning failed for user {user_id}: {postiz_error}")
+                api_key = _resolve_postiz_api_key(user_id, db)
+
+            browser_postiz_url = (os.getenv("POSTIZ_PUBLIC_URL", "").strip() or postiz_base_url).rstrip("/")
+            user = db.query(User).filter(User.id == user_id).first()
+            postiz_login_ready = False
+            postiz_login_payload: Dict[str, Any] = {}
+
+            if user and user.email:
+                postiz_password = derive_postiz_password(
+                    user_id=user.id,
+                    email=user.email,
+                    autobus_password_hash=user.hashed_password,
+                )
+                # Warm Postiz session and validate creds using the same payload contract
+                # expected by Postiz LOCAL auth.
+                try:
+                    await PostizClient(base_url=postiz_base_url).login_local(
+                        email=user.email,
+                        password=postiz_password,
+                    )
+                    postiz_login_ready = True
+                except Exception as login_error:
+                    logger.warning(f"[SOCIAL] Postiz auto-login failed for user {user_id}: {login_error}")
+
+                # Frontend can call this payload directly from browser for a real user session.
+                postiz_login_payload = {
+                    "url": f"{browser_postiz_url}/api/auth/login",
+                    "body": {
+                        "email": user.email,
+                        "password": postiz_password,
+                        "providerToken": "",
+                        "provider": "LOCAL",
+                    },
+                }
+
+            return {
+                "authorization_url": f"{browser_postiz_url}/integrations",
+                "platform": platform_upper,
+                "provider": "POSTIZ",
+                "postiz_ready": bool(api_key),
+                "postiz_login_ready": postiz_login_ready,
+                "postiz_login": postiz_login_payload,
+                "message": "Open this URL, sign in to Postiz, and connect your Facebook channel."
+            }
+
+        # Legacy Blotato OAuth flow
         # Create OAuth state for CSRF protection
         state = BlotatoOAuthManager.create_state(user_id, platform_upper)
         
@@ -421,3 +539,121 @@ async def publish_post(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error publishing post: {str(e)}"
         )
+
+
+# ==================== Postiz Public API Proxy Routes ====================
+
+@social_routes.get("/postiz/integrations")
+async def postiz_list_integrations(
+    user_id: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    List Postiz integrations (connected channels) for the current user-business.
+    Uses a user-scoped Postiz API key if available, or a global fallback key from env.
+    """
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    api_key = _resolve_postiz_api_key(user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    try:
+        client = PostizClient(postiz_base_url)
+        return await client.list_integrations(api_key)
+    except PostizAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@social_routes.post("/postiz/auto-login")
+async def postiz_auto_login(
+    user_id: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Build a Postiz LOCAL login payload for the current Autobus user and
+    return the integrations URL so frontend can perform browser login + redirect.
+    """
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or not user.email:
+        raise HTTPException(status_code=404, detail="User/email not found")
+
+    # Ensure org + API key exists for this user before auto-login redirect.
+    try:
+        _ = await _ensure_postiz_api_key(user_id, db)
+    except Exception as ensure_error:
+        logger.warning(f"[SOCIAL] Postiz provisioning check failed for user {user_id}: {ensure_error}")
+
+    browser_postiz_url = (os.getenv("POSTIZ_PUBLIC_URL", "").strip() or postiz_base_url).rstrip("/")
+    postiz_password = derive_postiz_password(
+        user_id=user.id,
+        email=user.email,
+        autobus_password_hash=user.hashed_password,
+    )
+
+    login_payload = {
+        "email": user.email,
+        "password": postiz_password,
+        "providerToken": "",
+        "provider": "LOCAL",
+    }
+
+    # Optional server-side validation so caller can detect potential mismatch
+    # (e.g. legacy users provisioned with old random password logic).
+    postiz_login_ready = False
+    try:
+        await PostizClient(base_url=postiz_base_url).login_local(
+            email=user.email,
+            password=postiz_password,
+        )
+        postiz_login_ready = True
+    except Exception as login_error:
+        logger.warning(f"[SOCIAL] Postiz auto-login validation failed for user {user_id}: {login_error}")
+
+    return {
+        "postiz_login_ready": postiz_login_ready,
+        "postiz_login": {
+            "url": f"{browser_postiz_url}/api/auth/login",
+            "body": login_payload,
+        },
+        "authorization_url": f"{browser_postiz_url}/integrations",
+        "message": "Call postiz_login from browser, then redirect to authorization_url to link channels.",
+    }
+
+
+@social_routes.post("/postiz/posts")
+async def postiz_create_post(
+    payload: Dict[str, Any],
+    user_id: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Create/schedule a post in Postiz using the raw Postiz Public API payload.
+
+    The payload is passed through to `POST /api/public/v1/posts` on your Postiz instance.
+    """
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    api_key = _resolve_postiz_api_key(user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    try:
+        client = PostizClient(postiz_base_url)
+        return await client.create_post(api_key, payload)
+    except PostizAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e))

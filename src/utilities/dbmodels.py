@@ -32,6 +32,7 @@ _model_modules = [
 	"core.auth.model.password_reset_token",
 	"core.paystack.model.transaction",
 	"core.socialmedia.model.SocialAccount",
+	"core.socialmedia.model.PostizOrganization",
 	"core.product.model.product",
 	"core.orders.model.order",
  

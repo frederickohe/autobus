@@ -6,6 +6,13 @@ from core.subscription.model.user_subscription import UserSubscription, Subscrip
 from core.user.model.User import User
 import logging
 import json
+import os
+import uuid
+
+from core.socialmedia.model.PostizOrganization import PostizOrganization
+from core.socialmedia.service.postiz_api_service import PostizClient, postiz_enabled, derive_postiz_password
+from core.socialmedia.service.postiz_org_service import PostizOrgService
+from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +107,45 @@ class SubscriptionService:
             self.db.add(new_subscription)
             self.db.commit()
             self.db.refresh(new_subscription)
+
+            # Optional: Provision Postiz organization on first paid subscription.
+            # If a mapping already exists, do nothing.
+            try:
+                if postiz_enabled():
+                    existing = PostizOrgService(self.db).get_for_user(user_id)
+                    if not existing:
+                        user = self.db.query(User).filter(User.id == user_id).first()
+                        if user and user.email:
+                            base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+                            company_name = (user.company or user.organization_workplace or user.fullname or "Autobus Client").strip()
+                            postiz_password = derive_postiz_password(
+                                user_id=user.id,
+                                email=user.email,
+                                autobus_password_hash=user.hashed_password,
+                            )
+                            client = PostizClient(base_url=base_url)
+
+                            import asyncio
+
+                            postiz_org_id, postiz_api_key = asyncio.run(
+                                client.provision_org_and_get_public_api_key(
+                                    email=user.email,
+                                    company=company_name,
+                                    password=postiz_password,
+                                )
+                            )
+
+                            mapping = PostizOrganization(
+                                id=f"po_{str(uuid.uuid4())[:12]}",
+                                user_id=user_id,
+                                postiz_org_id=postiz_org_id,
+                                postiz_public_api_key_encrypted=encrypt_secret(postiz_api_key) or postiz_api_key,
+                            )
+                            self.db.add(mapping)
+                            self.db.commit()
+            except Exception as e:
+                # Don't fail the subscription if Postiz is down/misconfigured.
+                logger.warning(f"[POSTIZ] Provisioning skipped/failed on subscribe for user {user_id}: {e}")
             
             # Initialize user agents based on any active subscription they may have
             try:

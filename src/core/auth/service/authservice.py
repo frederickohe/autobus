@@ -14,6 +14,12 @@ from core.otp.service.otpservice import OTPService
 import secrets
 import string
 import logging
+import os
+import uuid
+
+from core.socialmedia.model.PostizOrganization import PostizOrganization
+from core.socialmedia.service.postiz_api_service import PostizClient, postiz_enabled, generate_postiz_password
+from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +94,40 @@ class AuthService:
         self.db.add(db_user)
         self.db.commit()
         self.db.refresh(db_user)
+
+        # Optional: Provision a matching org in Postiz (self-hosted)
+        # Controlled via env var POSTIZ_BASE_URL, e.g. http://postiz:5000
+        # This creates a Postiz org+user and stores the orgId + Public API key.
+        try:
+            if postiz_enabled():
+                base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+                if base_url:
+                    company_name = (getattr(request, "company", None) or getattr(request, "fullname", None) or "Autobus Client").strip()
+                    postiz_password = generate_postiz_password()
+                    client = PostizClient(base_url=base_url)
+
+                    # NOTE: AuthService is sync; we run the async provisioning in a local event loop.
+                    import asyncio
+
+                    postiz_org_id, postiz_api_key = asyncio.run(
+                        client.provision_org_and_get_public_api_key(
+                            email=request.email,
+                            company=company_name,
+                            password=postiz_password,
+                        )
+                    )
+
+                    mapping = PostizOrganization(
+                        id=f"po_{str(uuid.uuid4())[:12]}",
+                        user_id=db_user.id,
+                        postiz_org_id=postiz_org_id,
+                        postiz_public_api_key_encrypted=encrypt_secret(postiz_api_key) or postiz_api_key,
+                    )
+                    self.db.add(mapping)
+                    self.db.commit()
+        except Exception as e:
+            # Do not block signup if Postiz is down/misconfigured.
+            logger.warning(f"[POSTIZ] Provisioning skipped/failed for user {db_user.id}: {e}")
         
         return {
             "message": "User account created successfully. Please verify your phone number with the OTP sent to you.",

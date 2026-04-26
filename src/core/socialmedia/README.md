@@ -10,6 +10,11 @@ The Social Media Integration module provides a complete solution for integrating
 - **Track publishing metrics** and respect rate limits
 - **Handle OAuth flows** securely with CSRF protection
 
+In addition, this repo includes a **Postiz (self-hosted)** stack and a minimal integration layer in Autobus to:
+
+- **Provision a Postiz organization per Autobus user** (optional, on signup)
+- **Proxy Postiz Public API calls** (list integrations + create posts) using the org-scoped Postiz API key
+
 ## Architecture
 
 ```
@@ -123,7 +128,32 @@ BLOTATO_CLIENT_SECRET=your_client_secret
 BLOTATO_API_BASE=https://api.blotato.com
 BLOTATO_OAUTH_BASE=https://app.blotato.com
 BASE_FRONTEND_URL=http://localhost:3000
+
+# Postiz (self-hosted)
+POSTIZ_BASE_URL=http://localhost:4007
+# Optional fallback when no per-user Postiz org mapping exists
+POSTIZ_PUBLIC_API_KEY=your_postiz_public_api_key
+
+# Optional: encrypt API keys/tokens at rest
+TOKEN_ENCRYPTION_KEY=... # Fernet key
 ```
+
+### Postiz Provisioning Flow (Autobus → Postiz)
+
+If `POSTIZ_BASE_URL` is set, `POST /auth/signup` will attempt to:
+
+- call `POST {POSTIZ_BASE_URL}/api/auth/register` with `{provider:"LOCAL", email, password, company}`
+- call `GET {POSTIZ_BASE_URL}/api/user/self` (same cookie jar) to obtain `orgId` + `publicApi`
+- store the mapping in the Autobus DB table `postiz_organizations`
+
+### Postiz Public API Proxy Endpoints (Autobus)
+
+- `GET /api/v1/social/postiz/integrations` → calls Postiz `GET /api/public/v1/integrations`
+- `POST /api/v1/social/postiz/posts` → calls Postiz `POST /api/public/v1/posts` (raw payload passthrough)
+
+API key resolution order for the Postiz proxy routes:
+1. User-scoped key from `postiz_organizations` (provisioned flow)
+2. `POSTIZ_PUBLIC_API_KEY` (or `POSTIZ_GLOBAL_PUBLIC_API_KEY`) from environment
 
 ### Settings Integration
 

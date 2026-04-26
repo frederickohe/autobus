@@ -131,6 +131,13 @@ services:
       CONTABO_BUCKET: ${CONTABO_BUCKET:-autobus}
       CONTABO_ENDPOINT: ${CONTABO_ENDPOINT:-https://usc1.contabostorage.com}
 
+      # Postiz (self-hosted) integration
+      # No shared Docker network: use host-mapped Postiz port.
+      POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://host.docker.internal:4007}
+      # Browser-facing Postiz URL used in authorization links.
+      POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
+
     ports:
       - "8000:8000"
     depends_on:
