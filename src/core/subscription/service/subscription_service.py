@@ -159,17 +159,34 @@ class SubscriptionService:
             # Optional: Provision a matching tenant in Chatwoot on first paid subscription.
             # If a mapping already exists, do nothing.
             try:
-                if chatwoot_enabled():
+                base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
+                token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
+                if not chatwoot_enabled():
+                    logger.info(
+                        f"[CHATWOOT] Provisioning disabled on subscribe for user {user_id} "
+                        f"(CHATWOOT_BASE_URL={base_url!r}, CHATWOOT_PLATFORM_API_TOKEN={'set' if bool(token) else 'missing'})"
+                    )
+                else:
                     existing_cw = (
                         self.db.query(ChatwootAccount)
                         .filter(ChatwootAccount.user_id == user_id)
                         .first()
                     )
-                    if not existing_cw:
+                    if existing_cw:
+                        logger.info(
+                            f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: already provisioned"
+                        )
+                    else:
                         user = self.db.query(User).filter(User.id == user_id).first()
-                        if user and user.email:
-                            base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
-                            token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
+                        if not user:
+                            logger.info(
+                                f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: user not found"
+                            )
+                        elif not user.email:
+                            logger.info(
+                                f"[CHATWOOT] Provisioning skipped on subscribe for user {user_id}: missing email"
+                            )
+                        else:
                             account_name = (
                                 (user.company or user.organization_workplace or user.fullname or "Autobus Client")
                                 .strip()
@@ -183,6 +200,10 @@ class SubscriptionService:
 
                             import asyncio
 
+                            logger.info(
+                                f"[CHATWOOT] Provisioning tenant on subscribe for user {user_id} "
+                                f"(CHATWOOT_BASE_URL={base_url!r}, account_name={account_name!r})"
+                            )
                             cw_account_id, cw_user_id, cw_access_token = asyncio.run(
                                 client.provision_account_and_user(
                                     account_name=account_name,

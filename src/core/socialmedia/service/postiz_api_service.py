@@ -53,16 +53,32 @@ class PostizClient:
                     "company": company,
                 },
             )
-            if reg.status_code >= 400:
+            # Postiz may respond 409 if the user/org already exists. In that case we'll just login.
+            if reg.status_code >= 400 and reg.status_code != 409:
                 raise PostizAPIError(
                     f"Postiz register failed ({reg.status_code}): {reg.text}"
                 )
 
             me = await client.get(self._url("/api/user/self"))
-            if me.status_code >= 400:
-                raise PostizAPIError(
-                    f"Postiz self failed ({me.status_code}): {me.text}"
+            if me.status_code == 401:
+                # Some Postiz builds do not establish an authenticated session on register.
+                login = await client.post(
+                    self._url("/api/auth/login"),
+                    json={
+                        "provider": "LOCAL",
+                        "email": email,
+                        "password": password,
+                        "providerToken": "",
+                    },
                 )
+                if login.status_code >= 400:
+                    raise PostizAPIError(
+                        f"Postiz login failed ({login.status_code}): {login.text}"
+                    )
+                me = await client.get(self._url("/api/user/self"))
+
+            if me.status_code >= 400:
+                raise PostizAPIError(f"Postiz self failed ({me.status_code}): {me.text}")
             data = me.json()
             org_id = data.get("orgId") or data.get("organizationId") or data.get("id")
             public_api_key = data.get("publicApi") or data.get("apiKey")
