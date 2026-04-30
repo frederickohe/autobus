@@ -132,14 +132,26 @@ services:
       CONTABO_ENDPOINT: ${CONTABO_ENDPOINT:-https://usc1.contabostorage.com}
 
       # Postiz (self-hosted) integration
-      # No shared Docker network: use host-mapped Postiz port.
+      # If Autobus shares a Docker network with Postiz, prefer service DNS:
+      #   POSTIZ_BASE_URL=http://postiz:5000
+      # If NOT sharing a Docker network, use host-mapped port (Docker Desktop):
+      #   POSTIZ_BASE_URL=http://host.docker.internal:4007
       POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://host.docker.internal:4007}
       # Browser-facing Postiz URL used in authorization links.
       POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
 
+      # Chatwoot (self-hosted) integration (optional)
+      # If shared network: CHATWOOT_BASE_URL=http://chatwoot:3000
+      # If not shared network (Docker Desktop): CHATWOOT_BASE_URL=http://host.docker.internal:3000
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
+      CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
+
     ports:
       - "8000:8000"
+    extra_hosts:
+      # Ensure `host.docker.internal` resolves on Linux engines too.
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -147,6 +159,10 @@ services:
         condition: service_healthy
     networks:
       - autobus_network
+      # Optional: shared external network to reach Postiz/Chatwoot by container DNS.
+      # Create it once via: `docker network create postiz-network`
+      # Then ensure the Postiz compose also uses `postiz-network` by name.
+      - postiz-network
 
 volumes:
   postgres_data:
@@ -159,3 +175,6 @@ volumes:
 networks:
   autobus_network:
     driver: bridge
+  postiz-network:
+    external: true
+    name: postiz-network

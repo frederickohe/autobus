@@ -12,6 +12,12 @@ import uuid
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.socialmedia.service.postiz_api_service import PostizClient, postiz_enabled, derive_postiz_password
 from core.socialmedia.service.postiz_org_service import PostizOrgService
+from core.chatwoot.model.ChatwootAccount import ChatwootAccount
+from core.chatwoot.service.chatwoot_api_service import (
+    ChatwootClient,
+    chatwoot_enabled,
+    derive_chatwoot_password,
+)
 from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -145,7 +151,64 @@ class SubscriptionService:
                             self.db.commit()
             except Exception as e:
                 # Don't fail the subscription if Postiz is down/misconfigured.
-                logger.warning(f"[POSTIZ] Provisioning skipped/failed on subscribe for user {user_id}: {e}")
+                logger.warning(
+                    f"[POSTIZ] Provisioning skipped/failed on subscribe for user {user_id} "
+                    f"(POSTIZ_BASE_URL={os.getenv('POSTIZ_BASE_URL','').strip()!r}): {e}"
+                )
+
+            # Optional: Provision a matching tenant in Chatwoot on first paid subscription.
+            # If a mapping already exists, do nothing.
+            try:
+                if chatwoot_enabled():
+                    existing_cw = (
+                        self.db.query(ChatwootAccount)
+                        .filter(ChatwootAccount.user_id == user_id)
+                        .first()
+                    )
+                    if not existing_cw:
+                        user = self.db.query(User).filter(User.id == user_id).first()
+                        if user and user.email:
+                            base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
+                            token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
+                            account_name = (
+                                (user.company or user.organization_workplace or user.fullname or "Autobus Client")
+                                .strip()
+                            )
+                            chatwoot_password = derive_chatwoot_password(
+                                user_id=user.id,
+                                email=user.email,
+                                autobus_password_hash=user.hashed_password,
+                            )
+                            client = ChatwootClient(base_url=base_url, platform_api_token=token)
+
+                            import asyncio
+
+                            cw_account_id, cw_user_id, cw_access_token = asyncio.run(
+                                client.provision_account_and_user(
+                                    account_name=account_name,
+                                    email=user.email,
+                                    name=(user.fullname or user.email).strip(),
+                                    password=chatwoot_password,
+                                    support_email=user.email,
+                                )
+                            )
+
+                            mapping = ChatwootAccount(
+                                id=f"cw_{str(uuid.uuid4())[:12]}",
+                                user_id=user_id,
+                                chatwoot_account_id=int(cw_account_id),
+                                chatwoot_user_id=int(cw_user_id),
+                                chatwoot_user_access_token_encrypted=encrypt_secret(cw_access_token)
+                                or cw_access_token,
+                            )
+                            self.db.add(mapping)
+                            self.db.commit()
+            except Exception as e:
+                # Don't fail the subscription if Chatwoot is down/misconfigured.
+                logger.warning(
+                    f"[CHATWOOT] Provisioning skipped/failed on subscribe for user {user_id} "
+                    f"(CHATWOOT_BASE_URL={os.getenv('CHATWOOT_BASE_URL','').strip()!r}): {e}"
+                )
             
             # Initialize user agents based on any active subscription they may have
             try:

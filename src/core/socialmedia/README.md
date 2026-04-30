@@ -130,7 +130,12 @@ BLOTATO_OAUTH_BASE=https://app.blotato.com
 BASE_FRONTEND_URL=http://localhost:3000
 
 # Postiz (self-hosted)
-POSTIZ_BASE_URL=http://localhost:4007
+# IMPORTANT (Docker): `localhost` means "inside the autobus container".
+# - If Autobus + Postiz share a Docker network, use the Postiz service DNS + container port:
+#   POSTIZ_BASE_URL=http://postiz:5000
+# - If they do NOT share a network (Docker Desktop), use the host-mapped port:
+#   POSTIZ_BASE_URL=http://host.docker.internal:4007
+POSTIZ_BASE_URL=http://postiz:5000
 # Optional fallback when no per-user Postiz org mapping exists
 POSTIZ_PUBLIC_API_KEY=your_postiz_public_api_key
 
