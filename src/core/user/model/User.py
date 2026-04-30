@@ -61,6 +61,8 @@ class User(Base):
     date_of_birth: Mapped[Optional[date]] = mapped_column(Date)
     gender: Mapped[Optional[str]] = mapped_column(String, default=None)
     address: Mapped[Optional[str]] = mapped_column(String(300))
+    location: Mapped[Optional[str]] = mapped_column(String(255))
+    ghana_card: Mapped[Optional[str]] = mapped_column(String(100))
     profile_picture_url: Mapped[Optional[str]] = mapped_column(String(200))
     
     # Membership Information

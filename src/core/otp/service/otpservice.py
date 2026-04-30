@@ -4,6 +4,10 @@ import random
 import string
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+import os
+import smtplib
+import ssl
+from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from core.otp.model.otp import OTP
 from core.otp.dto.response.otp_send_response import OTPSendResponse
@@ -121,19 +125,55 @@ class OTPService:
             self.db.add(otp_record)
             self.db.commit()
             self.db.refresh(otp_record)
-            
-            # TODO: Integrate with email service to actually send the OTP
-            # For now, we'll just log it
-            logger.info(f"OTP for {email}: {otp_code}")
-            
-            return OTPSendResponse(
-                success=True,
-                message="OTP sent successfully to your email",
-                data={
-                    "email": email,
-                    "expires_at": expires_at.isoformat()
-                }
-            )
+
+            subject = "Your Autobus verification code"
+            body = f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_MINUTES} minutes."
+
+            smtp_host = settings.ZEPTOMAIL_SMTP_HOST
+            smtp_port = settings.ZEPTOMAIL_SMTP_PORT
+            smtp_username = settings.ZEPTOMAIL_SMTP_USERNAME
+            smtp_password = settings.ZEPTOMAIL_SMTP_PASSWORD
+
+            sender_domain = os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
+            from_email = settings.ZEPTOMAIL_FROM_EMAIL or f"no-reply@{sender_domain}"
+
+            if not smtp_password:
+                # Rollback OTP creation if we cannot send
+                self.db.delete(otp_record)
+                self.db.commit()
+                logger.error("ZEPTOMAIL_SMTP_PASSWORD/ZEPTOMAIL_API_TOKEN not set; cannot send OTP email")
+                return OTPSendResponse(success=False, message="Email service not configured")
+
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = from_email
+            msg["To"] = email
+            msg.set_content(body)
+
+            try:
+                if smtp_port == 465:
+                    context = ssl.create_default_context()
+                    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as server:
+                        server.login(smtp_username, smtp_password)
+                        server.send_message(msg)
+                else:
+                    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                        server.starttls()
+                        server.login(smtp_username, smtp_password)
+                        server.send_message(msg)
+
+                logger.info(f"OTP email sent successfully to {email}")
+                return OTPSendResponse(
+                    success=True,
+                    message="OTP sent successfully to your email",
+                    data={"email": email, "expires_at": expires_at.isoformat()},
+                )
+            except Exception as e:
+                # Rollback OTP creation if email send fails
+                self.db.delete(otp_record)
+                self.db.commit()
+                logger.error(f"Failed to send OTP email to {email}: {e}")
+                return OTPSendResponse(success=False, message="Failed to send OTP email. Please try again.")
             
         except Exception as e:
             logger.error(f"Error sending OTP to email {email}: {str(e)}")

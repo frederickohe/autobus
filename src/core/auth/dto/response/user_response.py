@@ -13,6 +13,8 @@ class UserResponse(BaseModel):
     date_of_birth: Optional[date] = None
     gender: Optional[str] = None
     address: Optional[str] = None
+    location: Optional[str] = None
+    ghana_card: Optional[str] = None
     
     class Config:
         from_attributes = True  # For ORM compatibility

@@ -22,10 +22,6 @@ from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 # Import agent framework tools
 from core.agent.tools.email.email import EmailTool
 
-# Import RAG tools for conversation support
-from core.rag import RAGPipelineTool
-from core.agent.tools.chatbot.enhanced_conversation_tool import EnhancedConversationTool
-
 logger = logging.getLogger(__name__)
 
 class IntentProcessor:
@@ -38,10 +34,6 @@ class IntentProcessor:
         
         # Initialize agent framework tools
         self.email_tool = EmailTool()
-        
-        # Initialize RAG and conversation tools (lazy initialized if needed)
-        self.rag_tool = None
-        self.conversation_tool = None
     
     def process_conversational_intent(
         self, 
@@ -55,8 +47,7 @@ class IntentProcessor:
     ) -> str:
         """
         Process conversational intents with optional RAG support.
-        Uses EnhancedConversationTool for intelligent responses.
-        Can detect when RAG should be used based on message content.
+        Conversations are LLM-only (pgvector/RAG removed).
         
         Args:
             intent: Intent type
@@ -70,15 +61,7 @@ class IntentProcessor:
         Returns:
             Generated response
         """
-        # If RAG is requested or should be auto-detected, use EnhancedConversationTool
-        if user_id and (use_rag or self._should_use_rag(user_message, slots)):
-            return self._handle_conversational_with_rag(
-                user_message=user_message,
-                user_id=user_id,
-                conversation_history=conversation_history
-            )
-        
-        # Fallback to LLM-only conversation
+        # NOTE: pgvector/RAG support has been removed from Autobus. Conversations are LLM-only.
         # Prepare enhanced system prompt with user context
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["conversational"],
@@ -361,151 +344,6 @@ class IntentProcessor:
         response = re.sub(r'`([^`]+)`', r'\1', response)
         
         return response.strip()
-
-    # ===== CONVERSATION INTENT HANDLER (WITH RAG SUPPORT) =====
-    def _should_use_rag(self, user_message: str, slots: Dict) -> bool:
-        """
-        Detect if RAG should be used based on message content.
-        
-        Uses heuristics to determine if the query is about the user's knowledge base.
-        Keywords like 'document', 'file', 'article', 'policy', 'info', etc. trigger RAG.
-        """
-        rag_keywords = [
-            'document', 'file', 'article', 'policy', 'procedure',
-            'guide', 'information', 'details', 'about', 'explain',
-            'what', 'tell me', 'know', 'learn', 'find out',
-            'look up', 'search', 'retrieve', 'get', 'show'
-        ]
-        
-        message_lower = (user_message or "").lower()
-        return any(keyword in message_lower for keyword in rag_keywords)
-    
-    def _initialize_conversation_tools(self, db_session=None) -> bool:
-        """
-        Initialize RAG and conversation tools.
-        
-        Args:
-            db_session: Database session (if None, will use self.db_session or create new one)
-            
-        Returns:
-            True if initialization successful, False otherwise
-        """
-        try:
-            if self.conversation_tool is not None:
-                return True  # Already initialized
-            
-            # Get or create db_session
-            session = db_session or self.db_session
-            if session is None:
-                session = next(get_db())
-            
-            # Initialize RAG tool
-            self.rag_tool = RAGPipelineTool(db_session=session)
-            logger.debug("RAGPipelineTool initialized")
-            
-            # Initialize conversation tool with RAG support
-            self.conversation_tool = EnhancedConversationTool(
-                db_session=session,
-                rag_tool=self.rag_tool
-            )
-            logger.debug("EnhancedConversationTool initialized with RAG support")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize conversation tools: {str(e)}")
-            return False
-    
-    def _handle_conversational_with_rag(
-        self,
-        user_message: str,
-        user_id: str,
-        conversation_history: List[Dict] = None
-    ) -> str:
-        """
-        Handle conversation using RAG-aware tool.
-        
-        Uses EnhancedConversationTool to provide knowledge-base aware responses.
-        Falls back to general conversation if RAG fails.
-        
-        Args:
-            user_message: User's message
-            user_id: User ID for RAG filtering
-            conversation_history: Conversation history (optional)
-            
-        Returns:
-            Generated response
-        """
-        try:
-            # Initialize tools if needed
-            if not self._initialize_conversation_tools():
-                logger.warning("Failed to initialize RAG tools, falling back to general conversation")
-                return self._handle_fallback_conversation(user_message)
-            
-            logger.info(f"Processing conversation with RAG for user {user_id}")
-            
-            # Use the enhanced conversation tool in RAG-aware mode
-            response = self.conversation_tool._run(
-                message=user_message,
-                user_id=user_id,
-                conversation_mode="rag_aware",
-                use_rag=True
-            )
-            
-            logger.info(f"RAG conversation completed for user {user_id}")
-            return response
-            
-        except Exception as e:
-            logger.error(f"RAG conversation error: {str(e)}", exc_info=True)
-            # Fallback to general LLM-only conversation
-            return self._handle_fallback_conversation(user_message)
-    
-    def _handle_fallback_conversation(self, user_message: str) -> str:
-        """
-        Fallback conversation handler when RAG is unavailable.
-        
-        Uses basic LLM conversation without knowledge base context.
-        
-        Args:
-            user_message: User's message
-            
-        Returns:
-            Generated response
-        """
-        try:
-            system_prompt = (
-                "You are a helpful and friendly AI assistant. "
-                "Provide concise and accurate responses to user questions."
-            )
-            
-            response = self.llm_client.chat_completion(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                conversation_history=[],
-                temperature=0.7
-            )
-            
-            logger.info("Fallback conversation generated successfully")
-            return response
-            
-        except Exception as e:
-            logger.error(f"Fallback conversation failed: {str(e)}")
-            return (
-                "I'm experiencing technical difficulties. "
-                "Please try again in a moment."
-            )
-
-    def _prepare_conversation_context(self, conversation_history: List[Dict]) -> str:
-        """Prepare conversation context from history"""
-        if not conversation_history:
-            return "New conversation"
-        
-        context = "Recent conversation history:\n"
-        for msg in conversation_history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            context += f"{role}: {msg['content']}\n"
-        
-        return context
 
     # ===== EMAIL INTENT HANDLER =====
     def process_email_intent(

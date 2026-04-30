@@ -48,12 +48,25 @@ class Settings(BaseSettings):
     COMPANY_QUEUE: str = os.environ.get('COMPANY_QUEUE', '')
 
     # Wirepick SMS Configuration
-    WIREPICK_API_URL: str = "https://api.wirepick.com/httpsms"
-    WIREPICK_CLIENT_ID: str = "your_client_id"  # Replace with actual client ID
-    WIREPICK_PASSWORD: str = "your_password"    # Replace with actual password
-    WIREPICK_PUBLIC_KEY: str = "your_public_key" # Replace with actual public key (wpkKey)
-    WIREPICK_SENDER_ID: str = "YourSenderID"     # Your approved sender ID
-    USE_WIREPICK_API_KEY: bool = False  # Set to True to use API key authentication, False to use client/password
+    # Note: some env files include accidental surrounding quotes; we normalize via .strip().
+    WIREPICK_API_URL: str = os.environ.get("WIREPICK_API_URL", "https://api.wirepick.com/httpsms").strip().strip('"').strip("'")
+    WIREPICK_CLIENT_ID: str = os.environ.get("WIREPICK_CLIENT_ID", "").strip()
+    WIREPICK_PASSWORD: str = os.environ.get("WIREPICK_PASSWORD", "").strip()
+    WIREPICK_PUBLIC_KEY: str = os.environ.get("WIREPICK_PUBLIC_KEY", "").strip()
+    WIREPICK_SENDER_ID: str = os.environ.get("WIREPICK_SENDER_ID", "AutoBus").strip()
+    USE_WIREPICK_API_KEY: bool = os.environ.get("USE_WIREPICK_API_KEY", "false").lower() == "true"
+
+    # Email (SMTP) configuration (used for OTP email + agent email tool)
+    ZEPTOMAIL_SMTP_HOST: str = os.environ.get("ZEPTOMAIL_SMTP_HOST", "smtp.zeptomail.com").strip()
+    ZEPTOMAIL_SMTP_PORT: int = int(os.environ.get("ZEPTOMAIL_SMTP_PORT", 587))
+    ZEPTOMAIL_SMTP_USERNAME: str = os.environ.get("ZEPTOMAIL_SMTP_USERNAME", "emailapikey").strip()
+    # Some envs store Zeptomail SMTP password as API token.
+    ZEPTOMAIL_SMTP_PASSWORD: str = (
+        os.environ.get("ZEPTOMAIL_SMTP_PASSWORD")
+        or os.environ.get("ZEPTOMAIL_API_TOKEN")
+        or ""
+    ).strip()
+    ZEPTOMAIL_FROM_EMAIL: str = os.environ.get("ZEPTOMAIL_FROM_EMAIL", "").strip()
     
     # Blotato Social Media Integration Configuration
     BLOTATO_API_KEY: str = os.environ.get('BLOTATO_API_KEY', '')

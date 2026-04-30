@@ -82,7 +82,6 @@ langchain-community
 langchain-openai
 langchain-text-splitters
 openai
-pgvector
 # File content extraction dependencies
 PyPDF2>=3.0.0
 python-docx>=0.8.11

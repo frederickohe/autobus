@@ -17,8 +17,12 @@ import logging
 import os
 import uuid
 
-from core.socialmedia.model.PostizOrganization import PostizOrganization
-from core.socialmedia.service.postiz_api_service import PostizClient, postiz_enabled, generate_postiz_password
+from core.chatwoot.model.ChatwootAccount import ChatwootAccount
+from core.chatwoot.service.chatwoot_api_service import (
+    ChatwootClient,
+    chatwoot_enabled,
+    derive_chatwoot_password,
+)
 from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -30,6 +34,7 @@ class AuthService:
     def __init__(self, db: Session):
         self.db = db
         self.session_driver = SessionDriver()
+        self.otp_service = OTPService(db)
 
     def hash_password(self, password: str) -> str:
         """Hash a plain-text password."""
@@ -95,44 +100,76 @@ class AuthService:
         self.db.commit()
         self.db.refresh(db_user)
 
-        # Optional: Provision a matching org in Postiz (self-hosted)
-        # Controlled via env var POSTIZ_BASE_URL, e.g. http://postiz:5000
-        # This creates a Postiz org+user and stores the orgId + Public API key.
+        otp_send_result = None
         try:
-            if postiz_enabled():
-                base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-                if base_url:
-                    company_name = (getattr(request, "company", None) or getattr(request, "fullname", None) or "Autobus Client").strip()
-                    postiz_password = generate_postiz_password()
-                    client = PostizClient(base_url=base_url)
+            # Prefer phone OTP for account enablement (current `/verify-otp` contract uses phone).
+            if getattr(request, "phone", None):
+                otp_send_result = self.otp_service.send_otp_phone(request.phone)
+            elif getattr(request, "email", None):
+                otp_send_result = self.otp_service.send_otp_email(request.email)
+        except Exception as e:
+            logger.error(f"OTP send error during signup for user {db_user.id}: {e}", exc_info=True)
 
-                    # NOTE: AuthService is sync; we run the async provisioning in a local event loop.
+        # Optional: Provision a matching tenant in Chatwoot (self-hosted)
+        # Controlled via env vars:
+        # - CHATWOOT_BASE_URL (e.g. http://host.docker.internal:3000)
+        # - CHATWOOT_PLATFORM_API_TOKEN (from Chatwoot super admin platform app)
+        try:
+            if chatwoot_enabled():
+                base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
+                token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
+                if base_url and token:
+                    account_name = (
+                        getattr(request, "company", None)
+                        or getattr(request, "fullname", None)
+                        or "Autobus Client"
+                    ).strip()
+                    chatwoot_password = derive_chatwoot_password(
+                        user_id=db_user.id,
+                        email=request.email,
+                        autobus_password_hash=db_user.hashed_password,
+                    )
+                    client = ChatwootClient(base_url=base_url, platform_api_token=token)
+
                     import asyncio
 
-                    postiz_org_id, postiz_api_key = asyncio.run(
-                        client.provision_org_and_get_public_api_key(
+                    cw_account_id, cw_user_id, cw_access_token = asyncio.run(
+                        client.provision_account_and_user(
+                            account_name=account_name,
                             email=request.email,
-                            company=company_name,
-                            password=postiz_password,
+                            name=request.fullname,
+                            password=chatwoot_password,
+                            support_email=request.email,
                         )
                     )
 
-                    mapping = PostizOrganization(
-                        id=f"po_{str(uuid.uuid4())[:12]}",
+                    mapping = ChatwootAccount(
+                        id=f"cw_{str(uuid.uuid4())[:12]}",
                         user_id=db_user.id,
-                        postiz_org_id=postiz_org_id,
-                        postiz_public_api_key_encrypted=encrypt_secret(postiz_api_key) or postiz_api_key,
+                        chatwoot_account_id=int(cw_account_id),
+                        chatwoot_user_id=int(cw_user_id),
+                        chatwoot_user_access_token_encrypted=encrypt_secret(cw_access_token)
+                        or cw_access_token,
                     )
                     self.db.add(mapping)
                     self.db.commit()
         except Exception as e:
-            # Do not block signup if Postiz is down/misconfigured.
-            logger.warning(f"[POSTIZ] Provisioning skipped/failed for user {db_user.id}: {e}")
+            # Do not block signup if Chatwoot is down/misconfigured.
+            logger.warning(f"[CHATWOOT] Provisioning skipped/failed for user {db_user.id}: {e}")
         
+        otp_sent = bool(getattr(otp_send_result, "success", False)) if otp_send_result is not None else False
+        otp_message = (
+            "User account created successfully. Please verify your phone number with the OTP sent to you."
+            if otp_sent
+            else "User account created successfully, but we couldn't send your OTP. Please request a new OTP."
+        )
+
         return {
-            "message": "User account created successfully. Please verify your phone number with the OTP sent to you.",
+            "message": otp_message,
             "user_id": db_user.id,
             "verification_required": True,
+            "otp_sent": otp_sent,
+            "otp_send_error": None if otp_sent else getattr(otp_send_result, "message", None),
         }
     
     def verify_and_enable_user(self, phone: str, otp: str):

@@ -13,7 +13,6 @@ _model_modules = [
 	"core.user.model.User",
 	"core.customers.model.customer",
 	"core.cloudstorage.model.filemodel",
-	"core.cloudstorage.model.aitrainingfilemodel",
 	"core.subscription.model.user_subscription",
 	"core.subscription.model.subscription_plan",
 	"core.receipts.model.Receipt",
@@ -33,6 +32,7 @@ _model_modules = [
 	"core.paystack.model.transaction",
 	"core.socialmedia.model.SocialAccount",
 	"core.socialmedia.model.PostizOrganization",
+	"core.chatwoot.model.ChatwootAccount",
 	"core.product.model.product",
 	"core.orders.model.order",
  

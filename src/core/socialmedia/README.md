@@ -140,11 +140,13 @@ TOKEN_ENCRYPTION_KEY=... # Fernet key
 
 ### Postiz Provisioning Flow (Autobus → Postiz)
 
-If `POSTIZ_BASE_URL` is set, `POST /auth/signup` will attempt to:
+If `POSTIZ_BASE_URL` is set, Autobus will attempt to provision a Postiz org + admin user:
 
 - call `POST {POSTIZ_BASE_URL}/api/auth/register` with `{provider:"LOCAL", email, password, company}`
 - call `GET {POSTIZ_BASE_URL}/api/user/self` (same cookie jar) to obtain `orgId` + `publicApi`
 - store the mapping in the Autobus DB table `postiz_organizations`
+
+Provisioning is triggered on **first paid subscription** (and may also be checked/ensured by some social connection flows that require a Postiz API key).
 
 ### Postiz Public API Proxy Endpoints (Autobus)
 
