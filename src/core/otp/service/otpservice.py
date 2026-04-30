@@ -29,13 +29,13 @@ class OTPService:
 
     def _format_otp_message(self, otp_code: str) -> str:
         """Format OTP message for SMS"""
-        return f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_MINUTES} minutes."
+        return f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_SECONDS} seconds."
 
     def send_otp_phone(self, phone: str) -> OTPSendResponse:
         """Send OTP to phone number using Wirepick SMS"""
         try:
             otp_code = self.generate_otp()
-            expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
             
             # Delete any existing OTP for this phone
             self.db.query(OTP).filter(OTP.phone == phone).delete()
@@ -108,7 +108,7 @@ class OTPService:
         """Send OTP to email address"""
         try:
             otp_code = self.generate_otp()
-            expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
             
             # Delete any existing OTP for this email
             self.db.query(OTP).filter(OTP.email == email).delete()
@@ -125,7 +125,7 @@ class OTPService:
             self.db.refresh(otp_record)
 
             subject = "Your Autobus verification code"
-            body = f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_MINUTES} minutes."
+            body = f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_SECONDS} seconds."
 
             smtp_host = settings.ZEPTOMAIL_SMTP_HOST
             smtp_port = settings.ZEPTOMAIL_SMTP_PORT

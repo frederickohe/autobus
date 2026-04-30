@@ -13,7 +13,7 @@ class OTP(Base):
     email: Mapped[str] = mapped_column(String, nullable=True)
     otp: Mapped[str] = mapped_column(String(6), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     def is_expired(self) -> bool:

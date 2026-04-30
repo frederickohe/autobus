@@ -10,6 +10,11 @@ from core.auth.service.sessiondriver import SessionDriver
 from core.exceptions.AuthException import InvalidCredentialsError
 from core.exceptions.UserException import UserAlreadyExistsError
 from core.user.model.User import User
+from core.notification.model.Notification import (
+    Notification,
+    NotificationStatus,
+    NotificationType,
+)
 from core.otp.service.otpservice import OTPService
 import secrets
 import string
@@ -48,6 +53,10 @@ class AuthService:
         """Generate a random user ID with alphanumeric characters."""
         alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for i in range(20))
+
+    def _generate_notification_id(self) -> str:
+        alphabet = string.ascii_letters + string.digits
+        return "".join(secrets.choice(alphabet) for i in range(16))
 
     def create_user(self, request: BaseModel):
         """Create a new user in the database."""
@@ -96,7 +105,33 @@ class AuthService:
             created_at=datetime.now(timezone.utc),
         )
 
+        seed_notifications = [
+            Notification(
+                id=self._generate_notification_id(),
+                user_id=user_id,
+                type=NotificationType.WARNING,
+                data={
+                    "description": "Enable 2FA  to ensure added security",
+                    "flutterpage": "Security",
+                },
+                status=NotificationStatus.UNREAD,
+                sms_sent=False,
+            ),
+            Notification(
+                id=self._generate_notification_id(),
+                user_id=user_id,
+                type=NotificationType.WARNING,
+                data={
+                    "description": "You need to set up your business profile",
+                    "flutterpage": "Profile",
+                },
+                status=NotificationStatus.UNREAD,
+                sms_sent=False,
+            ),
+        ]
+
         self.db.add(db_user)
+        self.db.add_all(seed_notifications)
         self.db.commit()
         self.db.refresh(db_user)
 

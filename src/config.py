@@ -76,7 +76,10 @@ class Settings(BaseSettings):
     BLOTATO_OAUTH_BASE: str = os.environ.get('BLOTATO_OAUTH_BASE', 'https://app.blotato.com')
     
     # OTP Configuration
-    OTP_EXPIRE_MINUTES: int = int(os.environ.get('OTP_EXPIRE_MINUTES', 5))
+    # Default to 30 seconds (can override via env).
+    OTP_EXPIRE_SECONDS: int = int(os.environ.get("OTP_EXPIRE_SECONDS", 30))
+    # Backward-compatible minutes value for any legacy call sites.
+    OTP_EXPIRE_MINUTES: float = OTP_EXPIRE_SECONDS / 60
 
     # MongoDB Logging
     MONGO_URI: str = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/')
