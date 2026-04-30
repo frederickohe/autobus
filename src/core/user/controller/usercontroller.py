@@ -22,6 +22,10 @@ from core.user.dto.response.user_response import UserResponse
 from core.user.service.user_service import UserService
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.user.dto.request.user_update_request import UserUpdateRequest
+from core.user.dto.request.notification_settings_update_request import (
+    NotificationSettingsUpdateRequest,
+)
+from core.user.dto.request.profile_image_update_request import ProfileImageUpdateRequest
 from core.notification.service.notification_service import NotificationService
 from core.notification.dto.response.paged_notifications import PagedNotificationResponse
 from core.notification.model.Notification import NotificationStatus, NotificationType
@@ -195,6 +199,80 @@ def patch_current_user_endpoint(payload: UserUpdateRequest, authjwt: AuthJWT = D
     current_user_email = authjwt.get_jwt_subject()
     user_service = UserService(db)
     return user_service.update_current_user(current_user_email, payload)
+
+
+@user_routes.patch("/me/notification-settings", response_model=UserResponse)
+def update_my_notification_settings(
+    payload: NotificationSettingsUpdateRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Update only notification preference flags for the current user.
+    Allowed fields: in_app_notification, sms_notification
+    """
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    data = payload.model_dump(exclude_unset=True)
+    return user_service.update_current_user_notification_settings(
+        current_user_email,
+        in_app_notification=data.get("in_app_notification"),
+        sms_notification=data.get("sms_notification"),
+    )
+
+
+@user_routes.patch("/me/profile-image", response_model=UserResponse)
+def update_my_profile_image(
+    payload: ProfileImageUpdateRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Update only profile picture URL for the current user.
+    Allowed field: profile_picture_url
+    """
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    return user_service.update_current_user_profile_image(
+        current_user_email, profile_picture_url=str(payload.profile_picture_url)
+    )
+
+
+@user_routes.patch("/{user_id}/notification-settings", response_model=UserResponse)
+def update_user_notification_settings(
+    user_id: str,
+    payload: NotificationSettingsUpdateRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Update only notification preference flags for a specific user.
+    Allowed fields: in_app_notification, sms_notification
+    """
+    user_service = UserService(db)
+    data = payload.model_dump(exclude_unset=True)
+    return user_service.update_user_notification_settings(
+        user_id,
+        in_app_notification=data.get("in_app_notification"),
+        sms_notification=data.get("sms_notification"),
+    )
+
+
+@user_routes.patch("/{user_id}/profile-image", response_model=UserResponse)
+def update_user_profile_image(
+    user_id: str,
+    payload: ProfileImageUpdateRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Update only profile picture URL for a specific user.
+    Allowed field: profile_picture_url
+    """
+    user_service = UserService(db)
+    return user_service.update_user_profile_image(
+        user_id, profile_picture_url=str(payload.profile_picture_url)
+    )
     
 @user_routes.get("/all", response_model=PagedUserResponse)
 def get_all_users(

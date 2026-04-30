@@ -204,4 +204,72 @@ class UserService:
             user.updated_at = datetime.utcnow()
             self.db.commit()
             self.db.refresh(user)
-            return MessageResponse(message="User updated successfully")
+            return self.get_user_by_id(user.id)
+
+    def update_current_user_notification_settings(
+        self,
+        identifier: str,
+        *,
+        in_app_notification: bool | None = None,
+        sms_notification: bool | None = None,
+    ) -> UserResponse:
+        user = self.db.query(User).filter(User.email == identifier).first()
+        if not user:
+            user = self.db.query(User).filter(User.id == identifier).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if in_app_notification is not None:
+            user.in_app_notification = in_app_notification
+        if sms_notification is not None:
+            user.sms_notification = sms_notification
+
+        user.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return self.get_user_by_id(user.id)
+
+    def update_current_user_profile_image(self, identifier: str, *, profile_picture_url: str) -> UserResponse:
+        user = self.db.query(User).filter(User.email == identifier).first()
+        if not user:
+            user = self.db.query(User).filter(User.id == identifier).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.profile_picture_url = profile_picture_url
+        user.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return self.get_user_by_id(user.id)
+
+    def update_user_notification_settings(
+        self,
+        user_id: str,
+        *,
+        in_app_notification: bool | None = None,
+        sms_notification: bool | None = None,
+    ) -> UserResponse:
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        if in_app_notification is not None:
+            user.in_app_notification = in_app_notification
+        if sms_notification is not None:
+            user.sms_notification = sms_notification
+
+        user.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return self.get_user_by_id(user.id)
+
+    def update_user_profile_image(self, user_id: str, *, profile_picture_url: str) -> UserResponse:
+        user = self.db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user.profile_picture_url = profile_picture_url
+        user.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return self.get_user_by_id(user.id)
