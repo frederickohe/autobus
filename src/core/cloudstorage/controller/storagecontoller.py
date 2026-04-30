@@ -132,6 +132,26 @@ async def download_my_file(
 
     return FileResponse(destination_path, filename=safe_name)
 
+
+@storage_routes.delete("/me/file/{file_name}", response_model=MessageResponse)
+async def delete_my_file(
+    file_name: str,
+    folder: StorageFolder = Query(...),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    subject = authjwt.get_jwt_subject()
+    user_prefix = _safe_user_prefix(subject)
+
+    safe_name = os.path.basename(file_name)
+    key_name = f"{user_prefix}{safe_name}"
+
+    try:
+        storage_service.delete_file(key_name, folder=folder)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"File not found: {safe_name}")
+
+    return MessageResponse(message="File deleted successfully")
+
 @storage_routes.get("/download/{file_name}")
 async def download_file(
     file_name: str,

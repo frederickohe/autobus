@@ -254,3 +254,19 @@ class StorageService:
                 break
 
         return results
+
+    def delete_file(
+        self,
+        file_name: str,
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+    ) -> None:
+        """Delete an object from Contabo S3."""
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
+        s3_key = f"{subfolder}{file_name}"
+        try:
+            self.s3_client.delete_object(Bucket=self.bucket, Key=s3_key)
+            logger.info(f"Successfully deleted {s3_key} from Contabo S3")
+        except ClientError as e:
+            logger.error(f"Contabo S3 delete error for {s3_key}: {str(e)}")
+            raise
