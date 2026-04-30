@@ -53,11 +53,9 @@ class OTPService:
             
             # Format the OTP message
             message = self._format_otp_message(otp_code)
-            
-            clean_phone = phone.replace('+', '').replace(' ', '')
-            
+
             try:
-                sms_result = self.sms_service.send_sms(clean_phone, message)
+                sms_result = self.sms_service.send_sms(phone, message)
                 
                 if sms_result.get('success'):
                     logger.info(f"OTP sent successfully to {phone}. Message ID: {sms_result.get('msgid')}")

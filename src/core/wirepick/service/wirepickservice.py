@@ -3,6 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from config import settings
 import xml.etree.ElementTree as ET
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,38 @@ class WirepickSMSService:
         self.public_key = settings.WIREPICK_PUBLIC_KEY
         self.sender_id = settings.WIREPICK_SENDER_ID
         self.use_api_key = getattr(settings, 'USE_WIREPICK_API_KEY', False)
+
+    @staticmethod
+    def _normalize_phone(phone: str) -> str:
+        """
+        Normalize phone numbers into the digits-only, country-code format Wirepick expects.
+
+        Ghana rule requested:
+        - If the (cleaned) number starts with a leading '0', replace that '0' with '233'.
+          Example: 0247291736 -> 233247291736
+        """
+        if phone is None:
+            return ""
+
+        # Keep only digits and leading '+', then strip international prefixes.
+        raw = str(phone).strip()
+        if not raw:
+            return ""
+
+        # Remove spaces, dashes, parentheses, etc. but keep a leading '+' for now.
+        raw = re.sub(r"(?!^\+)[^\d]", "", raw)
+
+        # Convert +233... -> 233..., 00233... -> 233...
+        if raw.startswith("+"):
+            raw = raw[1:]
+        if raw.startswith("00"):
+            raw = raw[2:]
+
+        # Ghana local format: 0XXXXXXXXX -> 233XXXXXXXXX
+        if raw.startswith("0") and len(raw) >= 2:
+            raw = "233" + raw[1:]
+
+        return raw
         
     def _send_with_client_auth(self, phone: str, message: str) -> Dict[str, Any]:
         """
@@ -146,10 +179,9 @@ class WirepickSMSService:
         Returns:
             Dict with success status and message ID or error
         """
-        # Validate phone number format (should include country code)
-        if not phone.startswith('+') and not phone[0].isdigit():
-            # Add + if not present? Better to let the API handle it
-            pass
+        phone = self._normalize_phone(phone)
+        if not phone:
+            raise WirepickSMSException("Phone number is missing or invalid")
         
         # Choose authentication method based on configuration
         if self.use_api_key and self.public_key:

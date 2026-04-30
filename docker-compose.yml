@@ -136,15 +136,15 @@ services:
       #   POSTIZ_BASE_URL=http://postiz:5000
       # If NOT sharing a Docker network, use host-mapped port (Docker Desktop):
       #   POSTIZ_BASE_URL=http://host.docker.internal:4007
-      POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://host.docker.internal:4007}
+      POSTIZ_BASE_URL: ${POSTIZ_BASE_URL:-http://postiz:5000}
       # Browser-facing Postiz URL used in authorization links.
       POSTIZ_PUBLIC_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}
       TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:-}
 
       # Chatwoot (self-hosted) integration (optional)
-      # If shared network: CHATWOOT_BASE_URL=http://chatwoot:3000
+      # If shared network: CHATWOOT_BASE_URL=http://rails:3000  (service name in `systems/chatwoot/docker-compose.yaml`)
       # If not shared network (Docker Desktop): CHATWOOT_BASE_URL=http://host.docker.internal:3000
-      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-}
+      CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://rails:3000}
       CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
 
     ports:
