@@ -127,7 +127,7 @@ class GoogleVeoService:
                     object_name,
                     content_type="video/mp4",
                     timeout_seconds=300,
-                    subfolder="operations/videos/",
+                    folder="generated-videos",
                 )
 
             return contabo_url

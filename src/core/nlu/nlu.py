@@ -1301,14 +1301,15 @@ class AutobusNLUSystem:
             
             # Generate filename with date and user ID
             date_str = timestamp.strftime("%Y%m%d_%H%M%S")
-            filename = f"receipts/{date_str}_{user_id}_{transaction_id}.png"
+            filename = f"{date_str}_{user_id}_{transaction_id}.png"
             
             # Upload to Azure Blob Storage
             storage_service = StorageService()
             blob_url = storage_service.upload_file(
                 file_obj=image_file,
                 file_name=filename,
-                content_type="image/png"
+                content_type="image/png",
+                folder="records-files",
             )
             
             logger.info(f"[RECEIPT] Receipt saved to Azure Storage: {blob_url}")

@@ -1,10 +1,20 @@
 import os
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from enum import Enum
+from typing import Optional, Union
 import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
+
+
+class StorageFolder(str, Enum):
+    profile_images = "profile-images"
+    chatbot_files = "chatbot-files"
+    records_files = "records-files"
+    generated_images = "generated-images"
+    generated_videos = "generated-videos"
 
 
 class StorageService:
@@ -54,7 +64,38 @@ class StorageService:
             else:
                 pass  # Other errors; continue.
 
-    def upload_file(self, file_obj, file_name: str, content_type: str | None = None, timeout_seconds: int = 30, subfolder: str = "operations/") -> str:
+    @staticmethod
+    def resolve_subfolder(
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+    ) -> str:
+        """Resolve a logical folder to an S3 prefix (subfolder)."""
+        if folder is None:
+            resolved = subfolder
+        else:
+            try:
+                folder_enum = folder if isinstance(folder, StorageFolder) else StorageFolder(str(folder))
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid storage folder '{folder}'. Allowed: {[f.value for f in StorageFolder]}"
+                ) from e
+
+            # Keep legacy `operations/` prefix for consistency across the app.
+            resolved = f"operations/{folder_enum.value}/"
+
+        if not resolved.endswith("/"):
+            resolved += "/"
+        return resolved
+
+    def upload_file(
+        self,
+        file_obj,
+        file_name: str,
+        content_type: str | None = None,
+        timeout_seconds: int = 30,
+        subfolder: str = "operations/",
+        folder: Optional[Union["StorageFolder", str]] = None,
+    ) -> str:
         """Upload a file-like object to Contabo S3 storage and return the object URL.
 
         file_obj must be a readable file-like object (e.g. UploadFile.file from FastAPI).
@@ -64,7 +105,8 @@ class StorageService:
             file_name: Name/path for the object
             content_type: MIME type for the object
             timeout_seconds: Maximum seconds to wait for upload (default: 30)
-            subfolder: S3 subfolder path (default: "operations/", options: "operations/" or "ai-training-files/")
+            subfolder: S3 subfolder path (default: "operations/")
+            folder: Logical folder name (preferred). If provided, overrides subfolder.
 
         Returns:
             str: URL of the uploaded object
@@ -73,9 +115,7 @@ class StorageService:
             TimeoutError: If upload takes longer than timeout_seconds
             Exception: Other S3 storage exceptions
         """
-        # Normalize subfolder path
-        if not subfolder.endswith("/"):
-            subfolder += "/"
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
         
         # Construct full S3 key with subfolder
         s3_key = f"{subfolder}{file_name}"
@@ -129,13 +169,20 @@ class StorageService:
                 logger.error(f"Upload failed for {file_name}: {str(e)}")
                 raise
 
-    def download_file(self, file_name: str, destination_path: str, subfolder: str = "operations/") -> str:
+    def download_file(
+        self,
+        file_name: str,
+        destination_path: str,
+        subfolder: str = "operations/",
+        folder: Optional[Union["StorageFolder", str]] = None,
+    ) -> str:
         """Download file from Contabo S3 to local file path.
 
         Args:
             file_name: Name/path of the object in S3
             destination_path: Local path to save the file
-            subfolder: S3 subfolder path (default: "operations/", options: "operations/" or "ai-training-files/")
+            subfolder: S3 subfolder path (default: "operations/")
+            folder: Logical folder name (preferred). If provided, overrides subfolder.
 
         Returns:
             str: Confirmation message
@@ -143,9 +190,7 @@ class StorageService:
         Raises:
             Exception: S3 storage exceptions if file not found
         """
-        # Normalize subfolder path
-        if not subfolder.endswith("/"):
-            subfolder += "/"
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
         
         # Construct full S3 key with subfolder
         s3_key = f"{subfolder}{file_name}"
@@ -161,3 +206,51 @@ class StorageService:
         except ClientError as e:
             logger.error(f"Contabo S3 download error for {file_name}: {str(e)}")
             raise
+
+    def list_files(
+        self,
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+        prefix: str = "",
+        max_keys: int = 1000,
+    ) -> list[dict]:
+        """List objects under a given folder + prefix.
+
+        Returns a list of dicts: { "key": str, "url": str }.
+        """
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
+        full_prefix = f"{subfolder}{prefix}"
+
+        results: list[dict] = []
+        continuation_token: str | None = None
+
+        while True:
+            params = {
+                "Bucket": self.bucket,
+                "Prefix": full_prefix,
+                "MaxKeys": max_keys,
+            }
+            if continuation_token:
+                params["ContinuationToken"] = continuation_token
+
+            resp = self.s3_client.list_objects_v2(**params)
+            for obj in resp.get("Contents", []) or []:
+                key = obj.get("Key")
+                if not key or key.endswith("/"):
+                    continue
+
+                url = self.s3_client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": key},
+                    ExpiresIn=31536000,
+                )
+                results.append({"key": key, "url": url})
+
+            if resp.get("IsTruncated"):
+                continuation_token = resp.get("NextContinuationToken")
+                if not continuation_token:
+                    break
+            else:
+                break
+
+        return results
