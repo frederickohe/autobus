@@ -24,6 +24,12 @@ class ConversationState:
     last_successful_transaction: Dict = None
     waiting_for_expense_date_selection: bool = False
     pending_expense_dates: List[Dict] = None
+    # --- Human handover (Interventions) ---
+    intervention_active: bool = False
+    intervention_id: Optional[int] = None
+    intervention_trigger: Optional[str] = None
+    intervention_reason: Optional[str] = None
+    intervention_created_at: Optional[str] = None
 
     def __post_init__(self):
         if self.collected_slots is None:
@@ -53,7 +59,12 @@ class ConversationState:
             'pending_payment_dto': self.pending_payment_dto,
             'last_successful_transaction': self.last_successful_transaction,
             'waiting_for_expense_date_selection': self.waiting_for_expense_date_selection,
-            'pending_expense_dates': self.pending_expense_dates
+            'pending_expense_dates': self.pending_expense_dates,
+            'intervention_active': self.intervention_active,
+            'intervention_id': self.intervention_id,
+            'intervention_trigger': self.intervention_trigger,
+            'intervention_reason': self.intervention_reason,
+            'intervention_created_at': self.intervention_created_at,
         }
     
     @classmethod

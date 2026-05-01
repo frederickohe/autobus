@@ -1,5 +1,6 @@
 
 import base64
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 import io
@@ -15,6 +16,8 @@ from sqlalchemy import or_
 from fastapi import HTTPException
 from core.auth.service.authservice import AuthService
 from core.nlu.config import INTENT_CATEGORIES
+from core.chatwoot.model.ChatwootAccount import ChatwootAccount
+from core.chatwoot.service.chatwoot_api_service import ChatwootAccountClient
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
@@ -36,6 +39,7 @@ from core.user.model.User import User
 from utilities.uniqueidgenerator import UniqueIdGenerator
 from decimal import Decimal
 from core.customers.utility.network_detector import NetworkDetector
+from utilities.crypto import decrypt_secret
 
 
 logger = logging.getLogger(__name__)
@@ -67,6 +71,48 @@ class AutobusNLUSystem:
         self.intent_processor = IntentProcessor(db_session=db_session)
         self.date_selection_manager = DateSelectionManager()
         self.db_session = db_session
+
+    def _activate_intervention(
+        self,
+        *,
+        user_id: str,
+        trigger: str,
+        reason: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Creates (or reuses) an open intervention for today and flips the daily conversation state into
+        intervention mode so automation pauses until closed.
+        """
+        try:
+            from core.interventions.service.intervention_service import InterventionService
+
+            db = SessionLocal()
+            svc = InterventionService(db)
+            state = self.conversation_manager.get_conversation_state(user_id)
+            intervention = svc.create_intervention(
+                user_id=user_id,
+                trigger=trigger,
+                reason=reason or None,
+                conversation_date=state.conversation_date,
+                metadata=metadata or {},
+            )
+
+            state.intervention_active = True
+            state.intervention_id = int(intervention.id)
+            state.intervention_trigger = trigger
+            state.intervention_reason = reason or None
+            state.intervention_created_at = (
+                intervention.created_at.isoformat() if intervention.created_at else datetime.utcnow().isoformat()
+            )
+            self.conversation_manager._save_conversation_state(state)
+        except Exception as e:
+            logger.warning("[INTERVENTIONS] Failed to activate intervention for %s: %s", user_id, e, exc_info=True)
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
     
     def process_message(
         self, 
@@ -90,6 +136,10 @@ class AutobusNLUSystem:
         """
         # Get conversation state
         state = self.conversation_manager.get_conversation_state(user_id)
+
+        # If a human intervention is active, pause automation unless the user explicitly ends it.
+        # (We still record user messages into history below.)
+        intervention_is_active = bool(getattr(state, "intervention_active", False))
         
         # Add user message to history
         logger.info("Received message from %s: %s", user_id, (user_message or '')[:200])
@@ -112,6 +162,32 @@ class AutobusNLUSystem:
         intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
             user_message, state.conversation_history, state.current_intent, media_context
         )
+
+        # If intervention is active, allow only end_intervention to proceed; otherwise ack and stop.
+        if intervention_is_active and intent != "end_intervention":
+            response = self.response_formatter.format_response("", "intervention_active")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+
+        if intent == "end_intervention":
+            # Return automation to normal flow for today
+            state.intervention_active = False
+            state.intervention_trigger = None
+            state.intervention_reason = None
+            self.conversation_manager._save_conversation_state(state)
+            response = "Okay — I’m back. How can I help?"
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+
+        if intent == "request_intervention":
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="explicit_user_request",
+                reason=(extracted_slots or {}).get("reason") or user_message or "",
+            )
+            response = self.response_formatter.format_response("", "intervention_created")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
         # If the model explicitly reported it cannot process the image, ask the user
         if intent == "cannot_process_image":
             logger.info("Model cannot process image for user %s; asking for description", user_id)
@@ -121,8 +197,27 @@ class AutobusNLUSystem:
         
         # If the intent is not clear due to low confidence, return appropriate response
         if intent == "intent_not_clear":
-            logger.info("Intent not clear for user %s; asking for clarification", user_id)
-            response = self.response_formatter.format_response("", "intent_not_clear")
+            logger.info("Intent not clear for user %s; activating intervention", user_id)
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="intent_not_clear",
+                reason=user_message or "intent not clear",
+            )
+            response = self.response_formatter.format_response("", "intervention_created")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+
+        # Unknown intent should also request intervention (handover).
+        from core.nlu.config import INTENTS
+        if intent == "unknown" or intent not in INTENTS:
+            logger.info("Unknown intent for user %s (intent=%s); activating intervention", user_id, intent)
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="unknown_intent",
+                reason=user_message or "unknown intent",
+                metadata={"intent": intent},
+            )
+            response = self.response_formatter.format_response("", "intervention_created")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
         
@@ -503,7 +598,14 @@ class AutobusNLUSystem:
             import traceback
             print(f"[EXECUTE_ACTION] ERROR: {e}")
             traceback.print_exc()
-            return self.response_formatter.format_response(intent, "error", message=str(e))
+            # Escalate to human intervention on execution errors.
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="execution_error",
+                reason=str(e),
+                metadata={"intent": intent},
+            )
+            return self.response_formatter.format_response("", "intervention_created")
 
     def _process_payment_intent(self, user_id: str, intent: str, slots: Dict, user_message: str = "") -> str:
         """Process payment intents through PaymentService"""
@@ -1001,7 +1103,19 @@ class AutobusNLUSystem:
         user_data = self._get_user_data(user_id)
         
         if intent in conversational_intents:
-            # Use internal UUID for conversational intent instead of phone number
+            # Route conversational traffic to Chatwoot if the user has a provisioned tenant.
+            try:
+                routed = self._route_conversational_intent_to_chatwoot(
+                    user_id=user_id,
+                    user_message=user_message,
+                    user_data=user_data,
+                )
+                if routed is not None:
+                    return routed
+            except Exception as e:
+                logger.warning(f"[CHATWOOT] Conversational routing failed for {user_id}: {e}", exc_info=True)
+
+            # Fallback: internal LLM-based conversation
             internal_user_id = user_data.get("db_user_id") if user_data else None
             if not internal_user_id:
                 # Fallback: fetch user to get internal ID
@@ -1014,15 +1128,15 @@ class AutobusNLUSystem:
                 except Exception as e:
                     logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
                     internal_user_id = user_id
-            
+
             return self.intent_processor.process_conversational_intent(
                 intent,
-                user_message, 
-                conversation_history, 
+                user_message,
+                conversation_history,
                 slots,
                 user_id=internal_user_id,
                 user_data=user_data,
-                use_rag=False  # Let the processor auto-detect RAG if needed
+                use_rag=False,
             )
         elif intent in financial_tips_intents:
             return self.intent_processor.process_financial_tips_intent(
@@ -1128,6 +1242,68 @@ class AutobusNLUSystem:
         else:
             # Fallback for unhandled intents
             return self.response_formatter.format_response(intent, "error", message="Intent not supported")
+
+    def _route_conversational_intent_to_chatwoot(
+        self,
+        *,
+        user_id: str,
+        user_message: str,
+        user_data: Optional[Dict[str, Any]],
+    ) -> Optional[str]:
+        """
+        If the Autobus user has a provisioned Chatwoot account, forward the message into Chatwoot.
+        Returns a response string if routed, else None (meaning: not provisioned, use internal fallback).
+        """
+        base_url = (os.getenv("CHATWOOT_BASE_URL") or "").strip()
+        if not base_url:
+            return None
+
+        db_user_id = (user_data or {}).get("db_user_id")
+        if not db_user_id:
+            return None
+
+        db = SessionLocal()
+        try:
+            mapping = db.query(ChatwootAccount).filter(ChatwootAccount.user_id == str(db_user_id)).first()
+            if not mapping:
+                return None
+
+            access_token = decrypt_secret(mapping.chatwoot_user_access_token_encrypted)
+            if not access_token:
+                return None
+
+            client = ChatwootAccountClient(
+                base_url=base_url,
+                account_id=int(mapping.chatwoot_account_id),
+                user_access_token=access_token,
+            )
+
+            inbox_id = client.get_or_create_api_inbox_id(preferred_name="Autobus API")
+
+            # Use stable identifier: Autobus internal user id (db pk)
+            contact_identifier = str(db_user_id)
+            contact_name = None
+            contact_email = (user_data or {}).get("email")
+            contact_phone = user_id
+
+            reply_timeout_s = float(os.getenv("CHATWOOT_SYNC_REPLY_TIMEOUT_S", "2.5") or "2.5")
+            reply = client.send_and_wait_for_reply(
+                inbox_id=inbox_id,
+                contact_identifier=contact_identifier,
+                contact_name=contact_name,
+                contact_email=contact_email,
+                contact_phone=contact_phone,
+                user_message=user_message,
+                reply_timeout_s=reply_timeout_s,
+            )
+
+            if reply:
+                return reply
+
+            # If no bot/agent replied synchronously, return an ack (message still delivered to Chatwoot).
+            return "Got it — I’ve sent this to support. You’ll get a reply shortly."
+        finally:
+            db.close()
     
     def _process_user_management_intent(self, user_id: str, intent: str, slots: Dict) -> str:
         """Process user management intents (update profile, view profile, update username, update phone)"""

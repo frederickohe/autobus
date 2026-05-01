@@ -218,6 +218,11 @@ class IntentDetector:
         3. Only change intent if the user clearly introduces a new topic or request
         4. For ambiguous messages, prefer the current intent if it makes contextual sense
         5. Consider conversation history when determining if this is a continuation
+
+        HUMAN HANDOVER (INTERVENTIONS):
+        - If the user asks to speak to a human / agent / support / representative, set intent to "request_intervention".
+        - Examples: "talk to an agent", "human please", "I need support", "customer service", "can I speak to someone", "help me with an agent".
+        - If the user says they want to continue with the bot (e.g. "never mind", "continue", "bot is fine"), set intent to "end_intervention".
         
         CRITICAL RULES:
         - If user provides additional information for current intent: KEEP SAME INTENT

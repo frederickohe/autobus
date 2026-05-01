@@ -188,6 +188,18 @@ INTENTS = {
         "slots": [],
         "required_slots": [],
         "category": "system"
+    },
+    "request_intervention": {
+        "description": "User requests a human agent / support intervention",
+        "slots": ["reason"],
+        "required_slots": [],
+        "category": "system"
+    },
+    "end_intervention": {
+        "description": "User indicates they no longer need a human agent and want the bot to continue",
+        "slots": [],
+        "required_slots": [],
+        "category": "system"
     }
     
 }
@@ -381,5 +393,5 @@ INTENT_CATEGORIES = {
     "expense_report": ["expense_report", "generate_expense_report", "monthly_expense_summary",  "annual_expense_report", "daily_expense_report","transaction_info"],
     "customers": ["add_customer", "view_customers", "delete_customer", "update_customer"],
     "user_management": ["update_user_details", "update_username", "update_phone_number", "view_user_profile"],
-    "system": ["intent_not_clear"]
+    "system": ["intent_not_clear", "request_intervention", "end_intervention"]
 }

@@ -21,6 +21,12 @@ class ConversationState:
     conversation_date: date = None
     waiting_for_payment_confirmation: bool = False
     pending_payment_dto: Dict = None
+    # --- Human handover (Interventions) ---
+    intervention_active: bool = False
+    intervention_id: Optional[int] = None
+    intervention_trigger: Optional[str] = None
+    intervention_reason: Optional[str] = None
+    intervention_created_at: Optional[str] = None
 
     def __post_init__(self):
         if self.collected_slots is None:
@@ -43,7 +49,12 @@ class ConversationState:
             'conversation_history': self.conversation_history,
             'conversation_date': self.conversation_date.isoformat(),
             'waiting_for_payment_confirmation': self.waiting_for_payment_confirmation,
-            'pending_payment_dto': self.pending_payment_dto
+            'pending_payment_dto': self.pending_payment_dto,
+            'intervention_active': self.intervention_active,
+            'intervention_id': self.intervention_id,
+            'intervention_trigger': self.intervention_trigger,
+            'intervention_reason': self.intervention_reason,
+            'intervention_created_at': self.intervention_created_at,
         }
     
     @classmethod

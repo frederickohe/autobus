@@ -26,6 +26,7 @@ _model_modules = [
 	"core.otp.model.otp",
 	"core.notification.model.Notification",
 	"core.conversationmanager.model.Conversation",
+	"core.interventions.model.Intervention",
 	"core.histories.model.history",
 	"core.auth.model.refreshtoken",
 	"core.auth.model.password_reset_token",
