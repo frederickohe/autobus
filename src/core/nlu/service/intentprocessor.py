@@ -62,6 +62,9 @@ class IntentProcessor:
             Generated response
         """
         # NOTE: pgvector/RAG support has been removed from Autobus. Conversations are LLM-only.
+        if intent == "greeting":
+            return self._build_greeting_response(user_data)
+
         # Prepare enhanced system prompt with user context
         system_prompt = self._build_enhanced_system_prompt(
             base_prompt=SYSTEM_PROMPTS["conversational"],
@@ -298,6 +301,28 @@ class IntentProcessor:
         )
              
         return enhanced_prompt
+
+    @staticmethod
+    def _greeting_display_name(user_data: Optional[Dict[str, Any]]) -> Optional[str]:
+        """Prefer fullname, then email local-part, for a short personalized greeting."""
+        if not user_data:
+            return None
+        name = (user_data.get("fullname") or "").strip()
+        if name:
+            return name
+        email = (user_data.get("email") or "").strip()
+        if "@" in email:
+            local = email.split("@", 1)[0].strip()
+            if local:
+                return local
+        return None
+
+    def _build_greeting_response(self, user_data: Optional[Dict[str, Any]]) -> str:
+        templates = RESPONSE_TEMPLATES["conversational"]
+        display_name = self._greeting_display_name(user_data)
+        if display_name:
+            return templates["greeting_named"].replace("{name}", display_name)
+        return templates["greeting_anonymous"]
 
     def _format_conversational_response(self, intent: str, response: str, slots: Dict) -> str:
         """Format conversational responses using templates"""

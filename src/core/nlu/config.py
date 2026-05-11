@@ -300,7 +300,9 @@ SYSTEM_PROMPTS = {
 # Enhanced Response Templates
 RESPONSE_TEMPLATES = {
     "conversational": {
-        "greeting": "Hello! 👋 I'm Autobus, your AI business operations assistant. How can I help you today?",
+        # Greeting copy is resolved in IntentProcessor (name vs anonymous); keys are templates only.
+        "greeting_named": "Welcome back, {name}! What task are we handling today?",
+        "greeting_anonymous": "Welcome back! What task are we handling today?",
         "normal_conversation": "{response}",
         "business_conversation": "{response}",
         "small_talk": "{response}",

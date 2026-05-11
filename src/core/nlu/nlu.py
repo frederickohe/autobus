@@ -1543,6 +1543,7 @@ class AutobusNLUSystem:
                     # `db_user_id` is the internal primary key used for relational FK lookups.
                     "db_user_id": user.id,
                     "email": user.email,
+                    "fullname": user.fullname,
                     "created_at": user.created_at.isoformat() if user.created_at else None,
                     # Add any additional user fields you need
                 }
