@@ -25,7 +25,7 @@ _model_modules = [
 	"core.payments.model.bill",
 	"core.otp.model.otp",
 	"core.notification.model.Notification",
-	"core.conversationmanager.model.Conversation",
+	"core.nlu.model.Conversation",
 	"core.interventions.model.Intervention",
 	"core.histories.model.history",
 	"core.auth.model.refreshtoken",

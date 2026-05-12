@@ -22,6 +22,7 @@ from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
 from core.nlu.service.conversation_manager import ConversationManager
+from core.nlu.service.intent_handler_result import IntentHandlerResult
 from core.nlu.service.security import SecurityManager
 from core.nlu.service.date_selection_manager import DateSelectionManager, DateOption
 from core.nlu.emitters.response import ResponseFormatter
@@ -71,6 +72,117 @@ class AutobusNLUSystem:
         self.intent_processor = IntentProcessor(db_session=db_session)
         self.date_selection_manager = DateSelectionManager()
         self.db_session = db_session
+
+    @staticmethod
+    def _is_declining_more_help(text: str) -> bool:
+        t = (text or "").lower().strip()
+        if not t:
+            return False
+        phrases = (
+            "no",
+            "nope",
+            "nah",
+            "no thanks",
+            "no thank you",
+            "that's all",
+            "thats all",
+            "that is all",
+            "nothing else",
+            "nothing more",
+            "not really",
+            "i'm good",
+            "im good",
+            "all good",
+            "that's it",
+            "thats it",
+            "we're done",
+            "were done",
+            "that's fine",
+            "thats fine",
+            "bye",
+            "goodbye",
+            "no more",
+        )
+        if t in phrases:
+            return True
+        return any(t.startswith(p + " ") or t.startswith(p + ",") for p in phrases if len(p) > 2)
+
+    @staticmethod
+    def _looks_like_fresh_order_request(text: str) -> bool:
+        """Heuristic: user is starting / restarting an order without naming a product in this message."""
+        t = (text or "").lower()
+        needles = (
+            "want to create an order",
+            "create an order",
+            "place an order",
+            "make an order",
+            "new order",
+            "start an order",
+            "open an order",
+            "i want an order",
+            "i want to order",
+            "need an order",
+            "would like to create an order",
+            "like to place an order",
+            "book an order",
+        )
+        return any(n in t for n in needles)
+
+    def _apply_create_order_slot_hygiene(
+        self,
+        *,
+        previous_intent: str,
+        intent: str,
+        validated_slots: Dict[str, Any],
+        collected_slots: Dict[str, Any],
+        user_message: str,
+    ) -> None:
+        """
+        Prevent create_order from reusing stale item_name/quantity (and related draft fields)
+        merged from older turns when the user only expresses intent to order.
+        """
+        if intent != "create_order":
+            return
+        order_keys = (
+            "item_name",
+            "quantity",
+            "unit_price",
+            "subtotal_amount",
+            "discount_amount",
+            "tax_amount",
+            "shipping_amount",
+            "customer_name",
+            "customer_email",
+            "customer_location",
+            "customer_phone",
+        )
+        prev = (previous_intent or "").strip()
+        vs = validated_slots or {}
+        if prev != "create_order":
+            for k in list(order_keys):
+                if k not in vs and k in collected_slots:
+                    del collected_slots[k]
+            return
+        if (
+            "item_name" not in vs
+            and "quantity" not in vs
+            and self._looks_like_fresh_order_request(user_message)
+        ):
+            collected_slots.pop("item_name", None)
+            collected_slots.pop("quantity", None)
+
+    def _conversation_completion_tool(self, user_id: str, success_message: str) -> str:
+        """After a fulfilled intent (HTTP 200): keep success text and prompt for more help."""
+        state = self.conversation_manager.get_conversation_state(user_id)
+        state.conversation_lifecycle = "awaiting_followup_help"
+        self.conversation_manager._save_conversation_state(state)
+        follow = "\n\nIs there anything else I can help you with?"
+        return f"{(success_message or '').strip()}{follow}"
+
+    def _terminal_listener_apply(self, user_id: str, outcome: IntentHandlerResult) -> str:
+        if outcome.http_status == 200:
+            return self._conversation_completion_tool(user_id, outcome.message)
+        return outcome.message
 
     def _activate_intervention(
         self,
@@ -140,10 +252,20 @@ class AutobusNLUSystem:
         # If a human intervention is active, pause automation unless the user explicitly ends it.
         # (We still record user messages into history below.)
         intervention_is_active = bool(getattr(state, "intervention_active", False))
-        
-        # Add user message to history
-        logger.info("Received message from %s: %s", user_id, (user_message or '')[:200])
-        self.conversation_manager.update_conversation_history(user_id, "user", user_message)
+
+        logger.info("Received message from %s: %s", user_id, (user_message or "")[:200])
+
+        if state.conversation_lifecycle == "awaiting_followup_help":
+            self.conversation_manager.update_conversation_history(user_id, "user", user_message)
+            if self._is_declining_more_help(user_message):
+                thanks = "You're welcome. Reach out anytime you need help."
+                self.conversation_manager.update_conversation_history(user_id, "assistant", thanks)
+                self.conversation_manager.finalize_completed_session(user_id)
+                return thanks
+            state.conversation_lifecycle = "active"
+            self.conversation_manager._save_conversation_state(state)
+        else:
+            self.conversation_manager.update_conversation_history(user_id, "user", user_message)
 
         # Process multimodal inputs (images/audio)
         media_context = {}
@@ -226,7 +348,15 @@ class AutobusNLUSystem:
         # Validate and merge slots
         validated_slots = self.slot_manager.validate_slots(intent, extracted_slots)
 
+        previous_intent = (state.current_intent or "").strip()
         state.collected_slots.update(validated_slots)
+        self._apply_create_order_slot_hygiene(
+            previous_intent=previous_intent,
+            intent=intent,
+            validated_slots=validated_slots,
+            collected_slots=state.collected_slots,
+            user_message=user_message or "",
+        )
 
         state.current_intent = intent
 
@@ -301,7 +431,10 @@ class AutobusNLUSystem:
         else:
             # All slots collected, execute action directly
             slots_to_execute = state.collected_slots.copy()
-            response = self._execute_action(user_id, intent, slots_to_execute, user_message, state.conversation_history)
+            handler_outcome = self._execute_action(
+                user_id, intent, slots_to_execute, user_message, state.conversation_history
+            )
+            response = self._terminal_listener_apply(user_id, handler_outcome)
         
         # Add assistant response to history
         self.conversation_manager.update_conversation_history(user_id, "assistant", response)
@@ -330,13 +463,16 @@ class AutobusNLUSystem:
 
             print(f"PIN verified for user {user_id}. Executing pending action: intent={pending_intent}, slots={pending_slots}")
 
-            response = self._execute_action(
+            outcome = self._execute_action(
                 user_id,
                 pending_intent,
-                pending_slots
+                pending_slots,
             )
-            # Reset conversation state
-            self.conversation_manager.reset_conversation_state(user_id)
+            response = self._terminal_listener_apply(user_id, outcome)
+            state.waiting_for_pin = False
+            state.pending_action = {}
+            state.collected_slots = {}
+            self.conversation_manager._save_conversation_state(state)
         else:
             # Invalid PIN
             response = self.response_formatter.format_response("", "invalid_pin")
@@ -387,7 +523,8 @@ class AutobusNLUSystem:
             slots = state.pending_payment_dto.get("slots", state.collected_slots)
 
             # Execute the payment with confirmed slots
-            response = self._execute_action(user_id, intent, slots, user_response, state.conversation_history)
+            outcome = self._execute_action(user_id, intent, slots, user_response, state.conversation_history)
+            response = self._terminal_listener_apply(user_id, outcome)
 
             # Clear confirmation state and collected slots
             state.waiting_for_payment_confirmation = False
@@ -490,6 +627,8 @@ class AutobusNLUSystem:
             slots=state.collected_slots,
             user_data=user_data
         )
+        expense_outcome = IntentHandlerResult(response, 200)
+        response = self._terminal_listener_apply(user_id, expense_outcome)
         
         # Clear expense selection state
         state.waiting_for_expense_date_selection = False
@@ -583,8 +722,8 @@ class AutobusNLUSystem:
         logger.debug(f"[MEDIA_CONFIRMATION] No media confirmation could be extracted for user {user_id}")
         return None
 
-    def _execute_action(self, user_id: str, intent: str, slots: Dict, user_message: str = "", conversation_history: List[Dict] = None) -> str:
-        """Execute the actual financial action through payment service"""
+    def _execute_action(self, user_id: str, intent: str, slots: Dict, user_message: str = "", conversation_history: List[Dict] = None) -> IntentHandlerResult:
+        """Execute the actual financial action through payment service."""
         try:
             # Payment intents that require Orchard API
             payment_intents = ["buy_airtime", "send_money", "pay_bill", "get_loan"]
@@ -605,9 +744,9 @@ class AutobusNLUSystem:
                 reason=str(e),
                 metadata={"intent": intent},
             )
-            return self.response_formatter.format_response("", "intervention_created")
+            return IntentHandlerResult(self.response_formatter.format_response("", "intervention_created"), None)
 
-    def _process_payment_intent(self, user_id: str, intent: str, slots: Dict, user_message: str = "") -> str:
+    def _process_payment_intent(self, user_id: str, intent: str, slots: Dict, user_message: str = "") -> IntentHandlerResult:
         """Process payment intents through PaymentService"""
 
         db = SessionLocal()
@@ -644,7 +783,10 @@ class AutobusNLUSystem:
                         slots['customer_id'] = customer_info['id']
                         logger.info(f"[BENEFICIARY_RESOLUTION] Customer resolved: {customer_info['name']} → {customer_info['customer_number']}")
                     else:
-                        return self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first.")
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first."),
+                            None,
+                        )
 
             # Create PaymentDto based on intent
             if intent == "buy_airtime":
@@ -786,7 +928,10 @@ class AutobusNLUSystem:
                     transactionId=str(UniqueIdGenerator.generate())
                 )
             else:
-                return self.response_formatter.format_response(intent, "error", message=f"Unknown payment intent: {intent}")
+                return IntentHandlerResult(
+                    self.response_formatter.format_response(intent, "error", message=f"Unknown payment intent: {intent}"),
+                    None,
+                )
 
             print(f"[PAYMENT_INTENT] PaymentDto created successfully")
 
@@ -805,7 +950,10 @@ class AutobusNLUSystem:
                             break
 
                     if not biller_id:
-                        return self.response_formatter.format_response(intent, "error", message=f"Unknown biller type: {bill_type}")
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "error", message=f"Unknown biller type: {bill_type}"),
+                            None,
+                        )
 
                     # Step 1: Call INV inquiry to get customer invoice details
                     logger.info(f"[BILL_INQUIRY] Calling INV for biller_id={biller_id}, customer_ref={account_number}")
@@ -888,7 +1036,10 @@ class AutobusNLUSystem:
                         self.conversation_manager._save_conversation_state(state)
 
                         logger.info(f"[BILL_INQUIRY] Waiting for payment confirmation from user {user_id}")
-                        return self.response_formatter.format_response(intent, "payment_confirmation", message=confirmation_msg)
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "payment_confirmation", message=confirmation_msg),
+                            None,
+                        )
 
                     else:
                         try:
@@ -897,11 +1048,17 @@ class AutobusNLUSystem:
                         except:
                             error_msg = f"API returned status {invoice_response.status_code}: {invoice_response.text[:100]}"
                         logger.error(f"[BILL_INQUIRY_FAILED] Status: {invoice_response.status_code}, Error: {error_msg}")
-                        return self.response_formatter.format_response(intent, "error", message=f"Could not retrieve bill details: {error_msg}")
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "error", message=f"Could not retrieve bill details: {error_msg}"),
+                            None,
+                        )
 
                 except Exception as e:
                     logger.error(f"[BILL_INQUIRY_ERROR] Error during bill inquiry: {str(e)}", exc_info=True)
-                    return self.response_formatter.format_response(intent, "error", message=f"Error retrieving bill details: {str(e)}")
+                    return IntentHandlerResult(
+                        self.response_formatter.format_response(intent, "error", message=f"Error retrieving bill details: {str(e)}"),
+                        None,
+                    )
 
             # For send_money, perform account inquiry and wait for confirmation (only if not already done)
             if intent == "send_money" and not state.pending_payment_dto:
@@ -920,7 +1077,10 @@ class AutobusNLUSystem:
                         slots['customer_id'] = customer_info['id']
                         logger.info(f"[BENEFICIARY_RESOLUTION] Customer resolved: {customer_info['name']} → {customer_info['customer_number']}")
                     else:
-                        return self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first.")
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "error", message=f"Customer '{customer_name}' not found in your saved contacts. Please provide the phone number directly or save this customer first."),
+                            None,
+                        )
 
                 # Fallback: if no recipient yet but we have a reference, try regex matching on raw message
                 if not slots.get('recipient') and slots.get('reference'):
@@ -932,10 +1092,13 @@ class AutobusNLUSystem:
                         slots['customer_id'] = regex_match['id']
                         slots['customer_name'] = slots.get('customer_name') or regex_match['name']
                     else:
-                        return self.response_formatter.format_response(
-                            intent,
-                            "missing_slots",
-                            prompt="Please provide the recipient's phone number or a saved customer name."
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(
+                                intent,
+                                "missing_slots",
+                                prompt="Please provide the recipient's phone number or a saved customer name.",
+                            ),
+                            None,
                         )
                 
                 try:
@@ -1005,12 +1168,18 @@ class AutobusNLUSystem:
                         self.conversation_manager._save_conversation_state(state)
 
                         logger.info(f"[ACCOUNT_INQUIRY] Waiting for payment confirmation from user {user_id}")
-                        return self.response_formatter.format_response(intent, "payment_confirmation", message=confirmation_msg)
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "payment_confirmation", message=confirmation_msg),
+                            None,
+                        )
 
                     else:
                         error_msg = inquiry_response.json().get("resp_desc", "Account inquiry failed")
                         logger.error(f"[ACCOUNT_INQUIRY_FAILED] Status: {inquiry_response.status_code}, Error: {error_msg}")
-                        return self.response_formatter.format_response(intent, "error", message=f"Could not verify recipient account: {error_msg}")
+                        return IntentHandlerResult(
+                            self.response_formatter.format_response(intent, "error", message=f"Could not verify recipient account: {error_msg}"),
+                            None,
+                        )
 
                 except Exception as e:
                     logger.error(f"[ACCOUNT_INQUIRY_ERROR] Error during account inquiry: {str(e)}", exc_info=True)
@@ -1054,7 +1223,10 @@ class AutobusNLUSystem:
             # NOTE: Receipt generation happens in the callback, not here
             if result.status == PaymentStatus.PENDING:
                 message = self._get_processing_message(intent, slots, result)
-                return self.response_formatter.format_response(intent, message_type="processing", message=message)
+                return IntentHandlerResult(
+                    self.response_formatter.format_response(intent, message_type="processing", message=message),
+                    None,
+                )
             elif result.status == PaymentStatus.SUCCESS:
                 message = self._get_success_message(intent, slots, result)
                 
@@ -1076,17 +1248,22 @@ class AutobusNLUSystem:
                 )
                 
                 full_message = message + payflow_suggestion
-                return self.response_formatter.format_response(intent, message_type="success", message=full_message)
+                return IntentHandlerResult(
+                    self.response_formatter.format_response(intent, message_type="success", message=full_message),
+                    200,
+                )
             else:
                 error_msg = result.responseDescription or "Payment processing failed"
-                return self.response_formatter.format_response(intent, message_type="error", message=error_msg)
+                return IntentHandlerResult(
+                    self.response_formatter.format_response(intent, message_type="error", message=error_msg),
+                    None,
+                )
 
         finally:
             db.close()
 
-    def _process_non_payment_intent(self, user_id: str, intent: str, user_message: str, conversation_history: List[Dict], slots: Dict) -> str:
-        """Process non-payment intents"""
-        """Route intent to the appropriate processor"""
+    def _process_non_payment_intent(self, user_id: str, intent: str, user_message: str, conversation_history: List[Dict], slots: Dict) -> IntentHandlerResult:
+        """Process non-payment intents; http_status 200 means fulfilled (terminal success)."""
         conversational_intents = INTENT_CATEGORIES["conversational"]
         financial_tips_intents = INTENT_CATEGORIES["financial_tips"]
         expense_report_intents = INTENT_CATEGORIES["expense_report"]
@@ -1111,7 +1288,7 @@ class AutobusNLUSystem:
                     user_data=user_data,
                 )
                 if routed is not None:
-                    return routed
+                    return IntentHandlerResult(routed, None)
             except Exception as e:
                 logger.warning(f"[CHATWOOT] Conversational routing failed for {user_id}: {e}", exc_info=True)
 
@@ -1129,7 +1306,7 @@ class AutobusNLUSystem:
                     logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
                     internal_user_id = user_id
 
-            return self.intent_processor.process_conversational_intent(
+            msg = self.intent_processor.process_conversational_intent(
                 intent,
                 user_message,
                 conversation_history,
@@ -1138,14 +1315,16 @@ class AutobusNLUSystem:
                 user_data=user_data,
                 use_rag=False,
             )
+            return IntentHandlerResult(msg, None)
         elif intent in financial_tips_intents:
-            return self.intent_processor.process_financial_tips_intent(
+            msg = self.intent_processor.process_financial_tips_intent(
                 intent,
                 user_message, 
                 conversation_history, 
                 slots,
                 user_data
             )
+            return IntentHandlerResult(msg, None)
         elif intent in expense_report_intents:
             # Check if time_period was already extracted from the user message
             time_period = slots.get("time_period")
@@ -1178,7 +1357,7 @@ class AutobusNLUSystem:
                         slots=slots,
                         user_data=user_data
                     )
-                    return response
+                    return IntentHandlerResult(response, 200)
                 else:
                     # Could not map the time_period - show menu as fallback
                     logger.warning(f"[EXPENSE_REPORT] Could not map time_period '{time_period}', showing menu instead")
@@ -1197,18 +1376,19 @@ class AutobusNLUSystem:
             
             # Generate and return the menu
             menu_text = self.date_selection_manager.generate_menu_text(date_options)
-            return menu_text
+            return IntentHandlerResult(menu_text, None)
         elif intent in customers_intents:
-            return self.intent_processor.process_customers_intent(
+            msg, http = self.intent_processor.process_customers_intent(
                 intent,
                 user_message,
                 conversation_history,
                 slots,
                 user_data
             )
+            return IntentHandlerResult(msg, http)
         elif intent in email_intents:
             # Route email intents to EmailTool
-            return self.intent_processor.process_email_intent(
+            msg = self.intent_processor.process_email_intent(
                 intent,
                 user_message,
                 conversation_history,
@@ -1217,9 +1397,10 @@ class AutobusNLUSystem:
                 agent_name="email_agent",
                 user_data=user_data
             )
+            return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
         elif intent in product_management_intents:
             # Route product management intents
-            return self.intent_processor.process_product_management_intent(
+            msg = self.intent_processor.process_product_management_intent(
                 intent,
                 user_message,
                 conversation_history,
@@ -1227,9 +1408,10 @@ class AutobusNLUSystem:
                 user_id=user_id,
                 user_data=user_data
             )
+            return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
         elif intent in order_management_intents:
             # Route order management intents
-            return self.intent_processor.process_order_management_intent(
+            msg = self.intent_processor.process_order_management_intent(
                 intent,
                 user_message,
                 conversation_history,
@@ -1237,11 +1419,15 @@ class AutobusNLUSystem:
                 user_id=user_id,
                 user_data=user_data
             )
+            return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
         elif intent in user_management_intents:
             return self._process_user_management_intent(user_id, intent, slots)
         else:
             # Fallback for unhandled intents
-            return self.response_formatter.format_response(intent, "error", message="Intent not supported")
+            return IntentHandlerResult(
+                self.response_formatter.format_response(intent, "error", message="Intent not supported"),
+                None,
+            )
 
     def _route_conversational_intent_to_chatwoot(
         self,
@@ -1305,7 +1491,7 @@ class AutobusNLUSystem:
         finally:
             db.close()
     
-    def _process_user_management_intent(self, user_id: str, intent: str, slots: Dict) -> str:
+    def _process_user_management_intent(self, user_id: str, intent: str, slots: Dict) -> IntentHandlerResult:
         """Process user management intents (update profile, view profile, update username, update phone)"""
         db = SessionLocal()
         try:
@@ -1313,15 +1499,16 @@ class AutobusNLUSystem:
             user_service = UserService(db)
             
             if intent == "update_username":
-                # Handle username update (focused single-field update)
                 new_username = slots.get("new_username")
                 
                 if not new_username:
-                    return self.response_formatter.format_response(
-                        intent, "error", message="No new username provided."
+                    return IntentHandlerResult(
+                        self.response_formatter.format_response(
+                            intent, "error", message="No new username provided."
+                        ),
+                        None,
                     )
                 
-                # Update only username field
                 update_data = {"username": new_username}
                 user_service.update_user_details(user_id, update_data)
                 
@@ -1330,17 +1517,19 @@ class AutobusNLUSystem:
                     message=f"Your username has been updated to '{new_username}' successfully! ✅"
                 )
                 logger.info(f"User {user_id} username updated to {new_username}")
+                return IntentHandlerResult(response, 200)
                 
             elif intent == "update_phone_number":
-                # Handle phone number update (focused single-field update)
                 phone_number = slots.get("phone_number")
                 
                 if not phone_number:
-                    return self.response_formatter.format_response(
-                        intent, "error", message="No phone number provided."
+                    return IntentHandlerResult(
+                        self.response_formatter.format_response(
+                            intent, "error", message="No phone number provided."
+                        ),
+                        None,
                     )
                 
-                # Update only phone field (mapped from phone_number slot)
                 update_data = {"phone": phone_number}
                 user_service.update_user_details(user_id, update_data)
                 
@@ -1349,14 +1538,13 @@ class AutobusNLUSystem:
                     message=f"Your phone number has been updated to '{phone_number}' successfully! ✅"
                 )
                 logger.info(f"User {user_id} phone number updated to {phone_number}")
+                return IntentHandlerResult(response, 200)
             
             elif intent == "update_user_details":
-                # Handle generic profile update (multiple fields)
                 update_fields = {
                     "first_name", "last_name", "phone_number", "location", 
                     "occupation", "income_level", "financial_goals", "risk_tolerance"
                 }
-                # Map slot names to user model field names
                 slot_to_field = {
                     "phone_number": "phone"
                 }
@@ -1369,20 +1557,21 @@ class AutobusNLUSystem:
                         logger.info(f"Preparing to update {field_name} for user {user_id}")
                 
                 if not update_data:
-                    return self.response_formatter.format_response(
-                        intent, "error", message="No valid fields to update provided."
+                    return IntentHandlerResult(
+                        self.response_formatter.format_response(
+                            intent, "error", message="No valid fields to update provided."
+                        ),
+                        None,
                     )
                 
-                # Update user details
                 user_service.update_user_details(user_id, update_data)
                 response = self.response_formatter.format_response(intent, "success", message="Your profile has been updated successfully! ✅")
                 logger.info(f"User {user_id} profile updated with fields: {list(update_data.keys())}")
+                return IntentHandlerResult(response, 200)
                 
             elif intent == "view_user_profile":
-                # Get user profile
                 profile = user_service.get_user_profile(user_id)
                 
-                # Format profile details for display
                 profile_details = f"""
                 📋 *Your Profile:*
                 - Name: {profile.get('first_name', 'N/A')} {profile.get('last_name', 'N/A')}
@@ -1399,23 +1588,31 @@ class AutobusNLUSystem:
                     intent, "success", message=profile_details
                 )
                 logger.info(f"User {user_id} viewed their profile")
+                return IntentHandlerResult(response, 200)
             
             else:
-                response = self.response_formatter.format_response(
-                    intent, "error", message="Unknown user management intent."
+                return IntentHandlerResult(
+                    self.response_formatter.format_response(
+                        intent, "error", message="Unknown user management intent."
+                    ),
+                    None,
                 )
-            
-            return response
             
         except HTTPException as e:
             logger.error(f"HTTP Error in user management intent: {str(e)}")
-            return self.response_formatter.format_response(
-                intent, "error", message=str(e.detail)
+            return IntentHandlerResult(
+                self.response_formatter.format_response(
+                    intent, "error", message=str(e.detail)
+                ),
+                None,
             )
         except Exception as e:
             logger.error(f"Error processing user management intent: {str(e)}", exc_info=True)
-            return self.response_formatter.format_response(
-                intent, "error", message="An error occurred while processing your request."
+            return IntentHandlerResult(
+                self.response_formatter.format_response(
+                    intent, "error", message="An error occurred while processing your request."
+                ),
+                None,
             )
         finally:
             db.close()

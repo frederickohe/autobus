@@ -1,6 +1,32 @@
 from typing import Dict, List, Any, Optional
 from core.nlu.config import INTENTS
 
+_PLACEHOLDER_ORDER_ITEM_NAMES = frozenset(
+    {
+        "order",
+        "an order",
+        "a order",
+        "new order",
+        "the order",
+        "item",
+        "items",
+        "product",
+        "products",
+        "goods",
+        "something",
+        "purchase",
+        "merchandise",
+    }
+)
+
+
+def is_placeholder_order_item_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if len(n) < 2:
+        return True
+    return n in _PLACEHOLDER_ORDER_ITEM_NAMES
+
+
 class SlotManager:
     def __init__(self):
         self.intents = INTENTS
@@ -35,6 +61,11 @@ class SlotManager:
                     validated_slots[slot] = self._validate_phone_number(value)
                 else:
                     validated_slots[slot] = str(value).strip()
+
+        if intent == "create_order":
+            iname = validated_slots.get("item_name")
+            if iname and is_placeholder_order_item_name(str(iname)):
+                validated_slots.pop("item_name", None)
 
         return validated_slots
     
@@ -101,6 +132,8 @@ class SlotManager:
             "period": "For what period?",
             "time_period": "For what time period?",
             "customer_name": "What is the name of the customer (from your saved contacts)?",
+            "item_name": "What product or item is being ordered?",
+            "quantity": "How many units should be ordered?",
             "update_field": "What would you like to update? (name, number)",
             "new_customer_name": "What should the new customer name be?",
             "customer_number": "Customer mobile number?",

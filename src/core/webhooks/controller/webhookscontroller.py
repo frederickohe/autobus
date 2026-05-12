@@ -1,15 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 import json
 from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel
-from core.auth.service.sessiondriver import SessionDriver, TokenData
-from another_fastapi_jwt_auth import AuthJWT
-from core.exceptions import *
-from core.webhooks.dto.request.dialogrequest import DialogRequest
-from core.webhooks.dto.request.simple_chat_request import SimpleChatRequest
+from typing import Optional
 from core.webhooks.dto.response.simple_chat_response import SimpleChatResponse
-from utilities.dbconfig import SessionLocal
+from utilities.dbconfig import get_db
 from sqlalchemy.orm import Session
 import logging
 import os
@@ -18,33 +12,25 @@ from core.nlu.nlu import AutobusNLUSystem
 from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
 from utilities.phone_utils import normalize_ghana_phone_number
-from core.filterpipe.filter import FilterPipeline
-
-# DTO Models
-from core.notification.dto.response.message_response import MessageResponse
-from core.webhooks.dto.response.message_response import AutobusResponse
-
-from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.auth.service.authservice import AuthService
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Reuse your existing token validation and DB dependencies
-from core.user.controller.usercontroller import validate_token, get_db
-
-# Controller (Router)
+# Public routes: no JWT / Bearer dependency (external providers & simple chat clients).
 webhooks_routes = APIRouter()
 
 @webhooks_routes.get("/start-dialog")
 def verify_webhook(
     mode: Optional[str] = Query(None, alias="hub.mode"),
     challenge: Optional[str] = Query(None, alias="hub.challenge"),
-    verify_token: Optional[str] = Query(None, alias="hub.verify_token")
+    verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
 ):
     """
     Webhook verification endpoint for Meta (Facebook/WhatsApp) webhooks.
     Meta will send a GET request with hub.mode, hub.challenge, and hub.verify_token.
+
+    Does not require application JWT authentication (Meta uses hub.verify_token).
     """
     expected_verify_token = os.getenv("VERIFY_TOKEN")
 
@@ -61,14 +47,16 @@ def verify_webhook(
 @webhooks_routes.post("/start-dialog")
 async def start_dialog(
     request: Request,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     """
     Handles incoming webhooks from either:
     1. Meta (Facebook/WhatsApp) webhooks - with 'object' and 'entry' fields
     2. Simple chat requests from Flutter app - with 'userid' and 'message' fields
-    
+
     Routes to appropriate handler based on webhook type.
+
+    Does not require application JWT authentication.
     """
     # Parse the incoming payload as generic dict
     payload = await request.json()
@@ -144,7 +132,9 @@ async def start_dialog(
         )
 
 
-async def handle_simple_chat(userid: str, message: str, context: str, db: Session):
+async def handle_simple_chat(
+    userid: str, message: str, context: Optional[str], db: Session
+):
     """
     Handles simple chat requests from Flutter app or other direct clients.
     Processes the message through NLU and returns the response directly.

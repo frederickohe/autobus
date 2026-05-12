@@ -12,10 +12,11 @@ from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.nlu.service.llmclient import LLMClient
 from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES
+from core.nlu.service.slot_manager import is_placeholder_order_item_name
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
-from core.customers.service.customer_service import CustomerService
+from utilities.phone_utils import normalize_ghana_phone_number
 import logging
 from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 
@@ -146,9 +147,10 @@ class IntentProcessor:
     conversation_history: List[Dict],
     slots: Dict[str, Any],
     user_data: Optional[Dict] = None
-    ) -> str:
+    ) -> tuple:
         """
-        Process customers management using CustomerService
+        Process customers management using CustomerService.
+        Returns (message, http_status) where http_status 200 means the intent was fulfilled.
         """
 
         db = next(get_db())
@@ -167,9 +169,9 @@ class IntentProcessor:
         elif intent == "update_customer":
             return self._handle_update_customer(customer_service, user_id, slots)
         else:
-            return "Customer intent not supported"
+            return ("Customer intent not supported", None)
 
-    def _handle_add_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+    def _handle_add_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> tuple:
         """Handle adding a new customer"""
         name = slots.get("customer_name")
         customer_number = slots.get("customer_number")
@@ -180,7 +182,7 @@ class IntentProcessor:
         print(f"[METHOD_HANDLE_ADD_BENEFICIARY] User Data for {user_id}")
         
         if not name or not customer_number:
-            return "Please provide both customer name and customer number to save a new customer."
+            return ("Please provide both customer name and customer number to save a new customer.", None)
         
         success, customer, message = customer_service.add_customer(
             user_id=user_id,
@@ -190,19 +192,19 @@ class IntentProcessor:
             bank_code=bank_code
         )
         
-        return message
+        return (message, 200 if success else None)
 
-    def _handle_view_customers(self, customer_service: CustomerService, user_id: str) -> str:
+    def _handle_view_customers(self, customer_service: CustomerService, user_id: str) -> tuple:
         """Handle viewing all customers"""
         customers = customer_service.get_customers(user_id)
-        return customer_service.format_customer_list(customers)
+        return (customer_service.format_customer_list(customers), None)
 
-    def _handle_delete_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+    def _handle_delete_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> tuple:
         """Handle deleting a customer"""
         customer_name = slots.get("customer_name")
         
         if not customer_name:
-            return "Please specify which customer you want to remove."
+            return ("Please specify which customer you want to remove.", None)
         
         customers = customer_service.get_customers(user_id)
         
@@ -214,12 +216,12 @@ class IntentProcessor:
                 break
         
         if not target_customer:
-            return f"Customer '{customer_name}' not found in your saved customers."
+            return (f"Customer '{customer_name}' not found in your saved customers.", None)
         
         success, message = customer_service.delete_customer(target_customer.id, user_id)
-        return message
+        return (message, 200 if success else None)
 
-    def _handle_update_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> str:
+    def _handle_update_customer(self, customer_service: CustomerService, user_id: str, slots: Dict) -> tuple:
         """Handle updating a customer"""
         customer_name = slots.get("customer_name")
         new_name = slots.get("new_customer_name")
@@ -227,10 +229,10 @@ class IntentProcessor:
         bank_code = slots.get("bank_code")
 
         if not customer_name:
-            return "Please specify which customer you want to edit."
+            return ("Please specify which customer you want to edit.", None)
 
         if not any([new_name, customer_number, bank_code]):
-            return "What would you like to update? You can send a new name, phone number, or bank code."
+            return ("What would you like to update? You can send a new name, phone number, or bank code.", None)
 
         customers = customer_service.get_customers(user_id)
         target_customer = None
@@ -240,7 +242,7 @@ class IntentProcessor:
                 break
 
         if not target_customer:
-            return f"Customer '{customer_name}' not found in your saved customers."
+            return (f"Customer '{customer_name}' not found in your saved customers.", None)
 
         success, customer, message = customer_service.update_customer(
             customer_id=target_customer.id,
@@ -249,7 +251,7 @@ class IntentProcessor:
             customer_number=customer_number,
             bank_code=bank_code
         )
-        return message
+        return (message, 200 if success else None)
 
     def _build_enhanced_system_prompt(
         self,
@@ -665,19 +667,27 @@ class IntentProcessor:
 
     def _handle_create_order(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle create_order intent"""
-        customer_name = slots.get("customer_name")
         item_name = slots.get("item_name")
         quantity = slots.get("quantity")
-        
-        if not customer_name or not item_name or not quantity:
+
+        if (
+            not item_name
+            or not quantity
+            or is_placeholder_order_item_name(str(item_name))
+        ):
             missing = []
-            if not customer_name:
-                missing.append("customer name")
-            if not item_name:
+            if not item_name or is_placeholder_order_item_name(str(item_name)):
                 missing.append("item name")
             if not quantity:
                 missing.append("quantity")
             return f"❌ Missing required fields: {', '.join(missing)}"
+
+        raw_phone = (str(slots.get("customer_phone") or "").strip() or str(user_id or "").strip())
+        customer_phone = normalize_ghana_phone_number(raw_phone) if raw_phone else "N/A"
+
+        customer_name = (str(slots.get("customer_name") or "").strip())
+        if not customer_name:
+            customer_name = f"Customer ({customer_phone})"
 
         db = next(get_db())
         order_service = OrderService(db)
@@ -692,7 +702,7 @@ class IntentProcessor:
         try:
             order_data = OrderCreateDTO(
                 customer_name=customer_name,
-                customer_phone=slots.get("customer_phone") or "N/A",
+                customer_phone=customer_phone,
                 customer_email=slots.get("customer_email"),
                 customer_location=slots.get("customer_location"),
                 order_type=(slots.get("order_type") or "sale").lower(),

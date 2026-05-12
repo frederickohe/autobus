@@ -46,6 +46,50 @@ def create_order(
         )
 
 
+@order_routes.get("/admin/active", response_model=List[OrderResponseDTO])
+def list_admin_active_orders(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token)
+):
+    """Orders that need admin attention (pending, processing, confirmed)."""
+    try:
+        logger.info("[ORDER_CONTROLLER] Listing admin active orders")
+        order_service = OrderService(db)
+        orders = order_service.get_admin_active_orders(skip, limit)
+        logger.info(f"[ORDER_CONTROLLER] Found {len(orders)} admin active orders")
+        return [OrderResponseDTO.from_order(o) for o in orders]
+    except Exception as e:
+        logger.error(f"[ORDER_CONTROLLER] Error listing admin active orders: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving active orders: {str(e)}"
+        )
+
+
+@order_routes.get("/admin/completed", response_model=List[OrderResponseDTO])
+def list_admin_completed_orders(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token)
+):
+    """Orders successfully completed."""
+    try:
+        logger.info("[ORDER_CONTROLLER] Listing admin completed orders")
+        order_service = OrderService(db)
+        orders = order_service.get_admin_completed_orders(skip, limit)
+        logger.info(f"[ORDER_CONTROLLER] Found {len(orders)} admin completed orders")
+        return [OrderResponseDTO.from_order(o) for o in orders]
+    except Exception as e:
+        logger.error(f"[ORDER_CONTROLLER] Error listing admin completed orders: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving completed orders: {str(e)}"
+        )
+
+
 @order_routes.get("/{order_id}", response_model=OrderResponseDTO)
 def get_order(
     order_id: str = Path(..., description="Order ID"),
@@ -223,6 +267,35 @@ def cancel_order(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error cancelling order: {str(e)}"
+        )
+
+
+@order_routes.post("/{order_id}/complete", response_model=OrderResponseDTO)
+def complete_order(
+    order_id: str = Path(..., description="Order ID"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token)
+):
+    """Mark an order as completed (admin close-out)."""
+    try:
+        logger.info(f"[ORDER_CONTROLLER] Completing order: {order_id}")
+
+        order_service = OrderService(db)
+        success, order, message = order_service.complete_order(order_id)
+
+        if not success:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
+
+        logger.info(f"[ORDER_CONTROLLER] Order completed successfully: {order.order_number}")
+        return OrderResponseDTO.from_order(order)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ORDER_CONTROLLER] Error completing order: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error completing order: {str(e)}"
         )
 
 

@@ -113,9 +113,24 @@ INTENTS = {
     },
     #==== ORDER MANAGEMENT AGENT INTENTS =====
     "create_order": {
-        "description": "Create a new order",
-        "slots": ["customer_name", "item_name", "quantity"],
-        "required_slots": ["customer_name", "item_name", "quantity"],
+        "description": "Create a new order (minimal: item_name and quantity; customer_phone defaults from the messaging user id; pricing may be added later)",
+        "slots": [
+            "customer_name",
+            "customer_phone",
+            "item_name",
+            "quantity",
+            "unit_price",
+            "subtotal_amount",
+            "discount_amount",
+            "tax_amount",
+            "shipping_amount",
+            "currency_code",
+            "customer_email",
+            "customer_location",
+            "order_type",
+            "order_source",
+        ],
+        "required_slots": ["item_name", "quantity"],
         "category": "order_management"
     },
     "update_order": {

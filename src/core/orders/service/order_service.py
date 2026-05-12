@@ -18,6 +18,13 @@ from core.orders.dto.order_response_dto import OrderResponseDTO
 
 logger = logging.getLogger(__name__)
 
+# Order statuses the admin queue should surface (needs fulfillment / follow-up).
+_ADMIN_ACTIVE_STATUSES = (
+    OrderStatus.PENDING.value,
+    OrderStatus.PROCESSING.value,
+    OrderStatus.CONFIRMED.value,
+)
+
 
 class OrderService:
     """
@@ -67,13 +74,22 @@ class OrderService:
                 except ValueError:
                     return False, None, f"Invalid payment_method: {order_data.payment_method}"
 
-            # Calculate total amount
-            total_amount = (
+            # Calculate total amount (cap discount so unpriced / partial orders stay valid)
+            billable_base = (
                 order_data.subtotal_amount +
                 order_data.tax_amount +
-                order_data.shipping_amount -
-                order_data.discount_amount
+                order_data.shipping_amount
             )
+            effective_discount = order_data.discount_amount
+            if effective_discount > billable_base:
+                logger.warning(
+                    "[ORDER_SERVICE] Discount %s exceeds billable base %s; capping discount",
+                    effective_discount,
+                    billable_base,
+                )
+                effective_discount = billable_base
+
+            total_amount = billable_base - effective_discount
             total_quantity = int(order_data.quantity)
 
             if total_amount < 0:
@@ -98,7 +114,7 @@ class OrderService:
                 fulfillment_status=FulfillmentStatus.UNFULFILLED.value,
                 subtotal_amount=order_data.subtotal_amount,
                 total_quantity=total_quantity,
-                discount_amount=order_data.discount_amount,
+                discount_amount=effective_discount,
                 tax_amount=order_data.tax_amount,
                 shipping_amount=order_data.shipping_amount,
                 total_amount=total_amount,
@@ -174,6 +190,40 @@ class OrderService:
             return orders
         except Exception as e:
             logger.error(f"[ORDER_SERVICE] Error fetching orders: {str(e)}", exc_info=True)
+            return []
+
+    def get_admin_active_orders(self, skip: int = 0, limit: int = 100) -> List[Order]:
+        """Orders that still need admin attention (not completed or cancelled)."""
+        try:
+            orders = (
+                self.db.query(Order)
+                .filter(Order.order_status.in_(_ADMIN_ACTIVE_STATUSES))
+                .order_by(desc(Order.order_date))
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin active orders")
+            return orders
+        except Exception as e:
+            logger.error(f"[ORDER_SERVICE] Error fetching admin active orders: {str(e)}", exc_info=True)
+            return []
+
+    def get_admin_completed_orders(self, skip: int = 0, limit: int = 100) -> List[Order]:
+        """Orders finished successfully (completed lifecycle)."""
+        try:
+            orders = (
+                self.db.query(Order)
+                .filter(Order.order_status == OrderStatus.COMPLETED.value)
+                .order_by(desc(Order.order_date))
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
+            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin completed orders")
+            return orders
+        except Exception as e:
+            logger.error(f"[ORDER_SERVICE] Error fetching admin completed orders: {str(e)}", exc_info=True)
             return []
 
     def update_order(self, order_id: str, update_data: OrderUpdateDTO) -> Tuple[bool, Optional[Order], str]:
@@ -354,6 +404,34 @@ class OrderService:
             self.db.rollback()
             logger.error(f"[ORDER_SERVICE] Error cancelling order: {str(e)}", exc_info=True)
             return False, None, f"Error cancelling order: {str(e)}"
+
+    def complete_order(self, order_id: str) -> Tuple[bool, Optional[Order], str]:
+        """Mark an order as completed."""
+        try:
+            logger.info(f"[ORDER_SERVICE] Completing order: {order_id}")
+
+            order = self.get_order_by_id(order_id)
+            if not order:
+                return False, None, "Order not found"
+
+            if order.order_status == OrderStatus.CANCELLED.value:
+                return False, None, "Cannot complete a cancelled order"
+
+            if order.order_status == OrderStatus.COMPLETED.value:
+                return False, None, "Order is already completed"
+
+            order.order_status = OrderStatus.COMPLETED.value
+            order.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(order)
+
+            logger.info(f"[ORDER_SERVICE] Order completed successfully: {order.order_number}")
+            return True, order, f"Order {order.order_number} marked as completed!"
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[ORDER_SERVICE] Error completing order: {str(e)}", exc_info=True)
+            return False, None, f"Error completing order: {str(e)}"
 
     def delete_order(self, order_id: str) -> Tuple[bool, str]:
         """Delete an order (hard delete)."""
