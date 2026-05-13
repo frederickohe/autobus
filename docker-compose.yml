@@ -150,6 +150,12 @@ services:
       CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://rails:3000}
       CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
 
+      # Qdrant RAG stack (`systems/qdrant/docker-compose.yml`, network `greenbrain_rag`)
+      RAG_SERVICE_URL: ${RAG_SERVICE_URL:-}
+      RAG_SERVICE_API_KEY: ${RAG_SERVICE_API_KEY:-}
+      RAG_CONVERSATIONS_ENABLED: ${RAG_CONVERSATIONS_ENABLED:-}
+      RAG_TENANT_MODE: ${RAG_TENANT_MODE:-company_then_user}
+
     ports:
       - "8000:8000"
     extra_hosts:

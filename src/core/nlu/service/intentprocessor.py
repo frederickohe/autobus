@@ -44,25 +44,24 @@ class IntentProcessor:
         slots: Dict[str, Any],
         user_id: str = None,
         user_data: Optional[Dict] = None,
-        use_rag: bool = False
+        rag_context: Optional[str] = None,
     ) -> str:
         """
-        Process conversational intents with optional RAG support.
-        Conversations are LLM-only (pgvector/RAG removed).
-        
+        Process conversational intents with optional vector-RAG context from the RAG API.
+
         Args:
             intent: Intent type
             user_message: User's message
             conversation_history: Conversation history
             slots: Extracted slots
-            user_id: User ID (for RAG filtering)
+            user_id: User ID (for logging / future personalization hooks)
             user_data: Additional user data
-            use_rag: Whether to use RAG for this query (default: False)
-            
+            rag_context: Pre-retrieved snippets (same-tenant Qdrant search), appended to the system prompt
+
         Returns:
             Generated response
         """
-        # NOTE: pgvector/RAG support has been removed from Autobus. Conversations are LLM-only.
+        # NOTE: pgvector was removed; optional Qdrant-backed context is supplied via `rag_context`.
         if intent == "greeting":
             return self._build_greeting_response(user_data)
 
@@ -73,6 +72,13 @@ class IntentProcessor:
             intent=intent,
             slots=slots
         )
+
+        if rag_context and rag_context.strip():
+            system_prompt = (
+                system_prompt
+                + "\n\n## Retrieved memory (same tenant; use only if relevant)\n"
+                + rag_context.strip()
+            )
         
         response = self.llm_client.chat_completion(
             system_prompt=system_prompt,

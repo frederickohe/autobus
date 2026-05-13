@@ -41,6 +41,8 @@ from utilities.uniqueidgenerator import UniqueIdGenerator
 from decimal import Decimal
 from core.customers.utility.network_detector import NetworkDetector
 from utilities.crypto import decrypt_secret
+from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.tenant import resolve_rag_tenant_id
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,12 @@ class AutobusNLUSystem:
         self.intent_processor = IntentProcessor(db_session=db_session)
         self.date_selection_manager = DateSelectionManager()
         self.db_session = db_session
+        self._conversation_rag = ConversationVectorClient()
+
+    @staticmethod
+    def _rag_conversations_enabled() -> bool:
+        v = (os.getenv("RAG_CONVERSATIONS_ENABLED") or "").strip().lower()
+        return v in ("1", "true", "yes", "on")
 
     @staticmethod
     def _is_declining_more_help(text: str) -> bool:
@@ -1280,6 +1288,59 @@ class AutobusNLUSystem:
         user_data = self._get_user_data(user_id)
         
         if intent in conversational_intents:
+            rag_first = self._rag_conversations_enabled()
+            if rag_first and self._conversation_rag.enabled():
+                internal_user_id = (user_data or {}).get("db_user_id")
+                if not internal_user_id:
+                    try:
+                        db = SessionLocal()
+                        user_service = UserService(db)
+                        user = user_service.get_user_by_phone(user_id)
+                        internal_user_id = str(user.id) if user else user_id
+                        db.close()
+                    except Exception as e:
+                        logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
+                        internal_user_id = user_id
+
+                tenant_id = resolve_rag_tenant_id(user_data)
+                rag_context = None
+                if tenant_id:
+                    try:
+                        hits = self._conversation_rag.search(
+                            tenant_id=tenant_id,
+                            query=user_message,
+                        )
+                        rag_context = self._conversation_rag.format_context(hits)
+                    except Exception as e:
+                        logger.warning(f"[RAG] search failed for {user_id}: {e}", exc_info=True)
+
+                msg = self.intent_processor.process_conversational_intent(
+                    intent,
+                    user_message,
+                    conversation_history,
+                    slots,
+                    user_id=internal_user_id,
+                    user_data=user_data,
+                    rag_context=rag_context,
+                )
+
+                if tenant_id:
+                    try:
+                        meta: Dict[str, Any] = {"user_phone": user_id}
+                        if internal_user_id:
+                            meta["db_user_id"] = str(internal_user_id)
+                        self._conversation_rag.upsert_turns(
+                            tenant_id=tenant_id,
+                            points=[
+                                {"text": user_message, "role": "user", "metadata": meta},
+                                {"text": msg, "role": "assistant", "metadata": meta},
+                            ],
+                        )
+                    except Exception as e:
+                        logger.warning(f"[RAG] upsert failed for {user_id}: {e}", exc_info=True)
+
+                return IntentHandlerResult(msg, None)
+
             # Route conversational traffic to Chatwoot if the user has a provisioned tenant.
             try:
                 routed = self._route_conversational_intent_to_chatwoot(
@@ -1313,7 +1374,7 @@ class AutobusNLUSystem:
                 slots,
                 user_id=internal_user_id,
                 user_data=user_data,
-                use_rag=False,
+                rag_context=None,
             )
             return IntentHandlerResult(msg, None)
         elif intent in financial_tips_intents:
@@ -1741,6 +1802,7 @@ class AutobusNLUSystem:
                     "db_user_id": user.id,
                     "email": user.email,
                     "fullname": user.fullname,
+                    "company": user.company,
                     "created_at": user.created_at.isoformat() if user.created_at else None,
                     # Add any additional user fields you need
                 }
