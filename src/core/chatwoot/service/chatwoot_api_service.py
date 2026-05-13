@@ -214,6 +214,10 @@ class ChatwootAccountClient:
         payload = data.get("payload")
         return payload if isinstance(payload, list) else []
 
+    def get_profile(self, *, timeout_s: float = 20.0) -> Dict[str, Any]:
+        """Resolve the Chatwoot user behind this `api_access_token` (application API)."""
+        return self._request("GET", "/api/v1/profile", timeout_s=timeout_s)
+
     def create_inbox_api_channel(
         self,
         *,

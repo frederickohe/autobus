@@ -156,8 +156,7 @@ class SubscriptionService:
                     f"(POSTIZ_BASE_URL={os.getenv('POSTIZ_BASE_URL','').strip()!r}): {e}"
                 )
 
-            # Optional: Provision a matching tenant in Chatwoot on first paid subscription.
-            # If a mapping already exists, do nothing.
+            # Chatwoot tenant is provisioned here only (not at signup). If a mapping already exists, skip.
             try:
                 base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
                 token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()

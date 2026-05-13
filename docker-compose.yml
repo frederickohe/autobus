@@ -149,6 +149,10 @@ services:
       # If not shared network (Docker Desktop): CHATWOOT_BASE_URL=http://host.docker.internal:3000
       CHATWOOT_BASE_URL: ${CHATWOOT_BASE_URL:-http://rails:3000}
       CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
+      # Browser-facing Chatwoot URL for login / inbox setup links (falls back to CHATWOOT_BASE_URL in code if unset).
+      CHATWOOT_PUBLIC_URL: ${CHATWOOT_PUBLIC_URL:-http://localhost:3000}
+      # Optional: public origin of this API for Meta → Autobus webhook hints (WhatsApp channel-link response).
+      AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-}
 
       # Qdrant RAG stack: use `http://rag-api:8088` only when backend joins `greenbrain_rag`
       # (see `networks` below). Otherwise use a host-reachable URL, e.g.

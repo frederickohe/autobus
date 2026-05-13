@@ -20,15 +20,6 @@ import secrets
 import string
 import logging
 import os
-import uuid
-
-from core.chatwoot.model.ChatwootAccount import ChatwootAccount
-from core.chatwoot.service.chatwoot_api_service import (
-    ChatwootClient,
-    chatwoot_enabled,
-    derive_chatwoot_password,
-)
-from utilities.crypto import encrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -145,53 +136,6 @@ class AuthService:
         except Exception as e:
             logger.error(f"OTP send error during signup for user {db_user.id}: {e}", exc_info=True)
 
-        # Optional: Provision a matching tenant in Chatwoot (self-hosted)
-        # Controlled via env vars:
-        # - CHATWOOT_BASE_URL (e.g. http://host.docker.internal:3000)
-        # - CHATWOOT_PLATFORM_API_TOKEN (from Chatwoot super admin platform app)
-        try:
-            if chatwoot_enabled():
-                base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
-                token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
-                if base_url and token:
-                    account_name = (
-                        getattr(request, "company", None)
-                        or getattr(request, "fullname", None)
-                        or "Autobus Client"
-                    ).strip()
-                    chatwoot_password = derive_chatwoot_password(
-                        user_id=db_user.id,
-                        email=request.email,
-                        autobus_password_hash=db_user.hashed_password,
-                    )
-                    client = ChatwootClient(base_url=base_url, platform_api_token=token)
-
-                    import asyncio
-
-                    cw_account_id, cw_user_id, cw_access_token = asyncio.run(
-                        client.provision_account_and_user(
-                            account_name=account_name,
-                            email=request.email,
-                            name=request.fullname,
-                            password=chatwoot_password,
-                            support_email=request.email,
-                        )
-                    )
-
-                    mapping = ChatwootAccount(
-                        id=f"cw_{str(uuid.uuid4())[:12]}",
-                        user_id=db_user.id,
-                        chatwoot_account_id=int(cw_account_id),
-                        chatwoot_user_id=int(cw_user_id),
-                        chatwoot_user_access_token_encrypted=encrypt_secret(cw_access_token)
-                        or cw_access_token,
-                    )
-                    self.db.add(mapping)
-                    self.db.commit()
-        except Exception as e:
-            # Do not block signup if Chatwoot is down/misconfigured.
-            logger.warning(f"[CHATWOOT] Provisioning skipped/failed for user {db_user.id}: {e}")
-        
         otp_sent = bool(getattr(otp_send_result, "success", False)) if otp_send_result is not None else False
         otp_message = (
             "User account created successfully. Please verify your phone number with the OTP sent to you."
