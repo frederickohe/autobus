@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any, List, Optional
@@ -9,6 +10,21 @@ from typing import Any, List, Optional
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Cap JSON length for DEBUG logs (full vectors / long transcripts can be huge).
+_UPSERT_DEBUG_LOG_MAX_CHARS = 120_000
+
+
+def format_points_upsert_payload_for_log(tenant_id: str, points: list[dict[str, Any]]) -> str:
+    """JSON body as sent to POST /v1/points/upsert, truncated for safe logging."""
+    body: dict[str, Any] = {"tenant_id": tenant_id, "points": points}
+    raw = json.dumps(body, ensure_ascii=False, default=str)
+    if len(raw) > _UPSERT_DEBUG_LOG_MAX_CHARS:
+        return (
+            raw[:_UPSERT_DEBUG_LOG_MAX_CHARS]
+            + f"... [truncated, total JSON length {len(raw)} chars]"
+        )
+    return raw
 
 
 class ConversationVectorClient:
@@ -86,6 +102,13 @@ class ConversationVectorClient:
         with httpx.Client(timeout=120.0) as client:
             for i in range(0, len(points), bs):
                 batch = points[i : i + bs]
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "RAG POST /v1/points/upsert batch offset=%d size=%s body=%s",
+                        i,
+                        len(batch),
+                        format_points_upsert_payload_for_log(tenant_id, batch),
+                    )
                 r = client.post(
                     url,
                     json={"tenant_id": tenant_id, "points": batch},

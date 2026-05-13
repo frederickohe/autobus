@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _slug_part(value: str, *, max_len: int = 96) -> str:
@@ -34,8 +37,12 @@ def resolve_effective_rag_tenant_id(
     if db_uid is None and fallback_db_user_id is not None:
         db_uid = fallback_db_user_id
     if use_internal and db_uid is not None:
-        return f"user:{db_uid}"
-    return resolve_rag_tenant_id(user_data)
+        result: Optional[str] = f"user:{db_uid}"
+    else:
+        result = resolve_rag_tenant_id(user_data)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("RAG resolve_effective_rag_tenant_id -> %r", result)
+    return result
 
 
 def resolve_rag_tenant_id(user_data: Optional[Dict[str, Any]]) -> Optional[str]:

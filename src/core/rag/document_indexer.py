@@ -7,7 +7,10 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 from core.rag.chunking import chunk_text_for_rag
-from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.conversation_vector_client import (
+    ConversationVectorClient,
+    format_points_upsert_payload_for_log,
+)
 from core.rag.tenant import resolve_effective_rag_tenant_id
 
 logger = logging.getLogger(__name__)
@@ -68,6 +71,11 @@ def index_extracted_text_for_user(
         )
 
     try:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "RAG document index points/upsert payload (full batch before HTTP chunking): %s",
+                format_points_upsert_payload_for_log(tenant_id, points),
+            )
         n = client.upsert_points_batched(tenant_id=tenant_id, points=points)
         return n, ("truncated_to_max_chunks" if truncated else None)
     except Exception as e:
