@@ -1,10 +1,12 @@
+import io
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status, Query, File
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
 from another_fastapi_jwt_auth import AuthJWT
-from core.cloudstorage.dto.filedto import FileDTO
+from core.cloudstorage.dto.filedto import FileDTO, FileUploadRagResponse
 from core.exceptions import *
 from core.notification.dto.request.notificationcreate import NotificationCreateRequest
 from core.notification.dto.request.notificationupdate import NotificationUpdateRequest
@@ -23,6 +25,11 @@ from core.notification.service.notification_service import NotificationService
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.cloudstorage.service.storageservice import StorageService
 from core.cloudstorage.service.storageservice import StorageFolder
+from core.cloudstorage.service.file_content_extractor import FileContentExtractor
+from core.subscription.service.subscription_service import SubscriptionService
+from core.user.service.user_service import UserService
+from core.rag.document_indexer import index_extracted_text_for_user
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
@@ -57,6 +64,70 @@ async def upload_file(
         folder=folder,
     )
     return FileDTO(file_name=safe_name, file_url=url, folder=folder.value if folder else None)
+
+
+@storage_routes.post("/me/upload-rag-document", response_model=FileUploadRagResponse)
+async def upload_rag_document_for_subscribed_user(
+    file: UploadFile = File(...),
+    folder: StorageFolder = Query(default=StorageFolder.chatbot_files),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a document to object storage and index extractable text into Qdrant for the
+    authenticated user (tenant id `user:{internal_user_id}` by default).
+
+    Requires an active subscription. Supported extraction matches FileContentExtractor
+    (txt, pdf, docx, csv, xlsx).
+    """
+    subject = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    user = user_service.get_current_user(subject)
+
+    sub = SubscriptionService(db).get_user_active_subscription(str(user.id))
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active subscription is required to index documents for RAG.",
+        )
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
+
+    safe_name = os.path.basename(file.filename or "upload")
+    user_prefix = _safe_user_prefix(subject)
+    key_name = f"{user_prefix}{safe_name}"
+
+    url = storage_service.upload_file(
+        io.BytesIO(raw),
+        key_name,
+        content_type=file.content_type,
+        folder=folder,
+    )
+    object_key = f"{storage_service.resolve_subfolder(folder=folder)}{key_name}"
+
+    extracted = FileContentExtractor.extract_content(file, raw)
+    user_data = {
+        "db_user_id": user.id,
+        "company": user.company,
+        "user_id": user.phone,
+    }
+    n_chunks, rag_detail = index_extracted_text_for_user(
+        user_data=user_data,
+        object_key=object_key,
+        file_name=safe_name,
+        extracted_text=extracted or "",
+    )
+
+    return FileUploadRagResponse(
+        file_name=safe_name,
+        file_url=url,
+        folder=folder.value,
+        object_key=object_key,
+        rag_indexed_chunks=n_chunks,
+        rag_detail=rag_detail,
+    )
 
 
 @storage_routes.post("/me/upload-multiple", response_model=List[FileDTO])

@@ -47,7 +47,17 @@ class ConversationVectorClient:
             text = (h.get("text") or "").strip()
             if not text:
                 continue
-            lines.append(f"- ({role} | {score:.3f}) {text}")
+            pl = h.get("payload") or {}
+            meta = pl.get("metadata")
+            tag = ""
+            if isinstance(meta, dict):
+                src = meta.get("source")
+                fn = meta.get("file_name")
+                if src == "document" and fn:
+                    tag = f"document:{fn} | "
+                elif src:
+                    tag = f"{src} | "
+            lines.append(f"- ({tag}{role} | {score:.3f}) {text}")
         if not lines:
             return None
         return "\n".join(lines)
@@ -58,10 +68,30 @@ class ConversationVectorClient:
         tenant_id: str,
         points: List[dict[str, Any]],
     ) -> None:
-        if not self.base:
-            return
+        self.upsert_points_batched(tenant_id=tenant_id, points=points, batch_size=8)
+
+    def upsert_points_batched(
+        self,
+        *,
+        tenant_id: str,
+        points: List[dict[str, Any]],
+        batch_size: int = 64,
+    ) -> int:
+        """POST /v1/points/upsert in batches. Returns total points accepted."""
+        if not self.base or not points:
+            return 0
         url = f"{self.base}/v1/points/upsert"
-        body = {"tenant_id": tenant_id, "points": points}
-        with httpx.Client(timeout=45.0) as client:
-            r = client.post(url, json=body, headers=self._headers())
-            r.raise_for_status()
+        total = 0
+        bs = max(1, min(batch_size, 200))
+        with httpx.Client(timeout=120.0) as client:
+            for i in range(0, len(points), bs):
+                batch = points[i : i + bs]
+                r = client.post(
+                    url,
+                    json={"tenant_id": tenant_id, "points": batch},
+                    headers=self._headers(),
+                )
+                r.raise_for_status()
+                data = r.json()
+                total += int(data.get("upserted") or len(batch))
+        return total

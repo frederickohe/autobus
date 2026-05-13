@@ -42,7 +42,7 @@ from decimal import Decimal
 from core.customers.utility.network_detector import NetworkDetector
 from utilities.crypto import decrypt_secret
 from core.rag.conversation_vector_client import ConversationVectorClient
-from core.rag.tenant import resolve_rag_tenant_id
+from core.rag.tenant import resolve_effective_rag_tenant_id
 
 
 logger = logging.getLogger(__name__)
@@ -1302,13 +1302,17 @@ class AutobusNLUSystem:
                         logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
                         internal_user_id = user_id
 
-                tenant_id = resolve_rag_tenant_id(user_data)
+                tenant_id = resolve_effective_rag_tenant_id(
+                    user_data,
+                    fallback_db_user_id=str(internal_user_id) if internal_user_id is not None else None,
+                )
                 rag_context = None
                 if tenant_id:
                     try:
                         hits = self._conversation_rag.search(
                             tenant_id=tenant_id,
                             query=user_message,
+                            limit=12,
                         )
                         rag_context = self._conversation_rag.format_context(hits)
                     except Exception as e:

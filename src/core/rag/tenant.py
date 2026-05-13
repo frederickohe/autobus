@@ -14,6 +14,30 @@ def _slug_part(value: str, *, max_len: int = 96) -> str:
     return s[:max_len]
 
 
+def resolve_effective_rag_tenant_id(
+    user_data: Optional[Dict[str, Any]],
+    *,
+    fallback_db_user_id: Optional[Any] = None,
+) -> Optional[str]:
+    """
+    Tenant id used for Qdrant payload filter + upserts.
+
+    When RAG_USE_INTERNAL_USER_TENANT is true (default), always use internal DB user id:
+      user:{db_user_id}
+    so uploaded documents and WhatsApp conversational RAG share the same namespace.
+
+    Set RAG_USE_INTERNAL_USER_TENANT=false to use resolve_rag_tenant_id() only (company/user modes).
+    """
+    raw = (os.getenv("RAG_USE_INTERNAL_USER_TENANT") or "true").strip().lower()
+    use_internal = raw in ("1", "true", "yes", "on")
+    db_uid = (user_data or {}).get("db_user_id")
+    if db_uid is None and fallback_db_user_id is not None:
+        db_uid = fallback_db_user_id
+    if use_internal and db_uid is not None:
+        return f"user:{db_uid}"
+    return resolve_rag_tenant_id(user_data)
+
+
 def resolve_rag_tenant_id(user_data: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Build a stable tenant key for Qdrant payload filtering.
