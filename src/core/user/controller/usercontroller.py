@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 # DTO Models
 from core.user.dto.response.message_response import MessageResponse
 from core.user.dto.response.user_response import UserResponse
+from core.user.dto.response.sent_emails_response import SentEmailsResponse, SentEmailItem
 
 from core.user.service.user_service import UserService
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
@@ -33,6 +34,7 @@ from core.histories.service.historyservice import HistoryService
 from core.histories.dto.response.historyresponse import HistoryResponseDTO
 from core.receipts.service.receipt_service import ReceiptService
 from core.receipts.dto.response.receiptresponse import ReceiptResponse
+from core.agent.tools.email.email import EmailTool
 
 def validate_token(authjwt: AuthJWT = Depends()):
     try:
@@ -75,6 +77,40 @@ def get_current_user_endpoint(authjwt: AuthJWT = Depends(validate_token), db: Se
     
     # Use the email to get the user
     return user_service.get_current_user(current_user_email)
+
+
+@user_routes.get("/me/emails/sent", response_model=SentEmailsResponse)
+def list_my_sent_emails(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """
+    Recent emails sent through Autobus EmailTool (ZeptoMail), keyed by your account phone.
+
+    History is populated when a send succeeds from the NLU/agent flow; max 100 retained in Redis.
+    """
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    user = user_service.get_current_user(current_user_email)
+    phone = (user.phone or "").strip()
+    if not phone:
+        return SentEmailsResponse(emails=[], total_returned=0)
+
+    tool = EmailTool(db_pool=db)
+    rows = tool.list_sent_emails_for_user(phone, limit=limit)
+    items: List[SentEmailItem] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        items.append(
+            SentEmailItem(
+                to=str(r.get("to") or ""),
+                subject=str(r.get("subject") or ""),
+                sent_at=str(r.get("sent_at") or ""),
+            )
+        )
+    return SentEmailsResponse(emails=items, total_returned=len(items))
 
 
 @user_routes.get("/me/notifications", response_model=PagedNotificationResponse)
