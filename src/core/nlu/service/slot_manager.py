@@ -27,6 +27,25 @@ def is_placeholder_order_item_name(name: str) -> bool:
     return n in _PLACEHOLDER_ORDER_ITEM_NAMES
 
 
+_ACRONYM_SLOT_WORDS = frozenset({"id", "url", "pin", "sms", "ecg", "dst", "got"})
+
+
+def format_slot_label(slot: str) -> str:
+    """Turn snake_case slot keys into user-facing labels (e.g. phone_number -> Phone number)."""
+    if not slot:
+        return ""
+    words: List[str] = []
+    for part in slot.strip().split("_"):
+        if not part:
+            continue
+        lower = part.lower()
+        if lower in _ACRONYM_SLOT_WORDS:
+            words.append(lower.upper())
+        else:
+            words.append(lower.capitalize())
+    return " ".join(words)
+
+
 class SlotManager:
     def __init__(self):
         self.intents = INTENTS
@@ -93,24 +112,16 @@ class SlotManager:
         
         return None
     
-    def generate_slot_prompt(self, intent: str, missing_slots: List[str]) -> str:
-        """Generate natural language prompt for missing slots with intent-aware context"""
-        
-        # If no missing slots provided, ask for the entire operation again
-        if not missing_slots:
-            return "can you be more detailed about your request?"
+    def _quantity_prompt(self, intent: str) -> str:
+        if intent in ("add_product", "update_product"):
+            return "How many units are you adding?"
+        if intent in ("create_order", "update_order"):
+            return "How many units should be ordered?"
+        return "How many units?"
 
-        # Available bill providers and their codes
-        bill_providers = {
-            "GoTV": "GOT",
-            "DStv": "DST",
-            "ECG": "ECG",
-            "Ghana Water": "GHW",
-            "Surfline": "SFL",
-            "Telesol": "TLS",
-            "Startimes": "STT",
-            "Box Office": "BXO",
-        }
+    def _slot_description(self, intent: str, slot: str, bill_providers: Dict[str, str]) -> str:
+        if slot == "quantity":
+            return self._quantity_prompt(intent)
 
         slot_descriptions = {
             "recipient": "Who would you like to send money to? Please provide the phone number.",
@@ -133,21 +144,44 @@ class SlotManager:
             "time_period": "For what time period?",
             "customer_name": "What is the name of the customer (from your saved contacts)?",
             "item_name": "What product or item is being ordered?",
-            "quantity": "How many units should be ordered?",
+            "product_name": "What is the product name?",
+            "product_id": "Which product (ID or name)?",
+            "price": "What is the price?",
+            "condition": "What is the product condition? (e.g. new, used)",
+            "description": "What is the product description?",
             "update_field": "What would you like to update? (name, number)",
             "new_customer_name": "What should the new customer name be?",
             "customer_number": "Customer mobile number?",
             "airtime_receiver_name": "What is the name of the person receiving the airtime?",
         }
 
-        prompts = []
-        for slot in missing_slots:
-            if slot in slot_descriptions:
-                prompts.append(slot_descriptions[slot])
-            else:
-                prompts.append(f"What's the {slot}?")
+        if slot in slot_descriptions:
+            return slot_descriptions[slot]
+        label = format_slot_label(slot)
+        return f"What is the {label.lower()}?"
 
-        return " ".join(prompts)
+    def generate_slot_prompt(self, intent: str, missing_slots: List[str]) -> str:
+        """Generate natural language prompt for missing slots with intent-aware context"""
+
+        if not missing_slots:
+            return "can you be more detailed about your request?"
+
+        bill_providers = {
+            "GoTV": "GOT",
+            "DStv": "DST",
+            "ECG": "ECG",
+            "Ghana Water": "GHW",
+            "Surfline": "SFL",
+            "Telesol": "TLS",
+            "Startimes": "STT",
+            "Box Office": "BXO",
+        }
+
+        if len(missing_slots) == 1:
+            return self._slot_description(intent, missing_slots[0], bill_providers)
+
+        lines = [f"• {format_slot_label(slot)}" for slot in missing_slots]
+        return "I still need the following:\n" + "\n".join(lines)
 
     def _generate_bill_type_prompt(self, bill_providers: Dict[str, str]) -> str:
         """Generate prompt with list of available bill providers on separate lines"""

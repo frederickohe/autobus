@@ -30,6 +30,7 @@ from core.integrations.controller.integration_test_controller import integration
 from core.product.controller.product_controller import product_routes
 from core.orders.controller.order_controller import order_routes
 from core.interventions.controller.intervention_controller import intervention_routes
+from core.conversationmanager.controller.conversation_controller import conversation_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -119,6 +120,7 @@ app.include_router(integration_routes, prefix="/api/v1/integrations", tags=["Int
 app.include_router(product_routes, prefix="/api/v1/products", tags=["Product Routes"])
 app.include_router(order_routes, prefix="/api/v1/orders", tags=["Order Routes"])
 app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["Interventions Routes"])
+app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["Conversation Routes"])
 
 # JWT Authentication Settings
 class JWTSettings(BaseSettings):
