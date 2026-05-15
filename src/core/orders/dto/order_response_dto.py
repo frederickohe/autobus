@@ -11,7 +11,8 @@ class OrderResponseDTO(BaseModel):
     # Primary Identifiers
     order_id: str
     order_number: str
-    
+    user_id: Optional[str] = None
+
     # Customer Relationship
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
@@ -110,6 +111,7 @@ class OrderResponseDTO(BaseModel):
         return cls(
             order_id=str(order.order_id),
             order_number=order.order_number,
+            user_id=getattr(order, "user_id", None),
             customer_id=order.customer_id,
             customer_name=order.customer_name,
             customer_phone=order.customer_phone,

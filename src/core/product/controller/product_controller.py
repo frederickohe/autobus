@@ -48,33 +48,32 @@ def get_product_by_name(
         )
 
 
-@product_routes.get("/user/{user_id}", response_model=List[ProductResponseDTO])
-def list_products_by_user(
-    user_id: str = Path(..., description="User ID, email, or phone number"),
+@product_routes.get("/me", response_model=List[ProductResponseDTO])
+def list_my_products(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     category: str = Query(None, description="Filter by category"),
     db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token),
 ):
-    """Get all products for a particular user."""
-    _ = authjwt
+    """Get all products for the authenticated user."""
     try:
-        logger.info(f"[PRODUCT_CONTROLLER] Listing products for user: {user_id}")
+        user_id = authjwt.get_jwt_subject()
+        logger.info(f"[PRODUCT_CONTROLLER] Listing products for current user: {user_id}")
 
         product_service = ProductService(db)
         products = product_service.get_products_by_user(user_id, skip, limit, category)
 
-        logger.info(f"[PRODUCT_CONTROLLER] Found {len(products)} products for user {user_id}")
+        logger.info(f"[PRODUCT_CONTROLLER] Found {len(products)} products for current user")
         return [ProductResponseDTO.from_product(p) for p in products]
 
     except Exception as e:
         logger.error(
-            f"[PRODUCT_CONTROLLER] Error listing products for user: {str(e)}", exc_info=True
+            f"[PRODUCT_CONTROLLER] Error listing current user products: {str(e)}", exc_info=True
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving products for user: {str(e)}",
+            detail=f"Error retrieving your products: {str(e)}",
         )
 
 

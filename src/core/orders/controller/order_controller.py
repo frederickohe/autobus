@@ -27,8 +27,9 @@ def create_order(
     try:
         logger.info(f"[ORDER_CONTROLLER] Creating order for customer phone: {request.customer_phone}")
 
+        owner_id = authjwt.get_jwt_subject()
         order_service = OrderService(db)
-        success, order, message = order_service.create_order(request)
+        success, order, message = order_service.create_order(request, user_id=owner_id)
 
         if not success:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
@@ -87,6 +88,35 @@ def list_admin_completed_orders(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving completed orders: {str(e)}"
+        )
+
+
+@order_routes.get("/me", response_model=List[OrderResponseDTO])
+def list_my_orders(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    order_status: str = Query(None, description="Filter by order status"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Get all orders for the authenticated user (merchant)."""
+    try:
+        user_id = authjwt.get_jwt_subject()
+        logger.info(f"[ORDER_CONTROLLER] Listing orders for current user: {user_id}")
+
+        order_service = OrderService(db)
+        orders = order_service.get_orders_by_user(user_id, skip, limit, order_status)
+
+        logger.info(f"[ORDER_CONTROLLER] Found {len(orders)} orders for current user")
+        return [OrderResponseDTO.from_order(o) for o in orders]
+
+    except Exception as e:
+        logger.error(
+            f"[ORDER_CONTROLLER] Error listing current user orders: {str(e)}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error retrieving your orders: {str(e)}",
         )
 
 

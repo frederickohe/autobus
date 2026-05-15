@@ -5,7 +5,7 @@ from typing import Optional
 
 from sqlalchemy import (
     Boolean, Column, DateTime, Enum as SQLEnum, String, Integer,
-    DECIMAL, JSON, ARRAY, Text, text
+    DECIMAL, JSON, ARRAY, Text, text, ForeignKey,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship, Mapped, mapped_column
@@ -80,6 +80,12 @@ class Order(Base):
         index=True
     )
     order_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
 
     # Customer Relationship
     customer_id: Mapped[Optional[str]] = mapped_column(

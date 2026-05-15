@@ -714,6 +714,7 @@ class IntentProcessor:
 
         db = next(get_db())
         order_service = OrderService(db)
+        product_service = ProductService(db)
 
         line_quantity = self._to_int(quantity, default=0)
         if line_quantity <= 0:
@@ -747,7 +748,14 @@ class IntentProcessor:
         except Exception as e:
             return f"❌ Invalid order details: {str(e)}"
 
-        success, order, message = order_service.create_order(order_data)
+        seller_user_id = user_id
+        matched_products = product_service.get_product_by_name(item_name, skip=0, limit=1)
+        if matched_products and getattr(matched_products[0], "user_id", None):
+            seller_user_id = matched_products[0].user_id
+
+        success, order, message = order_service.create_order(
+            order_data, user_id=seller_user_id
+        )
         if not success:
             return f"❌ {message}"
         if not order:
