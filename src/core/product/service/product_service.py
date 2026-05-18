@@ -1,13 +1,15 @@
 """Product Service"""
-from typing import List, Optional, Tuple
-from sqlalchemy.orm import Session
+from typing import List, Optional, Tuple, Any
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import desc
 from datetime import datetime
 import logging
 import uuid
 import re
+import os
 
-from core.product.model.product import Product, Inventory
+from core.cloudstorage.service.storageservice import StorageFolder, StorageService
+from core.product.model.product import Product, Inventory, ProductImage
 from core.product.dto.product_create_dto import ProductCreateDTO
 from core.product.dto.product_update_dto import ProductUpdateDTO
 from core.product.dto.inventory_create_dto import InventoryCreateDTO
@@ -78,6 +80,184 @@ class ProductService:
         inventory_id = inventory_id.strip('-')
         return f"{inventory_id}"
 
+    def _verify_product_owner(self, product: Product, user_id: Optional[str]) -> Optional[str]:
+        if not user_id:
+            return None
+        resolved_user_id = self._resolve_user_db_id(user_id)
+        if resolved_user_id and product.user_id and product.user_id != resolved_user_id:
+            return "You do not have permission to update this product"
+        return None
+
+    def _sync_primary_photo(self, product: Product) -> None:
+        images = (
+            self.db.query(ProductImage)
+            .filter(ProductImage.product_id == product.product_id)
+            .order_by(ProductImage.is_primary.desc(), ProductImage.sort_order, ProductImage.created_at)
+            .all()
+        )
+        if images:
+            primary = next((img for img in images if img.is_primary), images[0])
+            product.photo = primary.url
+        product.updated_at = datetime.utcnow()
+
+    def _attach_product_images(
+        self, product_id: uuid.UUID, urls: List[str], *, replace: bool = False
+    ) -> None:
+        if replace:
+            self.db.query(ProductImage).filter(ProductImage.product_id == product_id).delete()
+
+        for index, url in enumerate(urls):
+            self.db.add(
+                ProductImage(
+                    product_id=product_id,
+                    url=url,
+                    sort_order=index,
+                    is_primary=index == 0,
+                )
+            )
+
+    def add_product_image(
+        self,
+        product_id: str,
+        url: str,
+        user_id: Optional[str] = None,
+        *,
+        set_primary: bool = False,
+    ) -> Tuple[bool, Optional[ProductImage], Optional[Product], str]:
+        """Append an image URL to a product gallery."""
+        try:
+            product = self.get_product_by_id(product_id)
+            if not product:
+                return False, None, None, "Product not found"
+
+            permission_error = self._verify_product_owner(product, user_id)
+            if permission_error:
+                return False, None, None, permission_error
+
+            existing_count = (
+                self.db.query(ProductImage)
+                .filter(ProductImage.product_id == product.product_id)
+                .count()
+            )
+            make_primary = set_primary or existing_count == 0
+            if make_primary:
+                self.db.query(ProductImage).filter(
+                    ProductImage.product_id == product.product_id
+                ).update({ProductImage.is_primary: False})
+
+            image = ProductImage(
+                product_id=product.product_id,
+                url=url,
+                sort_order=existing_count,
+                is_primary=make_primary,
+            )
+            self.db.add(image)
+            self._sync_primary_photo(product)
+            self.db.commit()
+            self.db.refresh(image)
+            product = self.get_product_by_id(product_id)
+            return True, image, product, "Product image added successfully"
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[PRODUCT_SERVICE] Error adding product image: {str(e)}", exc_info=True)
+            return False, None, None, f"Error adding product image: {str(e)}"
+
+    def list_product_images(self, product_id: str) -> List[ProductImage]:
+        try:
+            return (
+                self.db.query(ProductImage)
+                .filter(ProductImage.product_id == uuid.UUID(product_id))
+                .order_by(ProductImage.is_primary.desc(), ProductImage.sort_order, ProductImage.created_at)
+                .all()
+            )
+        except Exception as e:
+            logger.error(f"[PRODUCT_SERVICE] Error listing product images: {str(e)}", exc_info=True)
+            return []
+
+    def delete_product_image(
+        self, product_id: str, image_id: str, user_id: Optional[str] = None
+    ) -> Tuple[bool, Optional[Product], str]:
+        try:
+            product = self.get_product_by_id(product_id)
+            if not product:
+                return False, None, "Product not found"
+
+            permission_error = self._verify_product_owner(product, user_id)
+            if permission_error:
+                return False, None, permission_error
+
+            image = (
+                self.db.query(ProductImage)
+                .filter(
+                    ProductImage.image_id == uuid.UUID(image_id),
+                    ProductImage.product_id == product.product_id,
+                )
+                .first()
+            )
+            if not image:
+                return False, None, "Product image not found"
+
+            was_primary = image.is_primary
+            self.db.delete(image)
+            self.db.flush()
+
+            if was_primary:
+                remaining = (
+                    self.db.query(ProductImage)
+                    .filter(ProductImage.product_id == product.product_id)
+                    .order_by(ProductImage.sort_order, ProductImage.created_at)
+                    .first()
+                )
+                if remaining:
+                    remaining.is_primary = True
+                else:
+                    product.photo = "https://placeholder.local/product.png"
+
+            self._sync_primary_photo(product)
+            self.db.commit()
+            product = self.get_product_by_id(product_id)
+            return True, product, "Product image deleted successfully"
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[PRODUCT_SERVICE] Error deleting product image: {str(e)}", exc_info=True)
+            return False, None, f"Error deleting product image: {str(e)}"
+
+    def set_primary_product_image(
+        self, product_id: str, image_id: str, user_id: Optional[str] = None
+    ) -> Tuple[bool, Optional[Product], str]:
+        try:
+            product = self.get_product_by_id(product_id)
+            if not product:
+                return False, None, "Product not found"
+
+            permission_error = self._verify_product_owner(product, user_id)
+            if permission_error:
+                return False, None, permission_error
+
+            image = (
+                self.db.query(ProductImage)
+                .filter(
+                    ProductImage.image_id == uuid.UUID(image_id),
+                    ProductImage.product_id == product.product_id,
+                )
+                .first()
+            )
+            if not image:
+                return False, None, "Product image not found"
+
+            self.db.query(ProductImage).filter(
+                ProductImage.product_id == product.product_id
+            ).update({ProductImage.is_primary: False})
+            image.is_primary = True
+            self._sync_primary_photo(product)
+            self.db.commit()
+            product = self.get_product_by_id(product_id)
+            return True, product, "Primary product image updated"
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[PRODUCT_SERVICE] Error setting primary image: {str(e)}", exc_info=True)
+            return False, None, f"Error setting primary image: {str(e)}"
+
     # ==================== PRODUCT METHODS ====================
 
     def create_product(
@@ -115,11 +295,13 @@ class ProductService:
             if existing:
                 return False, None, f"Product with inventory_id {inventory_id} already exists. Try a different product name."
 
+            photo_urls = product_data.resolved_photo_urls()
+
             # Create product
             product = Product(
                 inventory_id=inventory_id,
                 user_id=resolved_user_id,
-                photo=product_data.photo,
+                photo=photo_urls[0],
                 name=product_data.name,
                 description=product_data.description,
                 price=product_data.price,
@@ -131,6 +313,8 @@ class ProductService:
 
             self.db.add(product)
             self.db.flush()  # Flush to get the product_id before creating inventory
+
+            self._attach_product_images(product.product_id, photo_urls)
             
             # Automatically create an inventory record for the new product
             inventory = Inventory(
@@ -168,7 +352,12 @@ class ProductService:
         """Get a product by its ID."""
         try:
             logger.info(f"[PRODUCT_SERVICE] Fetching product: {product_id}")
-            product = self.db.query(Product).filter(Product.product_id == uuid.UUID(product_id)).first()
+            product = (
+                self.db.query(Product)
+                .options(joinedload(Product.images))
+                .filter(Product.product_id == uuid.UUID(product_id))
+                .first()
+            )
             return product
         except Exception as e:
             logger.error(f"[PRODUCT_SERVICE] Error fetching product: {str(e)}", exc_info=True)
@@ -261,9 +450,29 @@ class ProductService:
             if not product:
                 return False, None, "Product not found"
 
-            # Update fields
-            if update_data.photo is not None:
-                product.photo = update_data.photo
+            if update_data.photos is not None:
+                self._attach_product_images(
+                    product.product_id, update_data.photos, replace=True
+                )
+                self._sync_primary_photo(product)
+            elif update_data.photo is not None:
+                existing_count = (
+                    self.db.query(ProductImage)
+                    .filter(ProductImage.product_id == product.product_id)
+                    .count()
+                )
+                self.db.query(ProductImage).filter(
+                    ProductImage.product_id == product.product_id
+                ).update({ProductImage.is_primary: False})
+                self.db.add(
+                    ProductImage(
+                        product_id=product.product_id,
+                        url=update_data.photo,
+                        sort_order=existing_count,
+                        is_primary=True,
+                    )
+                )
+                self._sync_primary_photo(product)
 
             if update_data.name:
                 product.name = update_data.name
@@ -298,6 +507,51 @@ class ProductService:
             self.db.rollback()
             logger.error(f"[PRODUCT_SERVICE] Error updating product: {str(e)}", exc_info=True)
             return False, None, f"Error updating product: {str(e)}"
+
+    def upload_product_photo(
+        self,
+        product_id: str,
+        file_obj: Any,
+        file_name: str,
+        content_type: Optional[str] = None,
+        user_id: Optional[str] = None,
+        *,
+        set_primary: bool = False,
+    ) -> Tuple[bool, Optional[ProductImage], Optional[Product], str]:
+        """Upload a product image file and append it to the product gallery."""
+        try:
+            product = self.get_product_by_id(product_id)
+            if not product:
+                return False, None, None, "Product not found"
+
+            permission_error = self._verify_product_owner(product, user_id)
+            if permission_error:
+                return False, None, None, permission_error
+
+            safe_name = os.path.basename(file_name or "product.jpg")
+            owner_prefix = (product.user_id or user_id or "unknown").replace("/", "_")
+            image_count = (
+                self.db.query(ProductImage)
+                .filter(ProductImage.product_id == product.product_id)
+                .count()
+            )
+            storage_key = f"{owner_prefix}/{product_id}_{image_count}_{safe_name}"
+
+            storage_service = StorageService()
+            photo_url = storage_service.upload_file(
+                file_obj=file_obj,
+                file_name=storage_key,
+                content_type=content_type,
+                folder=StorageFolder.product_images,
+            )
+
+            return self.add_product_image(
+                product_id, photo_url, user_id=user_id, set_primary=set_primary
+            )
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[PRODUCT_SERVICE] Error uploading product photo: {str(e)}", exc_info=True)
+            return False, None, None, f"Error uploading product photo: {str(e)}"
 
     def delete_product(self, product_id: str) -> Tuple[bool, str]:
         """Delete a product (and associated inventory)."""

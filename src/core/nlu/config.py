@@ -83,13 +83,13 @@ INTENTS = {
     #==== PRODUCT MANAGEMENT AGENT INTENTS =====
     "add_product": {
         "description": "Add a new product to the inventory",
-        "slots": ["product_name", "price", "quantity","condition","category","description","photo","link"],
+        "slots": ["product_name", "price", "quantity","condition","category","description","photo","photos","link"],
         "required_slots": ["product_name", "price", "quantity","condition","category","description"],
         "category": "product_management"
     },
     "update_product": {
         "description": "Update details of an existing product",
-        "slots": ["product_id", "product_name", "price", "quantity","condition","category","description","photo","link"],
+        "slots": ["product_id", "product_name", "price", "quantity","condition","category","description","photo","photos","link"],
         "required_slots": ["product_id", "product_name", "price", "quantity","condition","category","description"],
         "category": "product_management"
     },

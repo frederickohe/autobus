@@ -1,13 +1,16 @@
 """Product Update DTO"""
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional
+from typing import Optional, List
 
 
 class ProductUpdateDTO(BaseModel):
     """Request model for updating an existing product."""
     
     # Product Details (can be updated)
-    photo: Optional[str] = Field(None, min_length=1, max_length=2048, description="Product photo URL")
+    photo: Optional[str] = Field(None, min_length=1, max_length=2048, description="Primary product photo URL")
+    photos: Optional[List[str]] = Field(
+        None, description="Replace gallery with these image URLs (2+ supported)"
+    )
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Product name")
     description: Optional[str] = Field(None, description="Product description")
     price: Optional[float] = Field(None, ge=0, description="Product price")
@@ -48,6 +51,16 @@ class ProductUpdateDTO(BaseModel):
             if not v:
                 raise ValueError('photo cannot be empty')
         return v
+
+    @field_validator("photos")
+    @classmethod
+    def validate_photos(cls, v):
+        if v is None:
+            return v
+        cleaned = [url.strip() for url in v if url and url.strip()]
+        if not cleaned:
+            raise ValueError("photos must contain at least one non-empty URL")
+        return cleaned
 
     @field_validator('condition')
     @classmethod

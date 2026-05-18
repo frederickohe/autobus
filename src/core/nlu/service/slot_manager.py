@@ -149,6 +149,8 @@ class SlotManager:
             "price": "What is the price?",
             "condition": "What is the product condition? (e.g. new, used)",
             "description": "What is the product description?",
+            "photo": "Please send a photo of the product (you can send multiple images).",
+            "photos": "Send more product photos, or say done when finished.",
             "update_field": "What would you like to update? (name, number)",
             "new_customer_name": "What should the new customer name be?",
             "customer_number": "Customer mobile number?",

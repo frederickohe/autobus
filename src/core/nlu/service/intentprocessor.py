@@ -7,6 +7,7 @@ from core.customers.service.customer_service import CustomerService
 from core.product.service.product_service import ProductService
 from core.product.dto.product_create_dto import ProductCreateDTO
 from core.product.dto.product_update_dto import ProductUpdateDTO
+from core.product.dto.product_response_dto import ProductResponseDTO
 from core.orders.service.order_service import OrderService
 from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
@@ -495,6 +496,31 @@ class IntentProcessor:
             logger.error(f"Error processing product management intent: {e}", exc_info=True)
             return f"❌ Error processing product: {str(e)[:100]}"
 
+    def _resolved_photo_urls_from_slots(self, slots: Dict[str, Any]) -> List[str]:
+        urls: List[str] = []
+        photos = slots.get("photos")
+        if isinstance(photos, list):
+            urls.extend(str(url).strip() for url in photos if url and str(url).strip())
+        elif isinstance(photos, str) and photos.strip():
+            urls.append(photos.strip())
+        photo = slots.get("photo")
+        if photo and str(photo).strip():
+            photo_str = str(photo).strip()
+            if photo_str not in urls:
+                urls.insert(0, photo_str)
+        return urls
+
+    def _format_product_photos(self, product, product_service: ProductService) -> str:
+        product = product_service.get_product_by_id(str(product.product_id)) or product
+        dto_photos = ProductResponseDTO.from_product(product).photos
+        if not dto_photos:
+            return ""
+        if len(dto_photos) == 1:
+            return f"Photo: {dto_photos[0]}"
+        lines = [f"Photos ({len(dto_photos)}):"]
+        lines.extend(f"  {index}. {url}" for index, url in enumerate(dto_photos, 1))
+        return "\n".join(lines)
+
     def _handle_add_product(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle add_product intent"""
         product_name = slots.get("product_name")
@@ -514,16 +540,20 @@ class IntentProcessor:
         db = next(get_db())
         product_service = ProductService(db)
 
+        photo_urls = self._resolved_photo_urls_from_slots(slots) or [
+            "https://placeholder.local/product.png"
+        ]
+
         try:
             product_data = ProductCreateDTO(
-                photo=slots.get("photo") or "https://placeholder.local/product.png",
+                photos=photo_urls,
                 name=product_name,
                 description=slots.get("description"),
                 price=self._to_float(price, default=0.0),
                 category=slots.get("category"),
                 condition=slots.get("condition") or "New",
                 number_in_stock=self._to_int(quantity, default=0),
-                link=slots.get("link")
+                link=slots.get("link"),
             )
         except Exception as e:
             return f"❌ Invalid product details: {str(e)}"
@@ -534,12 +564,15 @@ class IntentProcessor:
         if not product:
             return "❌ Product was created but could not be retrieved."
 
+        photos_block = self._format_product_photos(product, product_service)
+        photos_suffix = f"\n{photos_block}" if photos_block else ""
         return (
             f"✅ {message}\n"
             f"Product: {product.name}\n"
             f"Inventory ID: {product.inventory_id}\n"
             f"Price: {product.price}\n"
             f"Stock: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}"
+            f"{photos_suffix}"
         )
 
     def _handle_update_product(self, user_id: str, slots: Dict[str, Any]) -> str:
@@ -568,8 +601,11 @@ class IntentProcessor:
             update_payload["category"] = slots.get("category")
         if slots.get("description") is not None:
             update_payload["description"] = slots.get("description")
-        if slots.get("photo") is not None:
-            update_payload["photo"] = slots.get("photo")
+        photo_urls = self._resolved_photo_urls_from_slots(slots)
+        if len(photo_urls) > 1:
+            update_payload["photos"] = photo_urls
+        elif len(photo_urls) == 1:
+            update_payload["photo"] = photo_urls[0]
         if slots.get("link") is not None:
             update_payload["link"] = slots.get("link")
 
@@ -587,10 +623,13 @@ class IntentProcessor:
         if not updated_product:
             return "❌ Product was updated but could not be retrieved."
 
+        photos_block = self._format_product_photos(updated_product, product_service)
+        photos_suffix = f"\n{photos_block}" if photos_block else ""
         return (
             f"✅ {message}\n"
             f"Product: {updated_product.name}\n"
             f"Inventory ID: {updated_product.inventory_id}"
+            f"{photos_suffix}"
         )
 
     def _handle_delete_product(self, user_id: str, slots: Dict[str, Any]) -> str:
@@ -624,10 +663,15 @@ class IntentProcessor:
 
         lines = ["📦 Your Products:"]
         for index, product in enumerate(products[:20], 1):
+            image_count = len(product_service.list_product_images(str(product.product_id)))
+            if not image_count and product.photo:
+                image_count = 1
+            photo_suffix = f" | Photos: {image_count}" if image_count else ""
             lines.append(
                 f"{index}. {product.name} | ID: {product.product_id} | "
                 f"Inventory: {product.inventory_id} | Price: {product.price} | "
                 f"Stock: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}"
+                f"{photo_suffix}"
             )
 
         if len(products) > 20:
@@ -647,6 +691,8 @@ class IntentProcessor:
                 return f"❌ Product '{product_id}' not found"
             return "❌ Product ID, inventory ID, or product name is required"
 
+        photos_block = self._format_product_photos(product, product_service)
+        photos_line = photos_block or f"Photo: {product.photo or 'N/A'}"
         return (
             "📦 Product Details:\n"
             f"ID: {product.product_id}\n"
@@ -657,6 +703,7 @@ class IntentProcessor:
             f"Category: {product.category or 'N/A'}\n"
             f"Condition: {product.condition}\n"
             f"Description: {product.description or 'N/A'}\n"
+            f"{photos_line}\n"
             f"Link: {product.link or 'N/A'}"
         )
 

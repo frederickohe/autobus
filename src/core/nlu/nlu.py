@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 import io
 import re
-from core.cloudstorage.service.storageservice import StorageService
+from core.cloudstorage.service.storageservice import StorageService, StorageFolder
 from core.histories.service.historyservice import HistoryService
 import openai
 from typing import Dict, Any, Optional, List
@@ -365,6 +365,18 @@ class AutobusNLUSystem:
             collected_slots=state.collected_slots,
             user_message=user_message or "",
         )
+
+        product_image_intents = set(INTENT_CATEGORIES.get("product_management", [])) & {
+            "add_product",
+            "update_product",
+        }
+        if intent in product_image_intents and media_context:
+            photo_url = self._upload_product_photo_from_media(user_id, media_context)
+            if photo_url:
+                photos = state.collected_slots.setdefault("photos", [])
+                if photo_url not in photos:
+                    photos.append(photo_url)
+                state.collected_slots["photo"] = photo_url
 
         state.current_intent = intent
 
@@ -1826,6 +1838,39 @@ class AutobusNLUSystem:
             return None
         finally:
             db.close()
+
+    def _upload_product_photo_from_media(
+        self, user_id: str, media_context: Dict[str, Any]
+    ) -> Optional[str]:
+        """Upload an incoming chat image to product storage and return its URL."""
+        image_b64 = media_context.get("image_base64")
+        if not image_b64:
+            return None
+
+        try:
+            image_bytes = base64.b64decode(image_b64)
+            mime = media_context.get("image_mime_type") or "image/jpeg"
+            ext = "jpg"
+            if "/" in mime:
+                ext_candidate = mime.split("/")[-1].lower()
+                if ext_candidate in {"jpeg", "jpg", "png", "gif", "webp"}:
+                    ext = "jpg" if ext_candidate == "jpeg" else ext_candidate
+
+            safe_user = (user_id or "unknown").replace("/", "_").replace("\\", "_")
+            filename = f"{safe_user}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.{ext}"
+            storage_service = StorageService()
+            return storage_service.upload_file(
+                io.BytesIO(image_bytes),
+                filename,
+                content_type=mime,
+                folder=StorageFolder.product_images,
+            )
+        except Exception as e:
+            logger.error(
+                f"[PRODUCT_PHOTO] Failed to upload product image for {user_id}: {e}",
+                exc_info=True,
+            )
+            return None
 
     def _process_media_inputs(
         self,

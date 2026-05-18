@@ -1,13 +1,16 @@
 """Product Controller"""
-from fastapi import APIRouter, Depends, HTTPException, status, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List
 import logging
+import os
 
 from core.product.service.product_service import ProductService
 from core.product.dto.product_response_dto import ProductResponseDTO
 from core.product.dto.product_create_dto import ProductCreateDTO
 from core.product.dto.product_update_dto import ProductUpdateDTO
+from core.product.dto.product_photo_update_request import ProductPhotoUpdateRequest
+from core.product.dto.product_image_response_dto import ProductImageResponseDTO
 from core.product.dto.inventory_response_dto import InventoryResponseDTO
 from core.product.dto.inventory_create_dto import InventoryCreateDTO
 from core.product.dto.inventory_update_dto import InventoryUpdateDTO
@@ -197,6 +200,199 @@ def update_product(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating product: {str(e)}"
         )
+
+
+@product_routes.get("/{product_id}/photos", response_model=List[ProductImageResponseDTO])
+def list_product_photos(
+    product_id: str = Path(..., description="Product ID"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """List all images for a product."""
+    product_service = ProductService(db)
+    if not product_service.get_product_by_id(product_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
+    images = product_service.list_product_images(product_id)
+    return [ProductImageResponseDTO.from_image(img) for img in images]
+
+
+@product_routes.post("/{product_id}/photo", response_model=ProductResponseDTO)
+async def upload_product_photo(
+    product_id: str = Path(..., description="Product ID"),
+    file: UploadFile = File(...),
+    set_primary: bool = Query(False, description="Set uploaded image as cover photo"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Upload a product image file and append it to the product gallery."""
+    try:
+        owner_id = authjwt.get_jwt_subject()
+        safe_name = os.path.basename(file.filename or "product.jpg")
+
+        product_service = ProductService(db)
+        success, _, product, message = product_service.upload_product_photo(
+            product_id=product_id,
+            file_obj=file.file,
+            file_name=safe_name,
+            content_type=file.content_type,
+            user_id=owner_id,
+            set_primary=set_primary,
+        )
+
+        if not success:
+            status_code = (
+                status.HTTP_404_NOT_FOUND
+                if message == "Product not found"
+                else status.HTTP_403_FORBIDDEN
+                if "permission" in message.lower()
+                else status.HTTP_400_BAD_REQUEST
+            )
+            raise HTTPException(status_code=status_code, detail=message)
+
+        return ProductResponseDTO.from_product(product)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PRODUCT_CONTROLLER] Error uploading product photo: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading product photo: {str(e)}",
+        )
+
+
+@product_routes.post("/{product_id}/photos", response_model=ProductResponseDTO)
+async def upload_product_photos(
+    product_id: str = Path(..., description="Product ID"),
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Upload multiple product images in one request."""
+    if not files:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one file is required")
+
+    owner_id = authjwt.get_jwt_subject()
+    product_service = ProductService(db)
+    product = None
+    for index, file in enumerate(files):
+        safe_name = os.path.basename(file.filename or f"product_{index}.jpg")
+        success, _, product, message = product_service.upload_product_photo(
+            product_id=product_id,
+            file_obj=file.file,
+            file_name=safe_name,
+            content_type=file.content_type,
+            user_id=owner_id,
+            set_primary=False,
+        )
+        if not success:
+            status_code = (
+                status.HTTP_404_NOT_FOUND
+                if message == "Product not found"
+                else status.HTTP_403_FORBIDDEN
+                if "permission" in message.lower()
+                else status.HTTP_400_BAD_REQUEST
+            )
+            raise HTTPException(status_code=status_code, detail=message)
+
+    return ProductResponseDTO.from_product(product)
+
+
+@product_routes.patch("/{product_id}/photo", response_model=ProductResponseDTO)
+def add_product_photo_url(
+    product_id: str = Path(..., description="Product ID"),
+    payload: ProductPhotoUpdateRequest = None,
+    set_primary: bool = Query(False, description="Set this image as the cover photo"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Add a product image URL to the gallery (e.g. after /api/v1/storage/upload)."""
+    try:
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="photo_url is required",
+            )
+
+        owner_id = authjwt.get_jwt_subject()
+        product_service = ProductService(db)
+        success, _, product, message = product_service.add_product_image(
+            product_id,
+            str(payload.photo_url),
+            user_id=owner_id,
+            set_primary=set_primary,
+        )
+
+        if not success:
+            status_code = (
+                status.HTTP_404_NOT_FOUND
+                if message == "Product not found"
+                else status.HTTP_403_FORBIDDEN
+                if "permission" in message.lower()
+                else status.HTTP_400_BAD_REQUEST
+            )
+            raise HTTPException(status_code=status_code, detail=message)
+
+        return ProductResponseDTO.from_product(product)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[PRODUCT_CONTROLLER] Error adding product photo URL: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error adding product photo: {str(e)}",
+        )
+
+
+@product_routes.patch("/{product_id}/photos/{image_id}/primary", response_model=ProductResponseDTO)
+def set_primary_product_photo(
+    product_id: str = Path(..., description="Product ID"),
+    image_id: str = Path(..., description="Image ID"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Mark one gallery image as the cover photo."""
+    owner_id = authjwt.get_jwt_subject()
+    product_service = ProductService(db)
+    success, product, message = product_service.set_primary_product_image(
+        product_id, image_id, user_id=owner_id
+    )
+    if not success:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message.lower()
+            else status.HTTP_403_FORBIDDEN
+            if "permission" in message.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=message)
+    return ProductResponseDTO.from_product(product)
+
+
+@product_routes.delete("/{product_id}/photos/{image_id}", response_model=ProductResponseDTO)
+def delete_product_photo(
+    product_id: str = Path(..., description="Product ID"),
+    image_id: str = Path(..., description="Image ID"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Remove one image from a product gallery."""
+    owner_id = authjwt.get_jwt_subject()
+    product_service = ProductService(db)
+    success, product, message = product_service.delete_product_image(
+        product_id, image_id, user_id=owner_id
+    )
+    if not success:
+        status_code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in message.lower()
+            else status.HTTP_403_FORBIDDEN
+            if "permission" in message.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=status_code, detail=message)
+    return ProductResponseDTO.from_product(product)
 
 
 @product_routes.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)

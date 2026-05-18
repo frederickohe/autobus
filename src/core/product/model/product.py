@@ -3,10 +3,10 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    DateTime, String, ForeignKey, Text, Numeric, Integer
+    DateTime, String, ForeignKey, Text, Numeric, Integer, Boolean
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from utilities.dbconfig import Base
 
@@ -49,8 +49,44 @@ class Product(Base):
     last_sold_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_ordered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    images: Mapped[list["ProductImage"]] = relationship(
+        "ProductImage",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        order_by="ProductImage.sort_order",
+    )
+
     def __repr__(self):
         return f"<Product(product_id={self.product_id}, inventory_id={self.inventory_id}, name={self.name})>"
+
+
+class ProductImage(Base):
+    """Gallery image attached to a product."""
+    __tablename__ = "product_images"
+
+    image_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+        index=True,
+    )
+    product_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("products.product_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    product: Mapped["Product"] = relationship("Product", back_populates="images")
+
+    def __repr__(self):
+        return f"<ProductImage(image_id={self.image_id}, product_id={self.product_id})>"
 
 
 class Inventory(Base):
