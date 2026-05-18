@@ -16,6 +16,7 @@ class ConversationSummaryDTO(BaseModel):
     intervention_reason: Optional[str] = None
     current_intent: Optional[str] = None
     last_message: Optional[str] = None
+    customer_phone: Optional[str] = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime

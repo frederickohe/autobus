@@ -61,30 +61,44 @@ class ConversationListService:
                     candidates.add(normalized)
         return [c for c in candidates if c]
 
+    def _conversation_row_access_filter(self, user_identifier: str):
+        """Match rows owned by phone/id variants or scoped ``<merchant_id>:<customer>`` sessions."""
+        user_ids = self._conversation_user_ids(user_identifier)
+        if not user_ids:
+            return None
+        resolved = self._resolve_user_db_id(user_identifier)
+        parts = [DailyConversation.user_id.in_(user_ids)]
+        if resolved:
+            parts.append(DailyConversation.user_id.like(f"{resolved}:%"))
+        return or_(*parts) if len(parts) > 1 else parts[0]
+
     def list_grouped_conversations_for_user(
         self,
         user_identifier: str,
         skip: int = 0,
         limit: int = 100,
     ) -> Tuple[List[ConversationSummaryDTO], List[ConversationSummaryDTO]]:
-        user_ids = self._conversation_user_ids(user_identifier)
-        if not user_ids:
+        access = self._conversation_row_access_filter(user_identifier)
+        if access is None:
             return [], []
 
-        completed_rows = self._query_completed(user_ids, skip=skip, limit=limit).all()
+        completed_rows = self._query_completed(access, skip=skip, limit=limit).all()
         intervention_rows = self._query_intervention_active(
-            user_ids, skip=skip, limit=limit
+            access, skip=skip, limit=limit
         ).all()
 
-        user_names = self._load_user_fullnames(
-            {row.user_id for row in completed_rows} | {row.user_id for row in intervention_rows}
-        )
+        user_keys = {row.user_id for row in completed_rows} | {
+            row.user_id for row in intervention_rows
+        }
+        user_names, user_phones = self._load_user_display_fields(user_keys)
 
-        completed = [self._to_summary(row, user_names) for row in completed_rows]
-        intervention_active = [self._to_summary(row, user_names) for row in intervention_rows]
+        completed = [self._to_summary(row, user_names, user_phones) for row in completed_rows]
+        intervention_active = [
+            self._to_summary(row, user_names, user_phones) for row in intervention_rows
+        ]
         return completed, intervention_active
 
-    def _query_completed(self, user_ids: List[str], skip: int, limit: int):
+    def _query_completed(self, access_filter, skip: int, limit: int):
         """Sessions not in human intervention (history / all-chats list).
 
         Previously this required conversation_lifecycle == completed, which hid
@@ -96,7 +110,7 @@ class ConversationListService:
         return (
             self.db.query(DailyConversation)
             .filter(
-                DailyConversation.user_id.in_(user_ids),
+                access_filter,
                 func.coalesce(intervention_flag, False).is_(False),
             )
             .order_by(DailyConversation.updated_at.desc())
@@ -104,11 +118,11 @@ class ConversationListService:
             .limit(limit)
         )
 
-    def _query_intervention_active(self, user_ids: List[str], skip: int, limit: int):
+    def _query_intervention_active(self, access_filter, skip: int, limit: int):
         return (
             self.db.query(DailyConversation)
             .filter(
-                DailyConversation.user_id.in_(user_ids),
+                access_filter,
                 DailyConversation.conversation_state["intervention_active"].as_boolean().is_(True),
             )
             .order_by(DailyConversation.updated_at.desc())
@@ -116,35 +130,73 @@ class ConversationListService:
             .limit(limit)
         )
 
-    def _load_user_fullnames(self, user_ids: set) -> Dict[str, str]:
+    def _load_user_display_fields(
+        self, user_ids: set
+    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+        """Resolve customer fullnames and canonical phone numbers by conversation user_id keys."""
         if not user_ids:
-            return {}
+            return {}, {}
+        lookup_keys: set = set()
+        for uid in user_ids:
+            if not uid:
+                continue
+            lookup_keys.add(uid)
+            s = str(uid)
+            if ":" in s:
+                left, _, right = s.partition(":")
+                lookup_keys.add(left.strip())
+                lookup_keys.add(right.strip())
+            normalized = self._normalize_phone_like(s)
+            if normalized:
+                lookup_keys.add(normalized)
         users = (
             self.db.query(User)
             .filter(
-                or_(User.phone.in_(list(user_ids)), User.id.in_(list(user_ids)))
+                or_(User.phone.in_(list(lookup_keys)), User.id.in_(list(user_ids)))
             )
             .all()
         )
         names: Dict[str, str] = {}
+        phones: Dict[str, str] = {}
         for user in users:
-            if user.phone:
-                names[user.phone] = user.fullname
             names[user.id] = user.fullname
+            if user.phone:
+                canonical = (user.phone or "").strip()
+                if canonical:
+                    names[user.phone] = user.fullname
+                    phones[user.id] = canonical
+                    phones[canonical] = canonical
+                    normalized = self._normalize_phone_like(canonical)
+                    if normalized and normalized != canonical:
+                        phones[normalized] = canonical
+        for uid in user_ids:
+            if not uid or uid in phones:
+                continue
+            nu = self._normalize_phone_like(str(uid))
+            if nu and nu in phones:
+                phones[str(uid)] = phones[nu]
+        return names, phones
+
+    def _load_user_fullnames(self, user_ids: set) -> Dict[str, str]:
+        names, _ = self._load_user_display_fields(user_ids)
         return names
 
     def _to_summary(
-        self, row: DailyConversation, user_names: Dict[str, str]
+        self,
+        row: DailyConversation,
+        user_names: Dict[str, str],
+        user_phones: Dict[str, str],
     ) -> ConversationSummaryDTO:
         state = row.conversation_state or {}
         history = state.get("conversation_history") or []
-        last_message = self._last_message(history)
+        last_message = self._last_customer_message(history)
 
         return ConversationSummaryDTO(
             id=row.id,
             conversation_id=state.get("conversation_id"),
             user_id=row.user_id,
-            user_fullname=user_names.get(row.user_id),
+            user_fullname=user_names.get(self._customer_channel_id(row.user_id))
+            or user_names.get(row.user_id),
             conversation_date=row.conversation_date,
             conversation_lifecycle=state.get("conversation_lifecycle", "active"),
             intervention_active=bool(state.get("intervention_active", False)),
@@ -152,30 +204,64 @@ class ConversationListService:
             intervention_reason=state.get("intervention_reason"),
             current_intent=state.get("current_intent") or None,
             last_message=last_message,
+            customer_phone=self._resolve_customer_phone(row.user_id, user_phones),
             message_count=len(history),
             created_at=row.created_at or datetime.utcnow(),
             updated_at=row.updated_at or datetime.utcnow(),
         )
 
     @staticmethod
-    def _last_message(history: list) -> Optional[str]:
+    def _customer_channel_id(conversation_user_id: Optional[str]) -> str:
+        uid = (conversation_user_id or "").strip()
+        if ":" in uid:
+            return uid.split(":", 1)[-1].strip()
+        return uid
+
+    def _resolve_customer_phone(
+        self, conversation_user_id: Optional[str], user_phones: Dict[str, str]
+    ) -> Optional[str]:
+        uid = self._customer_channel_id(conversation_user_id)
+        if not uid:
+            return None
+        candidates = {uid}
+        normalized = self._normalize_phone_like(uid)
+        if normalized:
+            candidates.add(normalized)
+        for key in candidates:
+            if key in user_phones:
+                return user_phones[key]
+        digits = "".join(ch for ch in uid if ch.isdigit())
+        if len(digits) >= 9:
+            return uid
+        return None
+
+    @staticmethod
+    def _last_customer_message(history: list) -> Optional[str]:
+        """Latest message from the customer (role user), not bot or human agent."""
         if not history:
             return None
-        content = history[-1].get("content")
-        if content is None:
-            return None
-        text = str(content)
-        return text[:500] if len(text) > 500 else text
+        for entry in reversed(history):
+            role = (entry.get("role") or "").strip().lower()
+            if role not in ("user", "customer"):
+                continue
+            content = entry.get("content")
+            if content is None and entry.get("text") is not None:
+                content = entry.get("text")
+            if content is None:
+                continue
+            text = str(content)
+            return text[:500] if len(text) > 500 else text
+        return None
 
     def _session_owned_by_user(self, session_id: int, user_identifier: str) -> Optional[DailyConversation]:
-        user_ids = self._conversation_user_ids(user_identifier)
-        if not user_ids:
+        access = self._conversation_row_access_filter(user_identifier)
+        if access is None:
             return None
         return (
             self.db.query(DailyConversation)
             .filter(
                 DailyConversation.id == int(session_id),
-                DailyConversation.user_id.in_(user_ids),
+                access,
             )
             .first()
         )
@@ -232,7 +318,8 @@ class ConversationListService:
             id=row.id,
             conversation_id=state.get("conversation_id"),
             user_id=row.user_id,
-            user_fullname=user_names.get(row.user_id),
+            user_fullname=user_names.get(self._customer_channel_id(row.user_id))
+            or user_names.get(row.user_id),
             conversation_date=row.conversation_date,
             conversation_lifecycle=state.get("conversation_lifecycle", "active"),
             intervention_active=bool(state.get("intervention_active", False)),

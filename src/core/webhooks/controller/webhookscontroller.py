@@ -44,6 +44,17 @@ def verify_webhook(
             detail="Verification failed"
         )
 
+def _payload_str(payload: dict, *keys: str) -> str:
+    for k in keys:
+        v = payload.get(k)
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            return s
+    return ""
+
+
 @webhooks_routes.post("/start-dialog")
 async def start_dialog(
     request: Request,
@@ -52,7 +63,9 @@ async def start_dialog(
     """
     Handles incoming webhooks from either:
     1. Meta (Facebook/WhatsApp) webhooks - with 'object' and 'entry' fields
-    2. Simple chat requests from Flutter app - with 'userid' and 'message' fields
+    2. Simple chat — preferred shape: ``customer_number``, ``company_number`` (merchant ``users.id``),
+       ``message``
+    3. Legacy simple chat: ``userid`` + ``message`` (optional ``context``; NLU currently ignores it)
 
     Routes to appropriate handler based on webhook type.
 
@@ -65,16 +78,31 @@ async def start_dialog(
     logger.info(f"Received webhook payload: {json.dumps(payload, indent=2)}")
 
     try:
-        # Detect if this is a simple chat request (Flutter app)
-        if "userid" in payload and "message" in payload:
-            # This is a simple direct chat request from Flutter app
-            logger.info("Detected simple chat request from Flutter app")
+        customer = _payload_str(payload, "customer_number", "customer_phone", "customer")
+        company = _payload_str(payload, "company_number", "company_id", "merchant_id")
+        msg = _payload_str(payload, "message", "webhook_message", "text", "body")
+
+        if customer and company and msg:
+            logger.info("Detected simple chat request (customer_number + company_number + message)")
             return await handle_simple_chat(
-                userid=payload.get("userid"),
-                message=payload.get("message"),
-                context=payload.get("context"),
-                db=db
+                customer_number=customer,
+                company_number=company,
+                message=msg,
+                db=db,
             )
+
+        # Legacy: Flutter / older clients
+        if "userid" in payload and "message" in payload:
+            legacy_user = _payload_str(payload, "userid", "user_id", "phone")
+            legacy_msg = _payload_str(payload, "message", "webhook_message", "text", "body")
+            if legacy_user and legacy_msg:
+                logger.info("Detected legacy simple chat request (userid + message)")
+                return await handle_simple_chat(
+                    customer_number=legacy_user,
+                    company_number="",
+                    message=legacy_msg,
+                    db=db,
+                )
         
         # Otherwise, treat as Meta WhatsApp webhook
         # Check if this is a valid Meta webhook payload
@@ -133,25 +161,46 @@ async def start_dialog(
 
 
 async def handle_simple_chat(
-    userid: str, message: str, context: Optional[str], db: Session
+    customer_number: str,
+    company_number: str,
+    message: str,
+    db: Session,
 ):
     """
-    Handles simple chat requests from Flutter app or other direct clients.
-    Processes the message through NLU and returns the response directly.
+    Simple JSON chat: ``customer_number`` (chatter id / phone), ``company_number`` (merchant ``users.id``),
+    ``message``. When ``company_number`` is empty, ``customer_number`` is used alone (legacy behaviour).
     """
     try:
-        logger.info(f"Processing simple chat message from userid: {userid}")
+        cust = (customer_number or "").strip()
+        comp = (company_number or "").strip()
+        msg = (message or "").strip()
 
-        nlu_system = AutobusNLUSystem()
+        if not cust or not msg:
+            return SimpleChatResponse(
+                message="customer_number and message are required."
+            )
 
-        # Process the message
-        response_message = nlu_system.process_message(
-                userid,
-                message
-        )
+        if comp:
+            merchant = db.query(User).filter(User.id == comp).first()
+            if not merchant:
+                return SimpleChatResponse(
+                    message="Unknown company_number: no merchant user with that id."
+                )
+            nlu_user_id = f"{comp}:{cust}"
+            logger.info(
+                "Processing simple chat (scoped) company=%s customer=%s",
+                comp,
+                cust[:32],
+            )
+        else:
+            nlu_user_id = cust
+            logger.info("Processing simple chat (legacy key) customer=%s", cust[:32])
+
+        nlu_system = AutobusNLUSystem(db_session=db)
+        response_message = nlu_system.process_message(nlu_user_id, msg)
 
         logger.info(f"Generated response: {response_message}")
-        
+
         return SimpleChatResponse(message=response_message)
 
     except Exception as e:

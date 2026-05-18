@@ -1481,7 +1481,15 @@ class AutobusNLUSystem:
 
         if tenant_id and self._conversation_rag.enabled():
             try:
-                meta: Dict[str, Any] = {"user_phone": user_id, "db_user_id": str(internal_user_id)}
+                chatter_phone = (
+                    (user_data or {}).get("customer_phone")
+                    or (user_data or {}).get("user_id")
+                    or user_id
+                )
+                meta: Dict[str, Any] = {
+                    "user_phone": chatter_phone,
+                    "db_user_id": str(internal_user_id),
+                }
                 self._conversation_rag.upsert_turns(
                     tenant_id=tenant_id,
                     points=[
@@ -1788,40 +1796,60 @@ class AutobusNLUSystem:
         }
         return success_messages.get(intent, "Payment processed successfully")
 
+    @staticmethod
+    def _parse_merchant_scoped_user_id(user_id: str) -> tuple:
+        """If ``user_id`` is ``<merchant_users.id>:<customer_channel>``, return (merchant_id, customer_channel)."""
+        if not user_id or ":" not in user_id:
+            return None, user_id
+        company_id, _, rest = user_id.partition(":")
+        company_id = company_id.strip()
+        rest = (rest or "").strip()
+        if not company_id or not rest:
+            return None, user_id
+        return company_id, rest
+
     def _get_user_data(self, user_id: str) -> Optional[Dict]:
-        """Fetch user data for personalized processing"""
+        """Fetch user data for personalized processing (merchant row, optionally scoped to a customer channel)."""
         try:
             db = SessionLocal()
             user_service = UserService(db)
-            
-            # Get user by ID (assuming user_id is the same as email or you have a method to get by user_id)
-            user = user_service.get_user_by_phone(user_id)
-            
+
+            merchant_id, channel_user_id = self._parse_merchant_scoped_user_id(user_id)
+
+            if merchant_id:
+                merchant = db.query(User).filter(User.id == merchant_id).first()
+                if not merchant:
+                    return None
+                return {
+                    # End-user identifier (phone / external id) for slots, RAG metadata, etc.
+                    "user_id": channel_user_id,
+                    "customer_phone": channel_user_id,
+                    # Merchant account used for FKs, RAG tenant, products, orders.
+                    "db_user_id": merchant.id,
+                    "email": merchant.email,
+                    "fullname": merchant.fullname,
+                    "company": merchant.company,
+                    "organization_workplace": merchant.organization_workplace,
+                    "created_at": merchant.created_at.isoformat()
+                    if merchant.created_at
+                    else None,
+                }
+
+            user = user_service.get_user_by_phone(channel_user_id)
+
             if user:
-                # Convert user data to dictionary format expected by RAG manager
-                user_data = {
-                    # `user_id` is used across NLU as the conversation/history key (phone-based).
+                return {
                     "user_id": user.phone,
-                    # `db_user_id` is the internal primary key used for relational FK lookups.
+                    "customer_phone": user.phone,
                     "db_user_id": user.id,
                     "email": user.email,
                     "fullname": user.fullname,
                     "company": user.company,
                     "organization_workplace": user.organization_workplace,
                     "created_at": user.created_at.isoformat() if user.created_at else None,
-                    # Add any additional user fields you need
                 }
-                
-                # You can also fetch additional user-specific data here:
-                # - Transaction history
-                # - Spending patterns  
-                # - Financial goals
-                # - Account balances
-                # - Subscription status
-                
-                return user_data
             return None
-            
+
         except Exception as e:
             logger.error(f"Error fetching user data for {user_id}: {e}")
             return None
