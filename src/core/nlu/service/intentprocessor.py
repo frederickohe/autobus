@@ -8,6 +8,7 @@ from core.product.service.product_service import ProductService
 from core.product.dto.product_create_dto import ProductCreateDTO
 from core.product.dto.product_update_dto import ProductUpdateDTO
 from core.product.dto.product_response_dto import ProductResponseDTO
+from core.orders.order_messages import format_out_of_stock_notice
 from core.orders.service.order_service import OrderService
 from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
@@ -21,8 +22,6 @@ from utilities.phone_utils import normalize_ghana_phone_number
 import logging
 from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 
-# Import agent framework tools
-from core.agent.tools.email.email import EmailTool
 from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
 
 logger = logging.getLogger(__name__)
@@ -34,9 +33,16 @@ class IntentProcessor:
         self.llm_client = LLMClient()
         self.rag_manager = UserRAGManager()  # Initialize RAG manager
         self.db_session = db_session
-        
-        # Initialize agent framework tools
-        self.email_tool = EmailTool()
+        self._email_tool = None
+
+    @property
+    def email_tool(self):
+        """Lazy-init: avoids Redis/DB setup unless an email intent runs."""
+        if self._email_tool is None:
+            from core.agent.tools.email.email import EmailTool
+
+            self._email_tool = EmailTool()
+        return self._email_tool
     
     def process_conversational_intent(
         self, 
@@ -829,9 +835,9 @@ class IntentProcessor:
             return f"❌ Invalid order details: {str(e)}"
 
         seller_user_id = user_id
-        matched_products = product_service.get_product_by_name(item_name, skip=0, limit=1)
-        if matched_products and getattr(matched_products[0], "user_id", None):
-            seller_user_id = matched_products[0].user_id
+        matched_product = product_service.find_product_for_user(item_name, user_id)
+        if matched_product and getattr(matched_product, "user_id", None):
+            seller_user_id = matched_product.user_id
 
         success, order, message = order_service.create_order(
             order_data, user_id=seller_user_id
@@ -841,12 +847,17 @@ class IntentProcessor:
         if not order:
             return "❌ Order was created but could not be retrieved."
 
-        return (
-            f"✅ {message}\n"
-            f"Order Number: {order.order_number}\n"
-            f"Customer: {order.customer_name}\n"
-            f"Total Amount: {order.total_amount} {order.currency_code}"
-        )
+        response_lines = [
+            f"✅ {message}",
+            f"Order Number: {order.order_number}",
+            f"Customer: {order.customer_name}",
+            f"Total Amount: {order.total_amount} {order.currency_code}",
+        ]
+        metadata = order.custom_metadata if isinstance(order.custom_metadata, dict) else {}
+        if metadata.get("requires_cs_followup"):
+            response_lines.append("")
+            response_lines.append(format_out_of_stock_notice(str(item_name)))
+        return "\n".join(response_lines)
 
     def _handle_update_order(self, user_id: str, slots: Dict[str, Any]) -> str:
         """Handle update_order intent"""

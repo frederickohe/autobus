@@ -9,7 +9,7 @@ class NLUResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
     
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "user_id": "user123",
                 "message": "I want to send money",

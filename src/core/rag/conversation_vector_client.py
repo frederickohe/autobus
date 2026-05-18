@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
+
+BatchProgressFn = Callable[[int, int], None]
 
 import httpx
 
@@ -92,6 +94,7 @@ class ConversationVectorClient:
         tenant_id: str,
         points: List[dict[str, Any]],
         batch_size: int = 64,
+        on_batch_complete: Optional[BatchProgressFn] = None,
     ) -> int:
         """POST /v1/points/upsert in batches. Returns total points accepted."""
         if not self.base or not points:
@@ -99,13 +102,13 @@ class ConversationVectorClient:
         url = f"{self.base}/v1/points/upsert"
         total = 0
         bs = max(1, min(batch_size, 200))
+        batches = [points[i : i + bs] for i in range(0, len(points), bs)]
         with httpx.Client(timeout=120.0) as client:
-            for i in range(0, len(points), bs):
-                batch = points[i : i + bs]
+            for batch_idx, batch in enumerate(batches, start=1):
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
                         "RAG POST /v1/points/upsert batch offset=%d size=%s body=%s",
-                        i,
+                        (batch_idx - 1) * bs,
                         len(batch),
                         format_points_upsert_payload_for_log(tenant_id, batch),
                     )
@@ -117,4 +120,6 @@ class ConversationVectorClient:
                 r.raise_for_status()
                 data = r.json()
                 total += int(data.get("upserted") or len(batch))
+                if on_batch_complete:
+                    on_batch_complete(batch_idx, len(batches))
         return total

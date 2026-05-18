@@ -386,6 +386,37 @@ class ProductService:
             logger.error(f"[PRODUCT_SERVICE] Error fetching products by name: {str(e)}", exc_info=True)
             return []
 
+    def find_product_for_user(self, name: str, user_id: str) -> Optional[Product]:
+        """Find a merchant's listed product by name (case-insensitive partial match)."""
+        if not name or not user_id:
+            return None
+        try:
+            resolved_user_id = self._resolve_user_db_id(user_id)
+            if not resolved_user_id:
+                return None
+            logger.info(
+                "[PRODUCT_SERVICE] Searching product '%s' for user %s",
+                name,
+                resolved_user_id,
+            )
+            product = (
+                self.db.query(Product)
+                .filter(
+                    Product.user_id == resolved_user_id,
+                    Product.name.ilike(f"%{name}%"),
+                )
+                .order_by(desc(Product.created_at))
+                .first()
+            )
+            return product
+        except Exception as e:
+            logger.error(
+                "[PRODUCT_SERVICE] Error fetching product for user: %s",
+                str(e),
+                exc_info=True,
+            )
+            return None
+
     def get_all_products(self, skip: int = 0, limit: int = 100, category: Optional[str] = None) -> List[Product]:
         """Get all products with optional filtering."""
         try:

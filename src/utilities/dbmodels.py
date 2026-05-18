@@ -23,6 +23,7 @@ _model_modules = [
 	"core.payments.model.payment",
 	"core.payments.model.invoice",
 	"core.payments.model.bill",
+	"core.billing.model.billing_charge",
 	"core.otp.model.otp",
 	"core.notification.model.Notification",
 	"core.nlu.model.Conversation",

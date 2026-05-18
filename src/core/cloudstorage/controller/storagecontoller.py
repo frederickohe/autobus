@@ -1,12 +1,27 @@
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, status, Query, File
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    UploadFile,
+    status,
+    Query,
+    File,
+)
 from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel
 from core.auth.service.sessiondriver import SessionDriver, TokenData
 from another_fastapi_jwt_auth import AuthJWT
-from core.cloudstorage.dto.filedto import FileDTO, FileUploadRagResponse
+from core.cloudstorage.dto.filedto import (
+    FileDTO,
+    FileUploadRagResponse,
+    RagIndexFromUrlRequest,
+    RagIndexJobStartedResponse,
+    RagIndexJobStatusResponse,
+)
 from core.exceptions import *
 from core.notification.dto.request.notificationcreate import NotificationCreateRequest
 from core.notification.dto.request.notificationupdate import NotificationUpdateRequest
@@ -25,10 +40,10 @@ from core.notification.service.notification_service import NotificationService
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
 from core.cloudstorage.service.storageservice import StorageService
 from core.cloudstorage.service.storageservice import StorageFolder
-from core.cloudstorage.service.file_content_extractor import FileContentExtractor
 from core.subscription.service.subscription_service import SubscriptionService
 from core.user.service.user_service import UserService
-from core.rag.document_indexer import index_extracted_text_for_user
+from core.rag.rag_index_job_store import RagIndexJobStore
+from core.rag.rag_index_service import RagIndexService
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -36,19 +51,64 @@ logger = logging.getLogger(__name__)
 # Reuse your existing token validation and DB dependencies
 from core.user.controller.usercontroller import validate_token, get_db
 
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 
 
 storage_routes = APIRouter()
 
 storage_service = StorageService()
+rag_job_store = RagIndexJobStore()
+rag_index_service = RagIndexService(
+    storage_service=storage_service,
+    job_store=rag_job_store,
+)
+
 
 def _safe_user_prefix(subject: str) -> str:
     # S3 keys can include many characters, but we keep it conservative and stable.
     safe = (subject or "unknown").strip()
     safe = safe.replace("\\", "_").replace("/", "_")
     return f"{safe}/"
+
+
+def _require_subscribed_user(db: Session, subject: str):
+    user_service = UserService(db)
+    user = user_service.get_current_user(subject)
+    sub = SubscriptionService(db).get_user_active_subscription(str(user.id))
+    if not sub:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Active subscription is required to index documents for RAG.",
+        )
+    return user
+
+
+def _user_data_from_user(user) -> dict:
+    return {
+        "db_user_id": user.id,
+        "company": user.company,
+        "user_id": user.phone,
+    }
+
+
+def _job_status_response(record) -> RagIndexJobStatusResponse:
+    result = None
+    if record.result:
+        result = FileUploadRagResponse.model_validate(record.result)
+    return RagIndexJobStatusResponse(
+        job_id=record.job_id,
+        status=record.status.value if hasattr(record.status, "value") else record.status,
+        progress=record.progress,
+        message=record.message,
+        source_type=record.source_type,
+        source_label=record.source_label,
+        result=result,
+        error=record.error,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
 
 @storage_routes.post("/upload", response_model=FileDTO)
 async def upload_file(
@@ -71,10 +131,15 @@ async def upload_file(
     )
 
 
-@storage_routes.post("/me/upload-rag-document", response_model=FileUploadRagResponse)
+@storage_routes.post("/me/upload-rag-document")
 async def upload_rag_document_for_subscribed_user(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     folder: StorageFolder = Query(default=StorageFolder.chatbot_files),
+    async_mode: bool = Query(
+        default=False,
+        description="When true, returns immediately with a job_id; poll GET /me/rag-index-jobs/{job_id} for progress.",
+    ),
     authjwt: AuthJWT = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
@@ -84,56 +149,111 @@ async def upload_rag_document_for_subscribed_user(
 
     Requires an active subscription. Supported extraction matches FileContentExtractor
     (txt, pdf, docx, csv, xlsx).
+
+    Use `async_mode=true` for progress monitoring via the rag-index-jobs endpoint.
     """
     subject = authjwt.get_jwt_subject()
-    user_service = UserService(db)
-    user = user_service.get_current_user(subject)
-
-    sub = SubscriptionService(db).get_user_active_subscription(str(user.id))
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Active subscription is required to index documents for RAG.",
-        )
+    user = _require_subscribed_user(db, subject)
 
     raw = await file.read()
     if not raw:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty file")
 
     safe_name = os.path.basename(file.filename or "upload")
-    user_prefix = _safe_user_prefix(subject)
-    key_name = f"{user_prefix}{safe_name}"
+    user_data = _user_data_from_user(user)
 
-    url = storage_service.upload_file(
-        io.BytesIO(raw),
-        key_name,
+    if async_mode:
+        job = rag_job_store.create_job(
+            user_subject=subject,
+            source_type="file",
+            source_label=safe_name,
+        )
+        background_tasks.add_task(
+            rag_index_service.run_file_job,
+            job_id=job.job_id,
+            subject=subject,
+            user_data=user_data,
+            raw=raw,
+            safe_name=safe_name,
+            content_type=file.content_type,
+            folder=folder,
+        )
+        payload = RagIndexJobStartedResponse(
+            job_id=job.job_id,
+            status=job.status.value,
+            progress=job.progress,
+            message=job.message,
+            poll_url=f"/api/v1/storage/me/rag-index-jobs/{job.job_id}",
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content=payload.model_dump(mode="json"),
+        )
+
+    return rag_index_service.index_file_sync(
+        subject=subject,
+        user_data=user_data,
+        raw=raw,
+        safe_name=safe_name,
         content_type=file.content_type,
         folder=folder,
-    )
-    object_key = f"{storage_service.resolve_subfolder(folder=folder)}{key_name}"
-
-    extracted = FileContentExtractor.extract_content(file, raw)
-    user_data = {
-        "db_user_id": user.id,
-        "company": user.company,
-        "user_id": user.phone,
-    }
-    n_chunks, rag_detail = index_extracted_text_for_user(
-        user_data=user_data,
-        object_key=object_key,
-        file_name=safe_name,
-        extracted_text=extracted or "",
+        upload_file=file,
     )
 
-    return FileUploadRagResponse(
-        file_name=safe_name,
-        file_url=url,
-        folder=folder.value,
-        object_key=object_key,
-        uploaded_at=datetime.now(timezone.utc),
-        rag_indexed_chunks=n_chunks,
-        rag_detail=rag_detail,
+
+@storage_routes.post("/me/upload-rag-url", response_model=RagIndexJobStartedResponse)
+async def upload_rag_url_for_subscribed_user(
+    body: RagIndexFromUrlRequest,
+    background_tasks: BackgroundTasks,
+    folder: StorageFolder = Query(default=StorageFolder.chatbot_files),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Scrape a public website, store the extracted text, and index it into Qdrant.
+
+    Returns immediately with a job_id. Poll GET /me/rag-index-jobs/{job_id} for progress.
+    """
+    subject = authjwt.get_jwt_subject()
+    user = _require_subscribed_user(db, subject)
+    url = str(body.url)
+
+    job = rag_job_store.create_job(
+        user_subject=subject,
+        source_type="url",
+        source_label=url,
     )
+    background_tasks.add_task(
+        rag_index_service.run_url_job,
+        job_id=job.job_id,
+        subject=subject,
+        user_data=_user_data_from_user(user),
+        url=url,
+        folder=folder,
+    )
+    return RagIndexJobStartedResponse(
+        job_id=job.job_id,
+        status=job.status.value,
+        progress=job.progress,
+        message=job.message,
+        poll_url=f"/api/v1/storage/me/rag-index-jobs/{job.job_id}",
+    )
+
+
+@storage_routes.get(
+    "/me/rag-index-jobs/{job_id}",
+    response_model=RagIndexJobStatusResponse,
+)
+async def get_rag_index_job_status(
+    job_id: str,
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Poll indexing progress for an async file or URL upload."""
+    subject = authjwt.get_jwt_subject()
+    record = rag_job_store.get_job(job_id)
+    if not record or record.user_subject != subject:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return _job_status_response(record)
 
 
 @storage_routes.post("/me/upload-multiple", response_model=List[FileDTO])
@@ -252,4 +372,3 @@ async def download_file(
 
     # Return file to client
     return FileResponse(destination_path, filename=safe_name)
-

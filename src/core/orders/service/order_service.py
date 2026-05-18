@@ -16,6 +16,7 @@ from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.orders.dto.order_response_dto import OrderResponseDTO
 from core.notification.service.event_notification_service import EventNotificationService
+from core.product.service.product_service import ProductService
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,6 @@ _ADMIN_ACTIVE_STATUSES = (
     OrderStatus.PROCESSING.value,
     OrderStatus.CONFIRMED.value,
 )
-
 
 class OrderService:
     """
@@ -88,6 +88,19 @@ class OrderService:
             logger.info(f"[ORDER_SERVICE] Creating order for customer phone: {order_data.customer_phone}")
 
             resolved_user_id = self._resolve_user_db_id(user_id) if user_id else None
+
+            product_service = ProductService(self.db)
+            listed_product = (
+                product_service.find_product_for_user(order_data.item_name, resolved_user_id)
+                if resolved_user_id
+                else None
+            )
+            product_listed = listed_product is not None
+
+            order_metadata = dict(order_data.custom_metadata or {})
+            order_metadata["product_listed"] = product_listed
+            if not product_listed:
+                order_metadata["requires_cs_followup"] = True
 
             # Validate order type
             try:
@@ -160,7 +173,7 @@ class OrderService:
                 order_source=order_data.order_source,
                 notes=order_data.notes,
                 tags=order_data.tags,
-                custom_metadata=order_data.custom_metadata
+                custom_metadata=order_metadata,
             )
 
             self.db.add(order)

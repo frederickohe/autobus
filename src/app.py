@@ -15,6 +15,7 @@ from core.user.controller.usercontroller import user_routes
 from core.cloudstorage.controller.storagecontoller import storage_routes
 from core.notification.controller.notificationcontroller import notification_routes
 from core.payments.controller.billcontroller import bill_routes
+from core.billing.controller.billing_controller import billing_routes
 from core.payments.controller.invoicecontroller import invoice_routes
 from core.payments.controller.paymentcontroller import payment_routes
 from core.otp.controller.otpcontroller import otp_routes
@@ -106,7 +107,8 @@ app.include_router(auth_routes, prefix="/api/v1/auth", tags=["Auth Routes"])
 app.include_router(user_routes, prefix="/api/v1/user", tags=["User Routes"])
 app.include_router(notification_routes, prefix="/api/v1/notification", tags=["Notification Routes"])
 app.include_router(payment_routes, prefix="/api/v1/payment", tags=["Payment Routes"])
-app.include_router(bill_routes, prefix="/api/v1/bill", tags=["Billing Routes"])
+app.include_router(bill_routes, prefix="/api/v1/bill", tags=["Billing Routes (legacy)"])
+app.include_router(billing_routes, prefix="/api/v1/billing", tags=["Billing Service"])
 app.include_router(invoice_routes, prefix="/api/v1/invoice", tags=["Invoice Routes"])
 app.include_router(otp_routes, prefix="/api/v1/otp", tags=["OTP Routes"])
 app.include_router(subscription_routes, prefix="/api/v1/subscription", tags=["Subscription Routes"])

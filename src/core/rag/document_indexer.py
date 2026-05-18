@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
+
+IndexProgressFn = Callable[[int, int], None]
 
 from core.rag.chunking import chunk_text_for_rag
 from core.rag.conversation_vector_client import (
@@ -25,6 +27,8 @@ def index_extracted_text_for_user(
     object_key: str,
     file_name: str,
     extracted_text: str,
+    on_index_progress: Optional[IndexProgressFn] = None,
+    source_url: Optional[str] = None,
 ) -> Tuple[int, Optional[str]]:
     """
     Upsert document chunks for the resolved tenant (default: user:{db_user_id}).
@@ -53,11 +57,13 @@ def index_extracted_text_for_user(
     points: list[dict[str, Any]] = []
     for i, ch in enumerate(chunks):
         meta: dict[str, Any] = {
-            "source": "document",
+            "source": "website" if source_url else "document",
             "file_name": file_name,
             "object_key": object_key,
             "chunk_index": i,
         }
+        if source_url:
+            meta["source_url"] = source_url
         if truncated and i == len(chunks) - 1:
             meta["truncated_run"] = True
         pid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{tenant_id}:{object_key}:{i}"))
@@ -76,7 +82,17 @@ def index_extracted_text_for_user(
                 "RAG document index points/upsert payload (full batch before HTTP chunking): %s",
                 format_points_upsert_payload_for_log(tenant_id, points),
             )
-        n = client.upsert_points_batched(tenant_id=tenant_id, points=points)
+        total_batches = max(1, (len(points) + 63) // 64)
+
+        def _batch_done(done_batches: int) -> None:
+            if on_index_progress:
+                on_index_progress(done_batches, total_batches)
+
+        n = client.upsert_points_batched(
+            tenant_id=tenant_id,
+            points=points,
+            on_batch_complete=_batch_done,
+        )
         return n, ("truncated_to_max_chunks" if truncated else None)
     except Exception as e:
         logger.error("[RAG] document index upsert failed: %s", e, exc_info=True)

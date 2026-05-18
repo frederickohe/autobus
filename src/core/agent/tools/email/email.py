@@ -80,7 +80,7 @@ class EmailTool(BaseTool):
             'rate_limit_per_user': 100
         }
         
-        logger.info("EmailTool initialized successfully")
+        logger.debug("EmailTool initialized")
 
     def _track_email(self, email_data: Dict):
         """Store email metadata for analytics and audit."""

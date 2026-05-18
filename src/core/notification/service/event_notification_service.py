@@ -11,6 +11,7 @@ from config import settings
 from core.notification.model.Notification import NotificationType
 from core.notification.service.notification_service import NotificationService
 from core.orders.model.order import Order
+from core.orders.order_messages import format_out_of_stock_notice
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
@@ -130,17 +131,24 @@ class EventNotificationService:
                 item_name = first_item.get("name")
                 quantity = first_item.get("quantity")
 
+        requires_cs = bool(
+            isinstance(order.custom_metadata, dict)
+            and order.custom_metadata.get("requires_cs_followup")
+        )
+        cs_note = " Product not listed in catalog — customer service follow-up needed." if requires_cs else ""
+
         admin_data = {
             "event": "order_created",
             "title": "New order received",
             "content": (
                 f"Order {order.order_number} from {order.customer_name or 'a customer'} "
-                f"({order.customer_phone or 'no phone'})."
+                f"({order.customer_phone or 'no phone'}).{cs_note}"
             ),
             "message": (
                 f"New order {order.order_number}: "
                 f"{item_name or 'Item'} x{quantity or order.total_quantity} — "
                 f"{order.total_amount} {order.currency_code}"
+                f"{cs_note}"
             ),
             "order_id": str(order.order_id),
             "order_number": order.order_number,
@@ -151,20 +159,28 @@ class EventNotificationService:
             "total_amount": str(order.total_amount),
             "currency_code": order.currency_code,
             "order_status": order.order_status,
+            "product_listed": not requires_cs,
+            "requires_cs_followup": requires_cs,
         }
         self._notify_admins(NotificationType.TRANSACTIONAL, admin_data)
 
         if order.customer_phone:
             customer_user_id = self._resolve_user_db_id(order.customer_phone)
             if customer_user_id:
+                customer_message = (
+                    f"Order {order.order_number} confirmed. "
+                    f"Total: {order.total_amount} {order.currency_code}"
+                )
+                if requires_cs and item_name:
+                    customer_message = (
+                        f"{customer_message}\n\n"
+                        f"{format_out_of_stock_notice(str(item_name))}"
+                    )
                 customer_data = {
                     "event": "order_created",
                     "title": "Order placed",
                     "content": f"Your order {order.order_number} has been received.",
-                    "message": (
-                        f"Order {order.order_number} confirmed. "
-                        f"Total: {order.total_amount} {order.currency_code}"
-                    ),
+                    "message": customer_message,
                     "order_id": str(order.order_id),
                     "order_number": order.order_number,
                 }
