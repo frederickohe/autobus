@@ -182,9 +182,11 @@ class RagIndexService:
 
         object_metadata: Optional[Dict[str, str]] = None
         if source_url:
+            # Use underscore keys: some S3-compatible stores mishandle hyphenated
+            # x-amz-meta-* names so GET /me/files never sees source_url / source_type.
             object_metadata = {
-                "source-type": "website",
-                "source-url": source_url,
+                "source_type": "website",
+                "source_url": source_url,
             }
 
         url = self.storage_service.upload_file(

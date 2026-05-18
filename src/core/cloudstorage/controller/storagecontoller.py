@@ -299,10 +299,24 @@ async def list_my_files_in_folder(
 
     objects = storage_service.list_files(folder=folder, prefix=user_prefix)
     items: list[FileDTO] = []
+
+    def _meta_pick(meta: dict, *keys: str) -> Optional[str]:
+        for k in keys:
+            v = meta.get(k)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return None
+
     for o in objects:
         meta = o.get("metadata") or {}
-        source_type = meta.get("source-type")
-        source_url = meta.get("source-url")
+        # boto3 / S3-compatible backends vary: hyphens vs underscores, lowercasing.
+        source_type = _meta_pick(
+            meta, "source_type", "source-type", "sourcetype"
+        )
+        source_url = _meta_pick(meta, "source_url", "source-url", "sourceurl")
         items.append(
             FileDTO(
                 file_name=os.path.basename(o["key"]),

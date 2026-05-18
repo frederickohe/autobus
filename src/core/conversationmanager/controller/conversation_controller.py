@@ -26,7 +26,8 @@ def list_my_conversations(
 ):
     """
     List the authenticated user's conversations, grouped as:
-    - completed: sessions with conversation_lifecycle == completed
+    - completed: sessions without active intervention (includes completed lifecycle
+      and bot-active sessions); used for All Chats / history
     - intervention_active: sessions where a human agent handover is active
     """
     try:

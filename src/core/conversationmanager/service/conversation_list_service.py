@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from core.conversationmanager.dto.conversation_response_dto import (
@@ -85,12 +85,19 @@ class ConversationListService:
         return completed, intervention_active
 
     def _query_completed(self, user_ids: List[str], skip: int, limit: int):
+        """Sessions not in human intervention (history / all-chats list).
+
+        Previously this required conversation_lifecycle == completed, which hid
+        sessions that left intervention while still bot-active.
+        """
+        intervention_flag = DailyConversation.conversation_state[
+            "intervention_active"
+        ].as_boolean()
         return (
             self.db.query(DailyConversation)
             .filter(
                 DailyConversation.user_id.in_(user_ids),
-                DailyConversation.conversation_state["conversation_lifecycle"].as_string()
-                == "completed",
+                func.coalesce(intervention_flag, False).is_(False),
             )
             .order_by(DailyConversation.updated_at.desc())
             .offset(skip)
