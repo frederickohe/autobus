@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 
 from another_fastapi_jwt_auth import AuthJWT
 
-from core.conversationmanager.dto.conversation_response_dto import ConversationListResponseDTO
+from core.conversationmanager.dto.conversation_response_dto import (
+    ConversationDetailDTO,
+    ConversationListResponseDTO,
+)
 from core.conversationmanager.service.conversation_list_service import ConversationListService
 from core.user.controller.usercontroller import get_db, validate_token
 
@@ -50,3 +53,61 @@ def list_my_conversations(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error retrieving conversations: {str(e)}",
         )
+
+
+@conversation_routes.get("/session/{session_id}", response_model=ConversationDetailDTO)
+def get_conversation_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Get a single conversation session with full message history."""
+    user_id = authjwt.get_jwt_subject()
+    service = ConversationListService(db)
+    detail = service.get_session_detail(user_id, session_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return detail
+
+
+@conversation_routes.get("/for-order/{order_id}", response_model=ConversationDetailDTO)
+def get_conversation_for_order(
+    order_id: str,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Get the latest customer conversation linked to an order."""
+    user_id = authjwt.get_jwt_subject()
+    service = ConversationListService(db)
+    detail = service.get_conversation_for_order(user_id, order_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No conversation found for this order",
+        )
+    return detail
+
+
+@conversation_routes.post("/session/{session_id}/deactivate-intervention")
+def deactivate_intervention_for_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Turn off human intervention for a conversation session."""
+    user_id = authjwt.get_jwt_subject()
+    service = ConversationListService(db)
+    detail = service.deactivate_intervention_for_session(user_id, session_id)
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return {
+        "success": True,
+        "intervention_active": detail.intervention_active,
+        "conversation": detail,
+    }
