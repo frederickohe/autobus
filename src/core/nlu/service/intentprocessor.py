@@ -23,6 +23,7 @@ from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 
 # Import agent framework tools
 from core.agent.tools.email.email import EmailTool
+from core.agent.tools.agent_config.user_agent_config_service import AgentConfigService
 
 logger = logging.getLogger(__name__)
 
@@ -396,12 +397,15 @@ class IntentProcessor:
         Supported intents:
         - send_email: Send an email to a recipient
         - read_emails: Read recent emails from inbox
+        - update_sender_email: Configure outbound sender address
         """
         try:
             if intent == "send_email":
                 return self._handle_send_email(user_id, slots, agent_name)
             elif intent == "read_emails":
                 return self._handle_read_emails(user_id, slots)
+            elif intent == "update_sender_email":
+                return self._handle_update_sender_email(user_id, slots, agent_name)
             else:
                 return f"❌ Email intent '{intent}' not supported"
         except Exception as e:
@@ -458,6 +462,35 @@ class IntentProcessor:
             sent = row.get("sent_at", "")
             lines.append(f"{i}. To: {to_addr} — {subj}\n   Sent: {sent}")
         return "📧 Your recent sent emails:\n" + "\n".join(lines)
+
+    def _handle_update_sender_email(
+        self, user_id: str, slots: Dict[str, Any], agent_name: str = "email_agent"
+    ) -> str:
+        """Persist the user's outbound sender email on their email_agent config."""
+        sender_email = (slots.get("sender_email") or "").strip()
+        if not sender_email:
+            return "❌ Please provide the sender email address to use."
+
+        if "@" not in sender_email or "." not in sender_email.split("@")[-1]:
+            return "❌ That does not look like a valid email address. Please try again."
+
+        db = next(get_db())
+        try:
+            service = AgentConfigService(db)
+            result = service.create_or_update_agent(
+                user_id=user_id,
+                agent_name=agent_name,
+                params={"sender_email": sender_email},
+            )
+            if not result.get("ok"):
+                return f"❌ Could not update sender email: {result.get('message', 'unknown error')}"
+
+            return (
+                f"✅ Your sender email is now set to {sender_email}. "
+                "Outgoing messages will use this address."
+            )
+        finally:
+            db.close()
 
     # ===== PRODUCT MANAGEMENT INTENT HANDLER =====
     def process_product_management_intent(

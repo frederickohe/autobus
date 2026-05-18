@@ -273,3 +273,64 @@ class UserService:
         self.db.commit()
         self.db.refresh(user)
         return self.get_user_by_id(user.id)
+
+    def _resolve_user_by_phone(self, user_id: str) -> User:
+        """Resolve a user from their WhatsApp / conversation phone id."""
+        user = self.db.query(User).filter(User.phone == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return user
+
+    def update_user_details(self, user_id: str, update_data: dict) -> UserResponse:
+        """Update profile fields for the user identified by phone."""
+        user = self._resolve_user_by_phone(user_id)
+        field_map = {
+            "phone": "phone",
+            "phone_number": "phone",
+            "username": "fullname",
+            "fullname": "fullname",
+            "name": "fullname",
+            "location": "location",
+            "occupation": "occupation",
+            "address": "address",
+            "company": "company",
+        }
+
+        updated = False
+        for key, value in (update_data or {}).items():
+            if value is None:
+                continue
+            attr = field_map.get(key, key)
+            if hasattr(user, attr):
+                setattr(user, attr, value)
+                updated = True
+
+        if not updated:
+            raise HTTPException(
+                status_code=400,
+                detail="No valid profile fields to update.",
+            )
+
+        user.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(user)
+        return self.get_user_by_id(user.id)
+
+    def get_user_profile(self, user_id: str) -> dict:
+        """Return a profile summary dict for NLU display."""
+        user = self._resolve_user_by_phone(user_id)
+        email_agent = user.get_agent("email_agent") if user.agents else None
+        sender_email = None
+        if email_agent:
+            sender_email = (email_agent.get("params") or {}).get("sender_email")
+
+        return {
+            "fullname": user.fullname,
+            "username": user.fullname,
+            "email": user.email,
+            "phone": user.phone,
+            "location": user.location,
+            "occupation": user.occupation,
+            "company": user.company,
+            "sender_email": sender_email,
+        }

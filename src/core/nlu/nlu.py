@@ -1586,7 +1586,7 @@ class AutobusNLUSystem:
                         None,
                     )
                 
-                update_data = {"username": new_username}
+                update_data = {"fullname": new_username}
                 user_service.update_user_details(user_id, update_data)
                 
                 response = self.response_formatter.format_response(
@@ -1618,17 +1618,19 @@ class AutobusNLUSystem:
                 return IntentHandlerResult(response, 200)
             
             elif intent == "update_user_details":
-                update_fields = {
-                    "first_name", "last_name", "phone_number", "location", 
-                    "occupation", "income_level", "financial_goals", "risk_tolerance"
+                allowed_fields = {
+                    "fullname",
+                    "phone_number",
+                    "location",
+                    "occupation",
+                    "address",
+                    "company",
                 }
-                slot_to_field = {
-                    "phone_number": "phone"
-                }
-                
+                slot_to_field = {"phone_number": "phone"}
+
                 update_data = {}
                 for slot, value in slots.items():
-                    if slot in update_fields and value is not None:
+                    if slot in allowed_fields and value is not None:
                         field_name = slot_to_field.get(slot, slot)
                         update_data[field_name] = value
                         logger.info(f"Preparing to update {field_name} for user {user_id}")
@@ -1651,15 +1653,13 @@ class AutobusNLUSystem:
                 
                 profile_details = f"""
                 📋 *Your Profile:*
-                - Name: {profile.get('first_name', 'N/A')} {profile.get('last_name', 'N/A')}
-                - Username: {profile.get('username', 'N/A')}
-                - Email: {profile.get('email', 'N/A')}
+                - Name: {profile.get('fullname', 'N/A')}
+                - Account Email: {profile.get('email', 'N/A')}
+                - Sender Email: {profile.get('sender_email') or 'Not configured'}
                 - Phone: {profile.get('phone', 'N/A')}
                 - Location: {profile.get('location', 'N/A')}
                 - Occupation: {profile.get('occupation', 'N/A')}
-                - Income Level: {profile.get('income_level', 'N/A')}
-                - Financial Goals: {profile.get('financial_goals', 'N/A')}
-                - Risk Tolerance: {profile.get('risk_tolerance', 'N/A')}
+                - Company: {profile.get('company', 'N/A')}
                 """
                 response = self.response_formatter.format_response(
                     intent, "success", message=profile_details

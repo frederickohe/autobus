@@ -65,6 +65,12 @@ INTENTS = {
         "required_slots": [],
         "category": "email"
     },
+    "update_sender_email": {
+        "description": "Set or update the sender email address used when sending emails",
+        "slots": ["sender_email"],
+        "required_slots": ["sender_email"],
+        "category": "email"
+    },
 
     #==== IMAGE GENERATION AGENT INTENTS =====
     "generate_image": {
@@ -198,6 +204,12 @@ INTENTS = {
         "required_slots": [],
         "category": "user_management"
     },
+    "update_user_details": {
+        "description": "Update user profile fields such as name, phone, location, or occupation",
+        "slots": ["fullname", "phone_number", "location", "occupation"],
+        "required_slots": [],
+        "category": "user_management"
+    },
     
     # ===== SYSTEM INTENTS =====
     "intent_not_clear": {
@@ -327,6 +339,7 @@ RESPONSE_TEMPLATES = {
     "email": {
         "send_email": "Your email to {recipient_email} with subject '{subject}' has been sent successfully! ✅",
         "read_emails": "Here are your {num_emails} most recent emails: {email_list}",
+        "update_sender_email": "Your sender email has been set to {sender_email}. ✅",
         "missing_slots_send_email": "I'd be happy to send an email for you. Please provide: {missing_slots}",
         "error": "I apologize, but I encountered an error processing your email request. Please try again."
     },
@@ -402,7 +415,7 @@ RESPONSE_TEMPLATES = {
 # Intent Categories for routing
 INTENT_CATEGORIES = {
     "conversational": ["greeting", "normal_conversation", "business_conversation", "small_talk", "goodbye"],
-    "email": ["send_email", "read_emails"],
+    "email": ["send_email", "read_emails", "update_sender_email"],
     "image_generation": ["generate_image"],
     "video_generation": ["generate_video"],
     "product_management": ["add_product", "update_product", "delete_product", "view_products", "view_product"],

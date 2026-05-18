@@ -126,6 +126,7 @@ class SlotManager:
         slot_descriptions = {
             "recipient": "Who would you like to send money to? Please provide the phone number.",
             "recipient_email": "What's the recipient's email address?",
+            "sender_email": "What sender email address should we use when you send mail?",
             "subject": "What's the subject of the email?",
             "body": "What's the body/message of the email?",
             "amount": "How much would you like to send?",

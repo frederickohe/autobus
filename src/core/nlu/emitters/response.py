@@ -26,7 +26,7 @@ class ResponseFormatter:
             return "I'm not quite sure what you're asking. Could you please rephrase or provide more details? I can help you with: sending money, buying airtime, paying bills, tracking expenses, managing customers, or getting financial tips."
         
         elif message_type == "error":
-            return f"Invalid response. Please try again."
+            return kwargs.get("message") or "Something went wrong. Please try again."
 
         elif message_type == "ask_for_image_description":
             return "I couldn't process the image automatically. Could you please describe what's in the image, or send a short caption?"
