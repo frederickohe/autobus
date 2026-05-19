@@ -124,11 +124,7 @@ class SubscriptionService:
                         if user and user.email:
                             base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
                             company_name = (user.company or user.organization_workplace or user.fullname or "Autobus Client").strip()
-                            postiz_password = derive_postiz_password(
-                                user_id=user.id,
-                                email=user.email,
-                                autobus_password_hash=user.hashed_password,
-                            )
+                            postiz_password = derive_postiz_password(username=user.fullname)
                             client = PostizClient(base_url=base_url)
 
                             import asyncio
@@ -190,11 +186,7 @@ class SubscriptionService:
                                 (user.company or user.organization_workplace or user.fullname or "Autobus Client")
                                 .strip()
                             )
-                            chatwoot_password = derive_chatwoot_password(
-                                user_id=user.id,
-                                email=user.email,
-                                autobus_password_hash=user.hashed_password,
-                            )
+                            chatwoot_password = derive_chatwoot_password(username=user.fullname)
                             client = ChatwootClient(base_url=base_url, platform_api_token=token)
 
                             import asyncio

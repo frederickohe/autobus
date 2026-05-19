@@ -95,11 +95,7 @@ async def _ensure_postiz_api_key(user_id: str, db: Session) -> Optional[str]:
         return None
 
     company_name = (user.company or user.fullname or "Autobus Client").strip()
-    postiz_password = derive_postiz_password(
-        user_id=user.id,
-        email=user.email,
-        autobus_password_hash=user.hashed_password,
-    )
+    postiz_password = derive_postiz_password(username=user.fullname)
     client = PostizClient(base_url=postiz_base_url)
     postiz_org_id, postiz_api_key = await client.provision_org_and_get_public_api_key(
         email=user.email,
@@ -176,11 +172,7 @@ async def initiate_oauth_flow(
             postiz_login_payload: Dict[str, Any] = {}
 
             if user and user.email:
-                postiz_password = derive_postiz_password(
-                    user_id=user.id,
-                    email=user.email,
-                    autobus_password_hash=user.hashed_password,
-                )
+                postiz_password = derive_postiz_password(username=user.fullname)
                 # Warm Postiz session and validate creds using the same payload contract
                 # expected by Postiz LOCAL auth.
                 try:
@@ -604,11 +596,7 @@ async def postiz_auto_login(
         logger.warning(f"[SOCIAL] Postiz provisioning check failed for user {user_id}: {ensure_error}")
 
     browser_postiz_url = (os.getenv("POSTIZ_PUBLIC_URL", "").strip() or postiz_base_url).rstrip("/")
-    postiz_password = derive_postiz_password(
-        user_id=user.id,
-        email=user.email,
-        autobus_password_hash=user.hashed_password,
-    )
+    postiz_password = derive_postiz_password(username=user.fullname)
 
     login_payload = {
         "email": user.email,

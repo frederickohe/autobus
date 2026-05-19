@@ -1,4 +1,3 @@
-import hashlib
 import os
 import re
 import uuid
@@ -233,27 +232,12 @@ def generate_postiz_password(length: int = 28) -> str:
     return uuid.uuid4().hex + uuid.uuid4().hex[: max(0, length - 32)]
 
 
-def derive_postiz_password(
-    *,
-    user_id: str,
-    email: str,
-    autobus_password_hash: str,
-) -> str:
+def derive_postiz_password(*, username: str) -> str:
     """
-    Deterministically derive a Postiz LOCAL password from Autobus user identity.
-    This allows Backend/Frontend to generate the same password for Postiz register/login
-    without storing Postiz plaintext credentials.
+    Postiz LOCAL sign-in password: Autobus username (``fullname``), not the Autobus
+    login password. Email is used as the Postiz account identifier.
+    """
+    from utilities.integration_credentials import integration_local_password
 
-    If ``POSTIZ_DERIVE_PEPPER`` is set (recommended in production), the hash no longer
-    depends on the Autobus password hash, so changing the Autobus password does not
-    desync Postiz login. When unset, legacy behaviour uses ``autobus_password_hash``
-    (existing Postiz users keep working until you rotate or delete them).
-    """
-    email_l = (email or "").strip().lower()
-    pepper = os.getenv("POSTIZ_DERIVE_PEPPER", "").strip()
-    if pepper:
-        seed = f"{user_id}|{email_l}|{pepper}"
-    else:
-        seed = f"{user_id}|{email_l}|{autobus_password_hash}"
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return integration_local_password(username=username)
 

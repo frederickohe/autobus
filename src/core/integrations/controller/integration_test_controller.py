@@ -223,11 +223,7 @@ async def _run_postiz_provision(
         )
 
     base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
-    postiz_password = derive_postiz_password(
-        user_id=user.id,
-        email=user.email,
-        autobus_password_hash=user.hashed_password,
-    )
+    postiz_password = derive_postiz_password(username=user.fullname)
     client = PostizClient(base_url=base_url)
     try:
         postiz_org_id, postiz_api_key = await client.provision_org_and_get_public_api_key(
@@ -285,11 +281,7 @@ async def _run_chatwoot_provision(
 
     base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
     token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
-    chatwoot_password = derive_chatwoot_password(
-        user_id=user.id,
-        email=user.email,
-        autobus_password_hash=user.hashed_password,
-    )
+    chatwoot_password = derive_chatwoot_password(username=user.fullname)
     cw_client = ChatwootClient(base_url=base_url, platform_api_token=token)
     try:
         cw_account_id, cw_user_id, cw_access_token = await cw_client.provision_account_and_user(

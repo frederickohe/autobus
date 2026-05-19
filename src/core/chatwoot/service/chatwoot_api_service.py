@@ -1,4 +1,3 @@
-import hashlib
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -495,12 +494,12 @@ class ChatwootAccountClient:
         return None
 
 
-def derive_chatwoot_password(*, user_id: str, email: str, autobus_password_hash: str) -> str:
+def derive_chatwoot_password(*, username: str) -> str:
     """
-    Deterministically derive a Chatwoot password without storing it.
+    Chatwoot sign-in password: Autobus username (``fullname``), not the Autobus
+    login password. Email is used as the Chatwoot account identifier.
     """
-    seed = f"{user_id}|{email.lower()}|{autobus_password_hash}"
-    # Ensure the password meets the documented requirement: upper/lower/number/special.
-    digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
-    return f"Aa1!{digest}"  # length ~ 68, deterministic and policy-compliant
+    from utilities.integration_credentials import integration_local_password
+
+    return integration_local_password(username=username)
 
