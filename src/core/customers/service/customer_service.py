@@ -63,7 +63,8 @@ class CustomerService:
         name: str,
         customer_number: str,
         network: Optional[str] = None,
-        bank_code: Optional[str] = None
+        bank_code: Optional[str] = None,
+        email: Optional[str] = None,
     ) -> Tuple[bool, Customer, str]:
         """
         Add a new customer for the user.
@@ -141,6 +142,7 @@ class CustomerService:
             customer = Customer(
                 user_id=resolved_user_id,
                 name=name.strip(),
+                email=email.strip() if email else None,
                 customer_number=customer_number.strip(),
                 network=network,
                 bank_code=bank_code.upper() if bank_code else None,
@@ -195,6 +197,23 @@ class CustomerService:
             logger.error(f"[BENEFICIARY_SERVICE] Error fetching customer: {str(e)}", exc_info=True)
             return None
 
+    def get_customers_by_ids(self, customer_ids: List[int], user_id: str) -> List[Customer]:
+        """Fetch active customers by ID list, scoped to the authenticated user."""
+        if not customer_ids:
+            return []
+
+        resolved_user_id = self._resolve_user_db_id(user_id)
+        if not resolved_user_id:
+            return []
+
+        unique_ids = list(dict.fromkeys(customer_ids))
+        customers = self.db.query(Customer).filter(
+            Customer.id.in_(unique_ids),
+            Customer.user_id == resolved_user_id,
+            Customer.is_active == True,
+        ).all()
+        return customers
+
     def delete_customer(self, customer_id: int, user_id: str) -> Tuple[bool, str]:
         """Soft-delete a customer (mark as inactive)."""
         try:
@@ -229,7 +248,9 @@ class CustomerService:
         user_id: str,
         name: Optional[str] = None,
         customer_number: Optional[str] = None,
-        bank_code: Optional[str] = None
+        bank_code: Optional[str] = None,
+        email: Optional[str] = None,
+        clear_email: bool = False,
     ) -> Tuple[bool, Customer, str]:
         """Update customer details."""
         try:
@@ -269,6 +290,11 @@ class CustomerService:
                 if not is_valid:
                     return False, None, bank_msg
                 customer.bank_code = bank_code.upper()
+
+            if clear_email:
+                customer.email = None
+            elif email is not None:
+                customer.email = email.strip() if email else None
 
             customer.updated_at = datetime.now()
             self.db.commit()

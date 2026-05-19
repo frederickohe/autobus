@@ -4,7 +4,14 @@ from typing import List
 import logging
 
 from core.customers.service.customer_service import CustomerService
-from core.customers.dto.customer_dto import CustomerCreateRequest, CustomerResponse
+from core.customers.dto.customer_dto import (
+    CustomerCreateRequest,
+    CustomerResponse,
+    CustomerMessageSmsRequest,
+    CustomerMessageEmailRequest,
+    CustomerMessageResponse,
+)
+from core.customers.service.customer_messaging_service import CustomerMessagingService
 from core.user.controller.usercontroller import validate_token, get_db
 from another_fastapi_jwt_auth import AuthJWT
 
@@ -31,7 +38,8 @@ def add_customer(
             name=request.name,
             customer_number=request.customer_number,
             network=request.network,
-            bank_code=request.bank_code
+            bank_code=request.bank_code,
+            email=str(request.email) if request.email else None,
         )
 
         if not success:
@@ -154,7 +162,8 @@ def update_customer(
             user_id=user_id,
             name=request.name if request else None,
             customer_number=request.customer_number if request else None,
-            bank_code=request.bank_code if request else None
+            bank_code=request.bank_code if request else None,
+            email=str(request.email) if request and request.email else None,
         )
 
         if not success:
@@ -170,4 +179,53 @@ def update_customer(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating customer: {str(e)}"
+        )
+
+
+@customer_routes.post("/message/sms", response_model=CustomerMessageResponse)
+def send_customer_sms(
+    request: CustomerMessageSmsRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Send a custom SMS to one or more customers by customer ID."""
+    try:
+        user_id = authjwt.get_jwt_subject()
+        messaging_service = CustomerMessagingService(db)
+        return messaging_service.send_sms(
+            user_id=user_id,
+            customer_ids=request.customer_ids,
+            message=request.message.strip(),
+        )
+    except Exception as e:
+        logger.error(f"[BENEFICIARY_CONTROLLER] Error sending customer SMS: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error sending SMS: {str(e)}",
+        )
+
+
+@customer_routes.post("/message/email", response_model=CustomerMessageResponse)
+def send_customer_email(
+    request: CustomerMessageEmailRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Send a custom email to one or more customers by customer ID."""
+    try:
+        user_id = authjwt.get_jwt_subject()
+        messaging_service = CustomerMessagingService(db)
+        return messaging_service.send_email(
+            user_id=user_id,
+            customer_ids=request.customer_ids,
+            subject=request.subject.strip(),
+            body=request.body,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    except Exception as e:
+        logger.error(f"[BENEFICIARY_CONTROLLER] Error sending customer email: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error sending email: {str(e)}",
         )

@@ -26,6 +26,7 @@ class Customer(Base):
 
     # Customer information
     name = Column(String(100), nullable=False)  # e.g., "John Agyeman"
+    email = Column(String(255), nullable=True)  # Optional contact email for outbound messaging
     customer_number = Column(String(20), nullable=False)  # Mobile money wallet, bank account, or card number
     network = Column(String(3), nullable=False)  # MTN, VOD, AIR, BNK, MAS, VIS
     bank_code = Column(String(4), nullable=True)  # Bank code if network is BNK (e.g., "GCB", "ECO")
