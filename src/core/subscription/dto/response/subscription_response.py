@@ -26,7 +26,9 @@ class SubscriptionResponse(BaseModel):
 class SubscriptionStatusResponse(BaseModel):
     has_active_subscription: bool
     subscription_id: Optional[int] = None
+    plan_id: Optional[int] = None
     plan_name: Optional[str] = None
+    plan_price: Optional[float] = None
     features: Optional[List[str]] = None
     agents: Optional[List[str]] = None
     amount_paid: Optional[float] = None

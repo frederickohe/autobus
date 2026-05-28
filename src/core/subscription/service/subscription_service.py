@@ -494,12 +494,15 @@ class SubscriptionService:
                 return {
                     "has_active_subscription": False,
                     "subscription_id": None,
+                    "plan_id": None,
                     "plan_name": None,
+                    "plan_price": None,
                     "features": None,
+                    "agents": None,
                     "amount_paid": None,
                     "expires_at": None,
                     "days_remaining": 0,
-                    "status": "NO_USER"
+                    "status": "NO_USER",
                 }
             
             return self.get_user_subscription_status(user.id)
@@ -509,12 +512,15 @@ class SubscriptionService:
             return {
                 "has_active_subscription": False,
                 "subscription_id": None,
+                "plan_id": None,
                 "plan_name": None,
+                "plan_price": None,
                 "features": None,
+                "agents": None,
                 "amount_paid": None,
                 "expires_at": None,
                 "days_remaining": 0,
-                "status": "ERROR"
+                "status": "ERROR",
             }
 
     def get_user_subscription_status(self, user_id: str) -> dict:
@@ -525,23 +531,31 @@ class SubscriptionService:
             return {
                 "has_active_subscription": False,
                 "subscription_id": None,
+                "plan_id": None,
                 "plan_name": None,
+                "plan_price": None,
                 "features": None,
+                "agents": None,
                 "amount_paid": None,
                 "expires_at": None,
                 "days_remaining": 0,
-                "status": "NO_SUBSCRIPTION"
+                "status": "NO_SUBSCRIPTION",
             }
 
         return {
             "has_active_subscription": subscription.is_active,
             "subscription_id": subscription.id,
+            "plan_id": subscription.plan.id,
             "plan_name": subscription.plan.name,
+            "plan_price": subscription.plan.price,
             "features": subscription.plan.get_features_list(),
+            "agents": subscription.plan.get_agents_list(),
             "amount_paid": subscription.amount_paid,
             "expires_at": subscription.expires_at.isoformat(),
             "days_remaining": subscription.days_remaining,
-            "status": subscription.status
+            "status": subscription.status.value
+            if hasattr(subscription.status, "value")
+            else str(subscription.status),
         }
 
 

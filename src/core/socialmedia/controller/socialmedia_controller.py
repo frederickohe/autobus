@@ -28,7 +28,12 @@ from core.socialmedia.service.post_publishing_service import PostPublishingServi
 from core.socialmedia.service.blotato_api_service import (
     BlotatoAPIClient, BlotatoOAuthManager
 )
-from core.socialmedia.service.postiz_api_service import PostizClient, PostizAPIError, derive_postiz_password
+from core.socialmedia.service.postiz_api_service import (
+    PostizClient,
+    PostizAPIError,
+    derive_postiz_password,
+    normalize_postiz_integrations_list,
+)
 from core.socialmedia.service.postiz_marketing_extract import (
     extract_marketing_text_and_links,
     normalize_digital_marketing_agent_name,
@@ -665,7 +670,8 @@ async def postiz_list_integrations(
 
     try:
         client = PostizClient(postiz_base_url)
-        return await client.list_integrations(api_key)
+        raw = await client.list_integrations(api_key)
+        return normalize_postiz_integrations_list(raw)
     except PostizAPIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

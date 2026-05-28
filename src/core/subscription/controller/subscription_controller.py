@@ -1,10 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from another_fastapi_jwt_auth import AuthJWT
 from utilities.dbconfig import get_db
+from core.user.controller.usercontroller import validate_token
+from core.user.service.user_service import UserService
 from core.subscription.service.subscription_service import SubscriptionService
 from core.subscription.dto.request.subscribe_request import SubscribeRequest
 from core.subscription.dto.request.upgrade_request import UpgradeRequest
-from core.subscription.dto.request.cancel_request import CancelRequest
+from core.subscription.dto.request.cancel_request import CancelRequest, MeSubscriptionCancelRequest
+from core.subscription.dto.request.me_upgrade_request import MeUpgradeRequest
 from core.subscription.dto.request.create_plan_request import CreatePlanRequest
 from core.subscription.dto.request.update_plan_request import UpdatePlanRequest
 from core.subscription.dto.response.subscription_response import (
@@ -18,11 +24,64 @@ from core.subscription.dto.response.subscription_response import (
 subscription_routes = APIRouter()
 
 
-# Helper function to get current user ID (you'll need to implement this based on your auth system)
-def get_current_user_id() -> str:
-    # TODO: Replace with actual user authentication
-    # This should extract user_id from JWT token or session
-    return "sample_user_id"
+@subscription_routes.get("/me", response_model=SubscriptionStatusResponse)
+def get_my_subscription_status(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Current user's subscription (JWT). Prefer this over `/status/{phone}` in clients."""
+    user_service = UserService(db)
+    user = user_service.get_current_user(authjwt.get_jwt_subject())
+    subscription_service = SubscriptionService(db)
+    data = subscription_service.get_user_subscription_status(user.id)
+    return SubscriptionStatusResponse(**data)
+
+
+@subscription_routes.post("/me/cancel", response_model=SubscriptionResponse)
+def cancel_my_subscription(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+    payload: Optional[MeSubscriptionCancelRequest] = Body(default=None),
+):
+    """Cancel the authenticated user's active subscription (no phone in request body)."""
+    user_service = UserService(db)
+    user = user_service.get_current_user(authjwt.get_jwt_subject())
+    reason = payload.reason if payload else None
+    subscription_service = SubscriptionService(db)
+    result = subscription_service.cancel_subscription(user.id, reason)
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=result["message"],
+        )
+
+    return SubscriptionResponse(**result)
+
+
+@subscription_routes.post("/me/upgrade", response_model=SubscriptionResponse)
+def upgrade_my_subscription(
+    request: MeUpgradeRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Upgrade the authenticated user's subscription (JWT)."""
+    user_service = UserService(db)
+    user = user_service.get_current_user(authjwt.get_jwt_subject())
+    subscription_service = SubscriptionService(db)
+    result = subscription_service.upgrade_subscription(
+        user.id,
+        request.new_plan_id,
+        request.payment_reference,
+    )
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result["message"],
+        )
+
+    return SubscriptionResponse(**result)
 
 
 @subscription_routes.get("/plans", response_model=PlansListResponse)

@@ -1,7 +1,7 @@
 import os
 import re
 import uuid
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import unquote
 
 import httpx
@@ -9,6 +9,28 @@ import httpx
 
 class PostizAPIError(RuntimeError):
     pass
+
+
+def normalize_postiz_integrations_list(payload: Any) -> List[Dict[str, Any]]:
+    """
+    Postiz Public API documents `GET /integrations` as a JSON array.
+    Some builds or intermediaries return the same rows under a wrapper key.
+    """
+    if isinstance(payload, list):
+        return [x for x in payload if isinstance(x, dict)]
+    if isinstance(payload, dict):
+        for key in (
+            "integrations",
+            "items",
+            "data",
+            "value",
+            "results",
+            "channels",
+        ):
+            inner = payload.get(key)
+            if isinstance(inner, list):
+                return [x for x in inner if isinstance(x, dict)]
+    return []
 
 
 def _normalize_postiz_email(email: str) -> str:
