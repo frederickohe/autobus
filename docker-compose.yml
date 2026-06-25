@@ -94,8 +94,8 @@ services:
       REDIS_PORT: ${REDIS_PORT:-6379}
       REDIS_PASSWORD: ${REDIS_PASSWORD:-autobus098}
       
-      # JWT Configuration
-      SECRET_KEY: ${SECRET_KEY:-green-secret-keeps-gamma}
+      # JWT Configuration (prefer JWT_SECRET_KEY from .env; default must be >= 32 bytes for HS256)
+      SECRET_KEY: ${SECRET_KEY:-${JWT_SECRET_KEY:-09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7}}
       ALGORITHM: ${ALGORITHM:-HS256}
       KID: ${KID:-autobus-kid}
       

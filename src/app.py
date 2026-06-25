@@ -112,6 +112,13 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+
+@app.get("/health")
+async def root_health():
+    """Docker / load-balancer probe."""
+    return {"status": "healthy", "service": settings.SERVICE_NAME}
+
+
 # -----------------------------------------------------------
 # Middleware (CORS)
 # -----------------------------------------------------------
