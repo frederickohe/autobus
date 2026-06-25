@@ -70,12 +70,14 @@ def agent(query: CommandRequest, db: Session = Depends(get_db)):
             credit_service.require_credits(user.id, CreditType.LLM.value, 1.0, "agent_command")
 
     assistant = get_autobus_agent()
-    
-    return assistant.process_user_message(
+
+    response_text = assistant.process_user_message(
         userid=query.userid,
         message=query.message,
-        agent_name=query.agent_name
+        agent_name=query.agent_name,
+        db_session=db,
     )
+    return {"response": response_text}
 
 
 @agent_routes.post("/generate-image", response_model=ImageGenerationResponse)
