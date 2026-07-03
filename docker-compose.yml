@@ -63,7 +63,8 @@ services:
     image: portainer/portainer-ce:latest
     container_name: autobus_portainer
     restart: unless-stopped
-    command: --trusted-origin portainer.useautobus.com
+    environment:
+      - TRUSTED_ORIGINS=https://portainer.useautobus.com
     ports:
       - "9443:9443"
     volumes:
