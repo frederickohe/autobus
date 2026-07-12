@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form
+from fastapi import APIRouter, Depends, HTTPException, Form, Header
 from another_fastapi_jwt_auth import AuthJWT
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
@@ -10,6 +10,7 @@ from core.auth.dto.request.userlogin import UserLoginRequest
 from core.auth.dto.request.resetpassword import ResetPasswordRequest
 from core.auth.dto.request.resetpassnoauth import ResetPassNoAuth
 from core.auth.dto.request.otp_verify import OTPVerifyRequest
+from core.auth.dto.request.refresh_token import RefreshTokenRequest
 from core.auth.service.authservice import AuthService
 from core.exceptions.AuthException import InvalidCredentialsError
 from core.exceptions.UserException import UserAlreadyExistsError
@@ -68,11 +69,18 @@ def signin(user: UserLoginRequest, db: Session = Depends(get_db), authjwt: AuthJ
 
 
 @auth_routes.post("/signout")
-def signout(authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    token = authjwt._token
+def signout(authorization: str = Header(None), db: Session = Depends(get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="No token found. Please log in.")
+    token = authorization.removeprefix("Bearer ").strip()
     auth_service = AuthService(db)
-
     return auth_service.signout(token)
+
+
+@auth_routes.post("/refresh")
+def refresh_tokens(request: RefreshTokenRequest, db: Session = Depends(get_db)):
+    auth_service = AuthService(db)
+    return auth_service.refresh_tokens(request.refresh_token)
 
 
 @auth_routes.post("/verify-account")

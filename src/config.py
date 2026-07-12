@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = os.environ.get('ALGORITHM', os.environ.get('JWT_ALGORITHM', 'HS256'))
     KID: str = os.environ.get('KID', 'autobus-kid')
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
-    REFRESH_TOKEN_EXPIRE_MINUTES: int = 360
+    REFRESH_TOKEN_EXPIRE_MINUTES: int = 360  # legacy; AuthJWT config only
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', 3650))
     
     # Redis Configuration
     REDIS_HOST: str = os.environ.get('REDIS_HOST', 'localhost')

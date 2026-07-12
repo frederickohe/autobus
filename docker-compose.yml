@@ -186,6 +186,13 @@ services:
       # Optional: public origin of this API for Meta → Autobus webhook hints (WhatsApp channel-link response).
       AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-https://api.useautobus.com}
 
+      # Meta WhatsApp Cloud API (webhook verify + outbound send / media)
+      META_API_KEY: ${META_API_KEY:-}
+      VERIFY_TOKEN: ${VERIFY_TOKEN:-}
+      WHATSAPP_phone_ID: ${WHATSAPP_phone_ID:-}
+      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID:-}
+      WHATSAPP_GRAPH_BASE_URL: ${WHATSAPP_GRAPH_BASE_URL:-https://graph.facebook.com/v24.0}
+
       # Qdrant RAG stack: use `http://greenbrain_rag_api:8088` when backend joins `greenbrain_rag`
       # (see `networks` below). Otherwise use a host-reachable URL, e.g.
       # `http://host.docker.internal:8088` if the RAG API port is published.

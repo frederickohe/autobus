@@ -268,6 +268,7 @@ class AuthService:
                 status_code=200,
                 content={
                     "access_token": new_access_token,
+                    "refresh_token": refresh_token,
                     "token_type": "bearer",
                     "expires_in": self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES * 60
                 }
