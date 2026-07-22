@@ -365,11 +365,12 @@ def handle_incoming_message(value: dict, db: Session):
     """
     try:
         # Get phone number ID from metadata (needed for sending messages)
+        # Meta WhatsApp Cloud API sends "phone_number_id"; keep "phone_id" as fallback
         metadata = value.get("metadata", {})
-        phone_id = metadata.get("phone_id")
+        phone_id = metadata.get("phone_number_id") or metadata.get("phone_id")
         if not phone_id:
-            logger.error("Missing phone_id in metadata")
-            return {"status": "error", "message": "Missing phone_id"}
+            logger.error("Missing phone_number_id in metadata")
+            return {"status": "error", "message": "Missing phone_number_id"}
 
         logger.info(f"Phone number ID: {phone_id}")
 
