@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 import json
+import re
 from datetime import datetime
 from typing import Optional, Tuple
 from core.webhooks.dto.response.simple_chat_response import SimpleChatResponse
@@ -190,6 +191,83 @@ def company_lookup(
         "requires_selection": True,
         "message": f"Several businesses match '{query}'. Pick the one you mean.",
         "matches": options,
+    }
+
+
+@webhooks_routes.post("/send-whatsapp-message")
+async def send_whatsapp_message(request: Request):
+    """
+    Public helper for the marketing-site chat bubble: send a WhatsApp Cloud API
+    template message to the visitor's phone (used for Meta App Review demos).
+    """
+    payload = await request.json()
+    raw_to = _payload_str(payload, "to", "customer_number", "phone", "recipient")
+    if not raw_to:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone number (to / customer_number) is required.",
+        )
+
+    recipient = normalize_ghana_phone_number(raw_to)
+    if not recipient or len(re.sub(r"\D", "", recipient)) < 8:
+        # Fall back to digits-only for non-Ghana test numbers from Meta
+        digits = re.sub(r"\D", "", raw_to)
+        recipient = digits if len(digits) >= 8 else raw_to
+
+    template_name = (
+        _payload_str(payload, "template_name", "template")
+        or os.getenv("WHATSAPP_DEMO_TEMPLATE_NAME")
+        or "jaspers_market_order_confirmation_v1"
+    )
+    language_code = (
+        _payload_str(payload, "language", "language_code")
+        or os.getenv("WHATSAPP_DEMO_TEMPLATE_LANGUAGE")
+        or "en_US"
+    )
+
+    body_params = payload.get("body_parameters") or payload.get("parameters")
+    if not isinstance(body_params, list) or not body_params:
+        body_params = [
+            os.getenv("WHATSAPP_DEMO_PARAM_CUSTOMER", "John Doe"),
+            os.getenv("WHATSAPP_DEMO_PARAM_ORDER", "123456"),
+            os.getenv(
+                "WHATSAPP_DEMO_PARAM_DATE",
+                datetime.utcnow().strftime("%b %d, %Y"),
+            ),
+        ]
+
+    whatsapp = WhatsAppService()
+    ok, meta_response, err = whatsapp.send_template(
+        recipient_phone=recipient,
+        template_name=template_name,
+        language_code=language_code,
+        body_parameters=body_params,
+    )
+
+    if not ok:
+        logger.error("Demo WhatsApp send failed for %s: %s", recipient, err)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=err or "Failed to send WhatsApp message.",
+        )
+
+    message_id = None
+    if isinstance(meta_response, dict):
+        messages = meta_response.get("messages") or []
+        if messages and isinstance(messages[0], dict):
+            message_id = messages[0].get("id")
+
+    return {
+        "ok": True,
+        "to": recipient,
+        "template": template_name,
+        "language": language_code,
+        "message_id": message_id,
+        "message": (
+            f"WhatsApp message sent to {recipient}. "
+            "Open WhatsApp to confirm it arrived."
+        ),
+        "meta": meta_response,
     }
 
 

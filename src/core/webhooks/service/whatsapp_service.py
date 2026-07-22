@@ -14,7 +14,10 @@ class WhatsAppService:
 
     def __init__(self):
         self.api_key = os.getenv("META_API_KEY")
-        self.base_url = "https://graph.facebook.com/v24.0"
+        self.base_url = (
+            os.getenv("WHATSAPP_GRAPH_BASE_URL") or "https://graph.facebook.com/v25.0"
+        ).rstrip("/")
+        self.default_phone_id = (os.getenv("WHATSAPP_phone_ID") or "").strip()
 
     def create_registration_flow(self, phone_id: str) -> Optional[str]:
         """
@@ -114,6 +117,77 @@ class WhatsAppService:
                 logger.error(f"Response content: {e.response.text}")
             return False
 
+    def send_template(
+        self,
+        recipient_phone: str,
+        template_name: str,
+        language_code: str = "en_US",
+        body_parameters: Optional[list] = None,
+        phone_id: Optional[str] = None,
+        components: Optional[list] = None,
+    ) -> tuple[bool, Optional[dict], Optional[str]]:
+        """
+        Send a WhatsApp Cloud API template message.
+
+        Returns:
+            (ok, response_json, error_message)
+        """
+        resolved_phone_id = (phone_id or self.default_phone_id or "").strip()
+        if not self.api_key:
+            return False, None, "META_API_KEY is not configured."
+        if not resolved_phone_id:
+            return False, None, "WHATSAPP_phone_ID is not configured."
+
+        url = f"{self.base_url}/{resolved_phone_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        template: dict = {
+            "name": template_name,
+            "language": {"code": language_code},
+        }
+
+        if components is not None:
+            template["components"] = components
+        elif body_parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": str(p)} for p in body_parameters
+                    ],
+                }
+            ]
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": recipient_phone,
+            "type": "template",
+            "template": template,
+        }
+
+        try:
+            logger.info(
+                "Sending WhatsApp template '%s' to %s via %s",
+                template_name,
+                recipient_phone,
+                resolved_phone_id,
+            )
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            logger.info("WhatsApp template sent successfully: %s", data)
+            return True, data, None
+        except requests.exceptions.RequestException as e:
+            err_text = ""
+            if hasattr(e, "response") and e.response is not None:
+                err_text = e.response.text
+                logger.error("Response content: %s", err_text)
+            logger.error("Failed to send WhatsApp template: %s", e)
+            return False, None, err_text or str(e)
+
     def send_registration_template(
         self,
         phone_id: str,
@@ -127,54 +201,28 @@ class WhatsAppService:
         Returns:
             bool: True if template sent successfully, False otherwise
         """
-        url = f"{self.base_url}/{phone_id}/messages"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "messaging_product": "whatsapp",
-            "to": recipient_phone,
-            "type": "template",
-            "template": {
-                "name": "registration",
-                "language": {"code": "en"},
-                "components": [
-                    {
-                        "type": "button",
-                        "sub_type": "flow",
-                        "index": "0",
-                        "parameters": [
-                            {
-                                "type": "action",
-                                "action": {
-                                    "flow_token": "2002104030434872"
-                                }
+        ok, _, _ = self.send_template(
+            recipient_phone=recipient_phone,
+            template_name="registration",
+            language_code="en",
+            phone_id=phone_id,
+            components=[
+                {
+                    "type": "button",
+                    "sub_type": "flow",
+                    "index": "0",
+                    "parameters": [
+                        {
+                            "type": "action",
+                            "action": {
+                                "flow_token": "2002104030434872"
                             }
-                        ]
-                    }
-                ]
-            }
-        }
-        try:
-            # Log API key info for debugging
-            logger.info(f"API Key (first 30 chars): {self.api_key[:30]}...")
-            logger.info(f"API Key length: {len(self.api_key)}")
-            logger.info(f"Base URL: {self.base_url}")
-            logger.info(f"Full URL: {url}")
-            logger.info(
-                f"Sending WhatsApp registration template to {recipient_phone}")
-
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            logger.info(
-                f"WhatsApp template sent successfully: {response.json()}")
-            return True
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to send WhatsApp template: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response content: {e.response.text}")
-            return False
+                        }
+                    ]
+                }
+            ],
+        )
+        return ok
 
     def send_message_receipt(
         self,
