@@ -465,65 +465,28 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     message_text = text_data.get("body")
     logger.info(f"Extracted text message: {message_text}")
 
-    # Check if user exists in database
-    existing_user = db.query(User).filter(User.phone == phone).first()
     whatsapp_service = WhatsAppService()
+    logger.info(f"Processing message through NLU for {phone}")
 
-    if not existing_user:
-        # New user - send registration template
-        logger.info(f"New user detected: {phone}. Sending registration template.")
-        message_sent = whatsapp_service.send_registration_template(
-            phone_id=phone_id,
-            recipient_phone=phone
+    nlu_system = AutobusNLUSystem()
+    response_message = nlu_system.process_message(phone, message_text)
+
+    logger.info(f"Generated response: {response_message}")
+
+    message_sent = whatsapp_service.send_message(
+        phone_id=phone_id,
+        recipient_phone=phone,
+        message_text=response_message
+    )
+
+    if not message_sent:
+        logger.error("Failed to send WhatsApp message")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send WhatsApp message"
         )
 
-        if not message_sent:
-            logger.error("Failed to send WhatsApp registration template")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send WhatsApp registration template"
-            )
-
-        return {"status": "success", "message": "Registration template sent"}
-
-    else:
-        # Existing user - process message through pipeline (which now also dispatches to AutoBus)
-        logger.info(f"Existing user detected: {phone}. Processing message through NLU.")
-
-        # message_id = message.get("id")
-        # with typing_indicator_context(
-        #     whatsapp_service=whatsapp_service,
-        #     phone_number_id=phone_number_id,
-        #     recipient_phone=phone,
-        #     message_id=message_id
-        # ):
-        
-        # Initialize NLU system and subscription service
-        nlu_system = AutobusNLUSystem()
-
-        # Process the message
-        response_message = nlu_system.process_message(
-                phone,
-                message_text
-        )
-
-        logger.info(f"Generated response: {response_message}")
-
-        # Send the response back to the user via WhatsApp
-        message_sent = whatsapp_service.send_message(
-            phone_id=phone_id,
-            recipient_phone=phone,
-            message_text=response_message
-        )
-
-        if not message_sent:
-            logger.error("Failed to send WhatsApp message")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to send WhatsApp message"
-            )
-
-        return {"status": "success", "message": "Message processed and sent"}
+    return {"status": "success", "message": "Message processed and sent"}
 
 
 def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Session):
@@ -721,77 +684,46 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
             return {"status": "ok", "message": "Image received but no media ID"}
         
         logger.info(f"Received image message from {phone}, media_id: {media_id}")
-        
-        # Check if user exists
-        existing_user = db.query(User).filter(User.phone == phone).first()
+
         whatsapp_service = WhatsAppService()
-        
-        if not existing_user:
-            # New user - send registration template
-            logger.info(f"New user detected: {phone}. Sending registration template.")
-            message_sent = whatsapp_service.send_registration_template(
-                phone_id=phone_id,
-                recipient_phone=phone
-            )
-            
-            if not message_sent:
-                logger.error("Failed to send WhatsApp registration template")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to send WhatsApp registration template"
-                )
-            
-            return {"status": "success", "message": "Registration template sent"}
-        
+        logger.info(f"Processing image through NLU for {phone}")
+
+        nlu_system = AutobusNLUSystem()
+        subscription_service = SubscriptionService(db)
+        result = subscription_service.get_user_subscription_status_by_phone(phone)
+
+        caption = image_data.get("caption", "").strip()
+        if caption:
+            user_message = caption
+            logger.info(f"Image caption found: {caption}")
         else:
-            # Existing user - process image through NLU
-            logger.info(f"Processing image for existing user: {phone}")
-            
-            # Initialize NLU system
-            nlu_system = AutobusNLUSystem()
-            subscription_service = SubscriptionService(db)
-            
-            # Get user subscription status
-            result = subscription_service.get_user_subscription_status_by_phone(phone)
-            
-            # Check if image has a caption
-            caption = image_data.get("caption", "").strip()
-            
-            if caption:
-                # Use the caption as the user message
-                user_message = caption
-                logger.info(f"Image caption found: {caption}")
-            else:
-                # Default message if no caption provided
-                user_message = "I am providing you with an image. The image is referenced below, use it to infer the user's intent and extract slots."
-                logger.info("No caption provided with image, using default message")
-            
-            # Process the message with image
-            response_message = nlu_system.process_message(
-                phone,
-                user_message,
-                result["has_active_subscription"],
-                image_media_id=media_id
+            user_message = "I am providing you with an image. The image is referenced below, use it to infer the user's intent and extract slots."
+            logger.info("No caption provided with image, using default message")
+
+        response_message = nlu_system.process_message(
+            phone,
+            user_message,
+            result["has_active_subscription"],
+            image_media_id=media_id
+        )
+
+        logger.info(f"Generated response for image message: {response_message}")
+
+        message_sent = whatsapp_service.send_message(
+            phone_id=phone_id,
+            recipient_phone=phone,
+            message_text=response_message
+        )
+
+        if not message_sent:
+            logger.error("Failed to send WhatsApp message")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send WhatsApp message"
             )
-            
-            logger.info(f"Generated response for image message: {response_message}")
-            
-            # Send the response back to the user
-            message_sent = whatsapp_service.send_message(
-                phone_id=phone_id,
-                recipient_phone=phone,
-                message_text=response_message
-            )
-            
-            if not message_sent:
-                logger.error("Failed to send WhatsApp message")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to send WhatsApp message"
-                )
-            
-            return {"status": "success", "message": "Image processed and response sent"}
-    
+
+        return {"status": "success", "message": "Image processed and response sent"}
+
     except Exception as e:
         logger.error(f"Error handling image message: {e}", exc_info=True)
         raise
@@ -811,77 +743,46 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
             return {"status": "ok", "message": "Audio received but no media ID"}
         
         logger.info(f"Received audio message from {phone}, media_id: {media_id}")
-        
-        # Check if user exists
-        existing_user = db.query(User).filter(User.phone == phone).first()
+
         whatsapp_service = WhatsAppService()
-        
-        if not existing_user:
-            # New user - send registration template
-            logger.info(f"New user detected: {phone}. Sending registration template.")
-            message_sent = whatsapp_service.send_registration_template(
-                phone_id=phone_id,
-                recipient_phone=phone
-            )
-            
-            if not message_sent:
-                logger.error("Failed to send WhatsApp registration template")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to send WhatsApp registration template"
-                )
-            
-            return {"status": "success", "message": "Registration template sent"}
-        
+        logger.info(f"Processing audio through NLU for {phone}")
+
+        nlu_system = AutobusNLUSystem()
+        subscription_service = SubscriptionService(db)
+        result = subscription_service.get_user_subscription_status_by_phone(phone)
+
+        caption = audio_data.get("caption", "").strip()
+        if caption:
+            user_message = caption
+            logger.info(f"Audio caption found: {caption}")
         else:
-            # Existing user - process audio through NLU
-            logger.info(f"Processing audio for existing user: {phone}")
-            
-            # Initialize NLU system
-            nlu_system = AutobusNLUSystem()
-            subscription_service = SubscriptionService(db)
-            
-            # Get user subscription status
-            result = subscription_service.get_user_subscription_status_by_phone(phone)
-            
-            # Check if audio has a caption
-            caption = audio_data.get("caption", "").strip()
-            
-            if caption:
-                # Use the caption as the user message
-                user_message = caption
-                logger.info(f"Audio caption found: {caption}")
-            else:
-                # Default message (will be enhanced with transcription in NLU)
-                user_message = "I'm sending you an audio message."
-                logger.info("No caption provided with audio, using default message")
-            
-            # Process the message with audio
-            response_message = nlu_system.process_message(
-                phone,
-                user_message,
-                result["has_active_subscription"],
-                audio_media_id=media_id
+            user_message = "I'm sending you an audio message."
+            logger.info("No caption provided with audio, using default message")
+
+        response_message = nlu_system.process_message(
+            phone,
+            user_message,
+            result["has_active_subscription"],
+            audio_media_id=media_id
+        )
+
+        logger.info(f"Generated response for audio message: {response_message}")
+
+        message_sent = whatsapp_service.send_message(
+            phone_id=phone_id,
+            recipient_phone=phone,
+            message_text=response_message
+        )
+
+        if not message_sent:
+            logger.error("Failed to send WhatsApp message")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to send WhatsApp message"
             )
-            
-            logger.info(f"Generated response for audio message: {response_message}")
-            
-            # Send the response back to the user
-            message_sent = whatsapp_service.send_message(
-                phone_id=phone_id,
-                recipient_phone=phone,
-                message_text=response_message
-            )
-            
-            if not message_sent:
-                logger.error("Failed to send WhatsApp message")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to send WhatsApp message"
-                )
-            
-            return {"status": "success", "message": "Audio transcribed and response sent"}
-    
+
+        return {"status": "success", "message": "Audio transcribed and response sent"}
+
     except Exception as e:
         logger.error(f"Error handling audio message: {e}", exc_info=True)
         raise
