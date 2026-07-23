@@ -314,23 +314,19 @@ class AuthService:
             )
     
     def verify_account(self, email: str):
-        """Verify user account using email or username"""
-        try:
-            db_user = self.db.query(User).filter(User.email == email).first()
+        """Check that an account exists for the given email (password recovery)."""
+        db_user = self.db.query(User).filter(User.email == email).first()
 
-            if not db_user:
-                raise InvalidCredentialsError()
-            
-            return JSONResponse(
-                status_code=200,
-                content={"message": "Account verified successfully"}
-            )
-            
-        except jwt.ExpiredSignatureError:
+        if not db_user:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email not valid or expired"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No account found with this email"
             )
+
+        return JSONResponse(
+            status_code=200,
+            content={"message": "Account verified successfully"}
+        )
             
     def reset_password(self, request: BaseModel):
         """Reset password using a valid reset token (authenticated version)"""

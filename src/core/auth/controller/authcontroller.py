@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Form, Header
+from fastapi import APIRouter, Depends, HTTPException, Header
 from another_fastapi_jwt_auth import AuthJWT
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
 import jwt
@@ -11,6 +11,7 @@ from core.auth.dto.request.resetpassword import ResetPasswordRequest
 from core.auth.dto.request.resetpassnoauth import ResetPassNoAuth
 from core.auth.dto.request.otp_verify import OTPVerifyRequest
 from core.auth.dto.request.refresh_token import RefreshTokenRequest
+from core.auth.dto.request.verify_account import VerifyAccountRequest
 from core.auth.service.authservice import AuthService
 from core.exceptions.AuthException import InvalidCredentialsError
 from core.exceptions.UserException import UserAlreadyExistsError
@@ -85,11 +86,11 @@ def refresh_tokens(request: RefreshTokenRequest, db: Session = Depends(get_db)):
 
 @auth_routes.post("/verify-account")
 async def verify_account(
-    email: str = Form(...),
+    request: VerifyAccountRequest,
     db: Session = Depends(get_db)
 ):
     auth_service = AuthService(db)
-    return auth_service.verify_account(email)
+    return auth_service.verify_account(request.email)
 
 
 @auth_routes.post("/reset-password")
