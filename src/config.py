@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # Logging levels
     LOG_LEVEL: str = os.environ.get('LOG_LEVEL', 'INFO')
 
+    # Rate limiting (Redis fixed-window; see utilities/rate_limit.py)
+    RATE_LIMIT_ENABLED: bool = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() == "true"
+    RATE_LIMIT_WINDOW_SECONDS: int = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", 60))
+
     # Comma-separated users.id values that receive admin inbox notifications
     ADMIN_NOTIFICATION_USER_IDS: str = os.environ.get("ADMIN_NOTIFICATION_USER_IDS", "")
     SMS_NOTIFICATION_ENABLED: bool = os.environ.get("SMS_NOTIFICATION_ENABLED", "true").lower() == "true"

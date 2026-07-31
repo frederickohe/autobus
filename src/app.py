@@ -148,7 +148,10 @@ async def swagger_redirect():
 
 # -----------------------------------------------------------
 # Middleware (CORS) — explicit origins only (never * + credentials)
+# Rate limiting is registered after CORS so it executes first on the request.
 # -----------------------------------------------------------
+from utilities.rate_limit import RateLimitMiddleware
+
 _cors_origins = [
     o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()
 ]
@@ -159,6 +162,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Api-Key"],
 )
+app.add_middleware(RateLimitMiddleware)
 
 
 # Exception Handlers
