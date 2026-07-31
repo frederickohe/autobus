@@ -379,34 +379,54 @@ class AuthService:
             )
 
     def reset_password_no_auth(self, request: BaseModel):
-        """Reset password without authentication (for forgotten password flow)"""
+        """
+        Forgotten-password reset. Requires a valid email OTP (sent via /api/v1/otp/send).
+        Never resets a password with email alone.
+        """
         try:
-            # Find user by email
+            from core.otp.service.otpservice import OTPService
+
+            otp_code = getattr(request, "otp", None)
+            if not otp_code:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="OTP is required to reset password",
+                )
+
+            otp_ok = OTPService(self.db).validate_otp(
+                email=request.email,
+                otp=str(otp_code).strip(),
+            )
+            if not otp_ok:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid or expired OTP",
+                )
+
             db_user = self.db.query(User).filter(User.email == request.email).first()
             if not db_user:
-                # Don't reveal whether email exists for security
+                # OTP already consumed; do not reveal whether the account exists.
                 return JSONResponse(
                     status_code=200,
-                    content={"message": "If the email exists, password has been reset"}
+                    content={"message": "If the email exists, password has been reset"},
                 )
-                
-            # Update password
+
             db_user.hashed_password = self.hash_password(request.new_password)
             self.db.commit()
-            
-            # Invalidate all existing tokens
             self.session_driver.remove_tokens(request.email)
-            
+
             return JSONResponse(
                 status_code=200,
-                content={"message": "If the email exists, password has been reset"}
+                content={"message": "If the email exists, password has been reset"},
             )
-            
+
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Password reset error: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Error resetting password"
+                detail="Error resetting password",
             )
 
     def generate_password_reset_token(self, email: str) -> str:

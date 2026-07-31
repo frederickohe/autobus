@@ -1,1 +1,3 @@
-PASSWORD_MIN_LENGTH = 4
+"""Password policy for bank-grade account credentials."""
+
+PASSWORD_MIN_LENGTH = 8

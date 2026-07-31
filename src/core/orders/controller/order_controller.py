@@ -29,9 +29,9 @@ def create_order(
     try:
         logger.info(f"[ORDER_CONTROLLER] Creating order for customer phone: {request.customer_phone}")
 
-        owner_id = authjwt.get_jwt_subject()
+        owner = UserService(db).get_current_user(authjwt.get_jwt_subject())
         order_service = OrderService(db)
-        success, order, message = order_service.create_order(request, user_id=owner_id)
+        success, order, message = order_service.create_order(request, user_id=owner.id)
 
         if not success:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message)
@@ -56,18 +56,21 @@ def list_admin_active_orders(
     db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token)
 ):
-    """Orders that need admin attention (pending, processing, confirmed)."""
+    """Merchant's orders that need attention (pending, processing, confirmed)."""
     try:
         logger.info("[ORDER_CONTROLLER] Listing admin active orders")
+        owner = UserService(db).get_current_user(authjwt.get_jwt_subject())
         order_service = OrderService(db)
-        orders = order_service.get_admin_active_orders(skip, limit)
+        orders = order_service.get_admin_active_orders(owner.id, skip, limit)
         logger.info(f"[ORDER_CONTROLLER] Found {len(orders)} admin active orders")
         return [OrderResponseDTO.from_order(o) for o in orders]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[ORDER_CONTROLLER] Error listing admin active orders: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving active orders: {str(e)}"
+            detail="Error retrieving active orders",
         )
 
 
@@ -78,18 +81,21 @@ def list_admin_completed_orders(
     db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token)
 ):
-    """Orders successfully completed."""
+    """Merchant's successfully completed orders."""
     try:
         logger.info("[ORDER_CONTROLLER] Listing admin completed orders")
+        owner = UserService(db).get_current_user(authjwt.get_jwt_subject())
         order_service = OrderService(db)
-        orders = order_service.get_admin_completed_orders(skip, limit)
+        orders = order_service.get_admin_completed_orders(owner.id, skip, limit)
         logger.info(f"[ORDER_CONTROLLER] Found {len(orders)} admin completed orders")
         return [OrderResponseDTO.from_order(o) for o in orders]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[ORDER_CONTROLLER] Error listing admin completed orders: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error retrieving completed orders: {str(e)}"
+            detail="Error retrieving completed orders",
         )
 
 

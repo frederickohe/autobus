@@ -286,35 +286,41 @@ class OrderService:
             logger.error(f"[ORDER_SERVICE] Error fetching orders: {str(e)}", exc_info=True)
             return []
 
-    def get_admin_active_orders(self, skip: int = 0, limit: int = 100) -> List[Order]:
-        """Orders that still need admin attention (not completed or cancelled)."""
+    def get_admin_active_orders(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Order]:
+        """Orders for this merchant that still need attention (not completed or cancelled)."""
         try:
             orders = (
                 self.db.query(Order)
-                .filter(Order.order_status.in_(_ADMIN_ACTIVE_STATUSES))
+                .filter(
+                    Order.user_id == user_id,
+                    Order.order_status.in_(_ADMIN_ACTIVE_STATUSES),
+                )
                 .order_by(desc(Order.order_date))
                 .offset(skip)
                 .limit(limit)
                 .all()
             )
-            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin active orders")
+            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin active orders for user {user_id}")
             return orders
         except Exception as e:
             logger.error(f"[ORDER_SERVICE] Error fetching admin active orders: {str(e)}", exc_info=True)
             return []
 
-    def get_admin_completed_orders(self, skip: int = 0, limit: int = 100) -> List[Order]:
-        """Orders finished successfully (completed lifecycle)."""
+    def get_admin_completed_orders(self, user_id: str, skip: int = 0, limit: int = 100) -> List[Order]:
+        """Orders finished successfully for this merchant."""
         try:
             orders = (
                 self.db.query(Order)
-                .filter(Order.order_status == OrderStatus.COMPLETED.value)
+                .filter(
+                    Order.user_id == user_id,
+                    Order.order_status == OrderStatus.COMPLETED.value,
+                )
                 .order_by(desc(Order.order_date))
                 .offset(skip)
                 .limit(limit)
                 .all()
             )
-            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin completed orders")
+            logger.info(f"[ORDER_SERVICE] Found {len(orders)} admin completed orders for user {user_id}")
             return orders
         except Exception as e:
             logger.error(f"[ORDER_SERVICE] Error fetching admin completed orders: {str(e)}", exc_info=True)

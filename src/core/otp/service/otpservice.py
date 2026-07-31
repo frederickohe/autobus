@@ -1,6 +1,8 @@
 # core/otp/service/otpservice.py
 
-import random
+import hashlib
+import hmac
+import secrets
 import string
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -24,8 +26,12 @@ class OTPService:
         self.sms_service = WirepickSMSService()
 
     def generate_otp(self) -> str:
-        """Generate a 5-digit OTP"""
-        return ''.join(random.choices(string.digits, k=5))
+        """Generate a cryptographically strong 6-digit OTP"""
+        return "".join(secrets.choice(string.digits) for _ in range(6))
+
+    @staticmethod
+    def _hash_otp(otp_code: str) -> str:
+        return hashlib.sha256(otp_code.strip().encode("utf-8")).hexdigest()
 
     def _format_otp_message(self, otp_code: str) -> str:
         """Format OTP message for SMS"""
@@ -40,10 +46,10 @@ class OTPService:
             # Delete any existing OTP for this phone
             self.db.query(OTP).filter(OTP.phone == phone).delete()
             
-            # Create new OTP record
+            # Create new OTP record (store hash only)
             otp_record = OTP(
                 phone=phone,
-                otp=otp_code,
+                otp=self._hash_otp(otp_code),
                 expires_at=expires_at
             )
             
@@ -113,10 +119,10 @@ class OTPService:
             # Delete any existing OTP for this email
             self.db.query(OTP).filter(OTP.email == email).delete()
             
-            # Create new OTP record
+            # Create new OTP record (store hash only)
             otp_record = OTP(
                 email=email,
-                otp=otp_code,
+                otp=self._hash_otp(otp_code),
                 expires_at=expires_at
             )
             
@@ -185,35 +191,36 @@ class OTPService:
         try:
             if not otp:
                 return False
-            
-            # Build query based on what's provided
-            query = self.db.query(OTP).filter(OTP.otp == otp)
-            
+
+            query = self.db.query(OTP)
             if phone:
                 query = query.filter(OTP.phone == phone)
             elif email:
                 query = query.filter(OTP.email == email)
             else:
                 return False
-            
+
             otp_record = query.first()
-            
             if not otp_record:
                 return False
-            
-            # Check if OTP has expired
+
             if otp_record.is_expired():
-                # Clean up expired OTP
                 self.db.delete(otp_record)
                 self.db.commit()
                 return False
-            
-            # OTP is valid, delete it to prevent reuse
+
+            candidate = otp.strip()
+            stored = otp_record.otp or ""
+            # Prefer hashed compare; allow legacy plaintext rows during migration
+            hashed_ok = hmac.compare_digest(stored, self._hash_otp(candidate))
+            legacy_ok = len(stored) <= 6 and hmac.compare_digest(stored, candidate)
+            if not (hashed_ok or legacy_ok):
+                return False
+
             self.db.delete(otp_record)
             self.db.commit()
-            
             return True
-            
+
         except Exception as e:
             logger.error(f"Error validating OTP: {str(e)}")
             return False

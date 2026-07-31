@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine.url import URL
 import os
@@ -12,7 +13,7 @@ class Settings(BaseSettings):
     )
     
     SERVICE_NAME: str = "Autobus Backend"
-    DEBUG: bool = True
+    DEBUG: bool = os.environ.get("DEBUG", "false").lower() == "true"
 
     # Database Configuration - supports both traditional and Docker Postgres env vars
     DB_DRIVER: str = os.environ.get('DB_DRIVER', 'postgresql+asyncpg')
@@ -25,13 +26,31 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 0
     DB_ECHO: bool = os.environ.get('DB_ECHO', 'false').lower() == 'true'
 
-    # JWT Configuration
-    SECRET_KEY: str = os.environ.get('SECRET_KEY', os.environ.get('JWT_SECRET_KEY', 'green-secret-keeps-gamma'))
+    # JWT Configuration — never ship with a known default secret in production
+    SECRET_KEY: str = os.environ.get('SECRET_KEY', os.environ.get('JWT_SECRET_KEY', ''))
     ALGORITHM: str = os.environ.get('ALGORITHM', os.environ.get('JWT_ALGORITHM', 'HS256'))
     KID: str = os.environ.get('KID', 'autobus-kid')
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.environ.get('ACCESS_TOKEN_EXPIRE_MINUTES', 30))
     REFRESH_TOKEN_EXPIRE_MINUTES: int = 360  # legacy; AuthJWT config only
-    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', 3650))
+    # 7 days default (was 3650 ≈ 10 years)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.environ.get('REFRESH_TOKEN_EXPIRE_DAYS', 7))
+
+    # Comma-separated browser origins for CORS (never use * with credentials)
+    CORS_ORIGINS: str = os.environ.get(
+        "CORS_ORIGINS",
+        "https://useautobus.com,https://www.useautobus.com,http://localhost:8080,http://localhost:3000",
+    )
+
+    # Platform admins (user ids and/or emails). Falls back to ADMIN_NOTIFICATION_USER_IDS.
+    ADMIN_USER_IDS: str = os.environ.get("ADMIN_USER_IDS", "")
+    ADMIN_EMAILS: str = os.environ.get("ADMIN_EMAILS", "")
+
+    # Shared secret for public marketing/webhook helpers (optional but recommended)
+    PUBLIC_WEBHOOK_API_KEY: str = os.environ.get("PUBLIC_WEBHOOK_API_KEY", "").strip()
+    META_APP_SECRET: str = os.environ.get("META_APP_SECRET", "").strip()
+    REQUIRE_TOKEN_ENCRYPTION: bool = os.environ.get(
+        "REQUIRE_TOKEN_ENCRYPTION", "true"
+    ).lower() == "true"
     
     # Redis Configuration
     REDIS_HOST: str = os.environ.get('REDIS_HOST', 'localhost')
@@ -62,12 +81,22 @@ class Settings(BaseSettings):
     ZEPTOMAIL_SMTP_PORT: int = int(os.environ.get("ZEPTOMAIL_SMTP_PORT", 587))
     ZEPTOMAIL_SMTP_USERNAME: str = os.environ.get("ZEPTOMAIL_SMTP_USERNAME", "emailapikey").strip()
     # Some envs store Zeptomail SMTP password as API token.
+    # Note: pydantic-settings will bind empty ZEPTOMAIL_SMTP_PASSWORD="" from Docker and
+    # override class defaults, so we also fall back in a model_validator below.
     ZEPTOMAIL_SMTP_PASSWORD: str = (
         os.environ.get("ZEPTOMAIL_SMTP_PASSWORD")
         or os.environ.get("ZEPTOMAIL_API_TOKEN")
         or ""
     ).strip()
     ZEPTOMAIL_FROM_EMAIL: str = os.environ.get("ZEPTOMAIL_FROM_EMAIL", "").strip()
+
+    @model_validator(mode="after")
+    def _zeptomail_password_fallback(self):
+        if not (self.ZEPTOMAIL_SMTP_PASSWORD or "").strip():
+            token = (os.environ.get("ZEPTOMAIL_API_TOKEN") or "").strip()
+            if token:
+                object.__setattr__(self, "ZEPTOMAIL_SMTP_PASSWORD", token)
+        return self
     
     # Blotato Social Media Integration Configuration
     BLOTATO_API_KEY: str = os.environ.get('BLOTATO_API_KEY', '')
@@ -92,6 +121,24 @@ class Settings(BaseSettings):
     # Comma-separated users.id values that receive admin inbox notifications
     ADMIN_NOTIFICATION_USER_IDS: str = os.environ.get("ADMIN_NOTIFICATION_USER_IDS", "")
     SMS_NOTIFICATION_ENABLED: bool = os.environ.get("SMS_NOTIFICATION_ENABLED", "true").lower() == "true"
+
+    @model_validator(mode="after")
+    def _require_jwt_secret(self):
+        key = (self.SECRET_KEY or "").strip()
+        if len(key) < 32:
+            if self.DEBUG:
+                # Local-only fallback; never acceptable in production
+                object.__setattr__(
+                    self,
+                    "SECRET_KEY",
+                    key or "dev-only-insecure-secret-change-me!!",
+                )
+            else:
+                raise ValueError(
+                    "SECRET_KEY / JWT_SECRET_KEY must be set to a strong value "
+                    "(>= 32 characters) when DEBUG is false"
+                )
+        return self
 
     # Paystack (standalone billing checkout)
     PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()

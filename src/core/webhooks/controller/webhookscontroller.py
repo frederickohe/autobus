@@ -1,6 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, Header
 import json
 import re
+import hmac
+import hashlib
 from datetime import datetime
 from typing import Optional, Tuple
 from core.webhooks.dto.response.simple_chat_response import SimpleChatResponse
@@ -15,12 +17,44 @@ from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
 from utilities.phone_utils import normalize_ghana_phone_number
 from core.auth.service.authservice import AuthService
+from config import settings
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-# Public routes: no JWT / Bearer dependency (external providers & simple chat clients).
+# Public routes: Meta uses verify_token / app secret; other helpers use X-Api-Key when configured.
 webhooks_routes = APIRouter()
+
+
+def _require_public_api_key(x_api_key: Optional[str] = Header(None, alias="X-Api-Key")) -> None:
+    expected = (settings.PUBLIC_WEBHOOK_API_KEY or "").strip()
+    if not expected:
+        if settings.DEBUG:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PUBLIC_WEBHOOK_API_KEY is not configured",
+        )
+    if not x_api_key or not hmac.compare_digest(x_api_key.strip(), expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+
+def _verify_meta_signature(raw_body: bytes, signature_header: Optional[str]) -> None:
+    secret = (settings.META_APP_SECRET or os.getenv("META_APP_SECRET") or "").strip()
+    if not secret:
+        if settings.DEBUG:
+            logger.warning("META_APP_SECRET not set; skipping Meta signature verification")
+            return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="META_APP_SECRET is not configured",
+        )
+    if not signature_header or not signature_header.startswith("sha256="):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing Meta signature")
+    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    provided = signature_header.split("=", 1)[1].strip()
+    if not hmac.compare_digest(expected, provided):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Meta signature")
 
 @webhooks_routes.get("/start-dialog")
 def verify_webhook(
@@ -162,8 +196,9 @@ def _resolve_company_number(
 def company_lookup(
     name: str = Query(..., min_length=2, max_length=200),
     db: Session = Depends(get_db),
+    _: None = Depends(_require_public_api_key),
 ):
-    """Public helper for the marketing-site chatbot to validate a business name."""
+    """Marketing-site company lookup (requires X-Api-Key when configured)."""
     query = name.strip()
     matches = _find_company_matches(db, query)
     if not matches:
@@ -195,10 +230,12 @@ def company_lookup(
 
 
 @webhooks_routes.post("/send-whatsapp-message")
-async def send_whatsapp_message(request: Request):
+async def send_whatsapp_message(
+    request: Request,
+    _: None = Depends(_require_public_api_key),
+):
     """
-    Public helper for the marketing-site chat bubble: send a WhatsApp Cloud API
-    template message to the visitor's phone (used for Meta App Review demos).
+    Marketing-site WhatsApp send helper. Requires X-Api-Key (PUBLIC_WEBHOOK_API_KEY).
     """
     payload = await request.json()
     raw_to = _payload_str(payload, "to", "customer_number", "phone", "recipient")
@@ -280,18 +317,22 @@ async def start_dialog(
     Handles incoming webhooks from either:
     1. Meta (Facebook/WhatsApp) webhooks - with 'object' and 'entry' fields
     2. Simple chat — preferred shape: ``customer_number``, ``company_number`` (merchant ``users.id``),
-       ``message``
-    3. Legacy simple chat: ``userid`` + ``message`` (optional ``context``; NLU currently ignores it)
+       ``message`` (requires X-Api-Key when PUBLIC_WEBHOOK_API_KEY is set)
+    3. Legacy simple chat: ``userid`` + ``message``
 
-    Routes to appropriate handler based on webhook type.
-
-    Does not require application JWT authentication.
+    Meta payloads must present a valid X-Hub-Signature-256 when META_APP_SECRET is set.
     """
-    # Parse the incoming payload as generic dict
-    payload = await request.json()
+    raw_body = await request.body()
+    try:
+        payload = json.loads(raw_body.decode("utf-8") or "{}")
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    # Log the incoming webhook payload
-    logger.info(f"Received webhook payload: {json.dumps(payload, indent=2)}")
+    # Log the incoming webhook payload (avoid dumping PII at info in production)
+    if settings.DEBUG:
+        logger.info(f"Received webhook payload: {json.dumps(payload, indent=2)}")
+    else:
+        logger.info("Received webhook payload keys=%s", list(payload.keys()) if isinstance(payload, dict) else type(payload))
 
     try:
         customer = _payload_str(payload, "customer_number", "customer_phone", "customer")
@@ -302,6 +343,7 @@ async def start_dialog(
         msg = _payload_str(payload, "message", "webhook_message", "text", "body")
 
         if customer and msg and (company or company_name):
+            _require_public_api_key(request.headers.get("X-Api-Key"))
             resolved_company, company_err = _resolve_company_number(
                 db,
                 company_number=company,
@@ -319,6 +361,7 @@ async def start_dialog(
 
         # Legacy: Flutter / older clients
         if "userid" in payload and "message" in payload:
+            _require_public_api_key(request.headers.get("X-Api-Key"))
             legacy_user = _payload_str(payload, "userid", "user_id", "phone")
             legacy_msg = _payload_str(payload, "message", "webhook_message", "text", "body")
             if legacy_user and legacy_msg:
@@ -335,6 +378,8 @@ async def start_dialog(
         if "object" not in payload or "entry" not in payload:
             logger.warning("Invalid webhook payload structure")
             return {"status": "ok", "message": "Invalid payload structure"}
+
+        _verify_meta_signature(raw_body, request.headers.get("X-Hub-Signature-256"))
 
         # Extract entry and changes
         entries = payload.get("entry", [])

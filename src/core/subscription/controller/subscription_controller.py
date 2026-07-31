@@ -4,7 +4,8 @@ from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from another_fastapi_jwt_auth import AuthJWT
 from utilities.dbconfig import get_db
-from core.user.controller.usercontroller import validate_token
+from core.auth.dependencies import validate_token, require_admin, get_current_user
+from core.user.model.User import User
 from core.user.service.user_service import UserService
 from core.subscription.service.subscription_service import SubscriptionService
 from core.subscription.dto.request.subscribe_request import SubscribeRequest
@@ -113,12 +114,15 @@ def get_subscription_plans(db: Session = Depends(get_db)):
 @subscription_routes.post("/subscribe", response_model=SubscriptionResponse)
 def subscribe_to_plan(
     request: SubscribeRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Subscribe user to a subscription plan using phone number"""
+    """Subscribe authenticated user (phone in body must match account)."""
+    if current_user.phone and request.phone and request.phone != current_user.phone:
+        raise HTTPException(status_code=403, detail="Phone does not match authenticated user")
     subscription_service = SubscriptionService(db)
     result = subscription_service.subscribe_user_by_phone(
-        phone=request.phone,
+        phone=request.phone or current_user.phone,
         plan_id=request.plan_id,
         payment_reference=request.payment_reference
     )
@@ -135,12 +139,15 @@ def subscribe_to_plan(
 @subscription_routes.post("/upgrade", response_model=SubscriptionResponse)
 def upgrade_subscription(
     request: UpgradeRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Upgrade user's current subscription to a higher plan using phone number"""
+    """Upgrade authenticated user's subscription (phone must match account)."""
+    if current_user.phone and request.phone and request.phone != current_user.phone:
+        raise HTTPException(status_code=403, detail="Phone does not match authenticated user")
     subscription_service = SubscriptionService(db)
     result = subscription_service.upgrade_subscription_by_phone(
-        phone=request.phone,
+        phone=request.phone or current_user.phone,
         new_plan_id=request.new_plan_id,
         payment_reference=request.payment_reference
     )
@@ -157,12 +164,15 @@ def upgrade_subscription(
 @subscription_routes.post("/cancel", response_model=SubscriptionResponse)
 def cancel_subscription(
     request: CancelRequest,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Cancel user's current subscription using phone number"""
+    """Cancel authenticated user's subscription (phone must match account)."""
+    if current_user.phone and request.phone and request.phone != current_user.phone:
+        raise HTTPException(status_code=403, detail="Phone does not match authenticated user")
     subscription_service = SubscriptionService(db)
     result = subscription_service.cancel_subscription_by_phone(
-        phone=request.phone,
+        phone=request.phone or current_user.phone,
         reason=request.reason
     )
     
@@ -178,12 +188,14 @@ def cancel_subscription(
 @subscription_routes.get("/status/{phone}", response_model=SubscriptionStatusResponse)
 def get_subscription_status(
     phone: str,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Get user's current subscription status using phone number"""
+    """Get subscription status for the authenticated user's phone only."""
+    if current_user.phone and phone != current_user.phone:
+        raise HTTPException(status_code=403, detail="Phone does not match authenticated user")
     subscription_service = SubscriptionService(db)
     result = subscription_service.get_user_subscription_status_by_phone(phone)
-    
     return SubscriptionStatusResponse(**result)
 
 
@@ -191,9 +203,12 @@ def get_subscription_status(
 def check_user_feature(
     feature: str,
     phone: str,
-    db: Session = Depends(get_db)
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    """Check if user has access to a specific feature using phone number"""
+    """Check feature access for the authenticated user's phone only."""
+    if current_user.phone and phone != current_user.phone:
+        raise HTTPException(status_code=403, detail="Phone does not match authenticated user")
     subscription_service = SubscriptionService(db)
     return subscription_service.check_user_has_feature_by_phone(phone, feature)
 
@@ -202,8 +217,8 @@ def check_user_feature(
 @subscription_routes.post("/admin/plans", response_model=PlanCreateResponse)
 def create_subscription_plan(
     request: CreatePlanRequest,
-    db: Session = Depends(get_db)
-    # TODO: Add admin authentication middleware here
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """Create a new subscription plan (Admin only)"""
     subscription_service = SubscriptionService(db)
@@ -245,8 +260,8 @@ def create_subscription_plan(
 def update_subscription_plan(
     plan_id: int,
     request: UpdatePlanRequest,
-    db: Session = Depends(get_db)
-    # TODO: Add admin authentication middleware here
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """Update a subscription plan (Admin only)"""
     subscription_service = SubscriptionService(db)
@@ -266,8 +281,8 @@ def update_subscription_plan(
 @subscription_routes.delete("/admin/plans/{plan_id}", response_model=SubscriptionResponse)
 def delete_subscription_plan(
     plan_id: int,
-    db: Session = Depends(get_db)
-    # TODO: Add admin authentication middleware here
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
 ):
     """Delete a subscription plan (Admin only)"""
     subscription_service = SubscriptionService(db)

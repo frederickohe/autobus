@@ -10,6 +10,15 @@ from core.user.dto.response.paged_users import PagedUserResponse
 from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
 from core.user.model.User import User
+from core.auth.dependencies import (
+    validate_token,
+    get_current_user as get_current_user_orm,
+    require_admin,
+    require_self_or_admin,
+)
+
+# Re-export for callers that historically imported validate_token / get_db from here
+__all__ = ["user_routes", "validate_token", "get_db"]
 import logging
 
 logging.basicConfig(level=logging.DEBUG)
@@ -36,27 +45,6 @@ from core.receipts.service.receipt_service import ReceiptService
 from core.receipts.dto.response.receiptresponse import ReceiptResponse
 from core.agent.tools.email.email import EmailTool
 
-def validate_token(authjwt: AuthJWT = Depends()):
-    try:
-        authjwt.jwt_required()
-        return authjwt
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(
-            status_code=401, 
-            detail="Token expired. Please log in again."
-        )
-    except MissingTokenError:
-        raise HTTPException(
-            status_code=401,
-            detail="No token found. Please create an account and log in.",
-        )
-    except Exception as e:
-        logger.error(f"Token validation error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=401,
-            detail=f"Invalid token: {str(e)}"
-        )
-    
 # Controller (Router)
 user_routes = APIRouter()
 
@@ -143,6 +131,7 @@ def get_my_notifications(
 @user_routes.get("/{user_id}/notifications", response_model=PagedNotificationResponse)
 def get_user_notifications(
     user_id: str,
+    current_user: User = Depends(get_current_user_orm),
     authjwt: AuthJWT = Depends(validate_token),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1),
@@ -150,6 +139,7 @@ def get_user_notifications(
     type: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
+    require_self_or_admin(user_id, current_user)
     notif_service = NotificationService(db)
 
     status_enum = None
@@ -186,6 +176,7 @@ def get_my_financials(
 @user_routes.get("/{user_id}/financials", response_model=List[HistoryResponseDTO])
 def get_user_financials(
     user_id: str,
+    current_user: User = Depends(get_current_user_orm),
     authjwt: AuthJWT = Depends(validate_token),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1),
@@ -195,6 +186,7 @@ def get_user_financials(
     end_date: Optional[datetime] = None,
     db: Session = Depends(get_db)
 ):
+    require_self_or_admin(user_id, current_user)
     history_service = HistoryService(db)
     return history_service.get_user_histories(user_id, page, page_size, intent, transaction_type, start_date, end_date)
 
@@ -215,10 +207,12 @@ def get_my_receipts(
 @user_routes.get("/{user_id}/receipts", response_model=List[ReceiptResponse])
 def get_user_receipts(
     user_id: str,
+    current_user: User = Depends(get_current_user_orm),
     authjwt: AuthJWT = Depends(validate_token),
     limit: int = Query(10, ge=1),
     db: Session = Depends(get_db)
 ):
+    require_self_or_admin(user_id, current_user)
     receipt_service = ReceiptService(db)
     return receipt_service.get_user_receipts(user_id, limit)
 
@@ -278,6 +272,7 @@ def update_my_profile_image(
 def update_user_notification_settings(
     user_id: str,
     payload: NotificationSettingsUpdateRequest,
+    current_user: User = Depends(get_current_user_orm),
     authjwt: AuthJWT = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
@@ -285,6 +280,7 @@ def update_user_notification_settings(
     Update only notification preference flags for a specific user.
     Allowed fields: in_app_notification, sms_notification
     """
+    require_self_or_admin(user_id, current_user)
     user_service = UserService(db)
     data = payload.model_dump(exclude_unset=True)
     return user_service.update_user_notification_settings(
@@ -298,6 +294,7 @@ def update_user_notification_settings(
 def update_user_profile_image(
     user_id: str,
     payload: ProfileImageUpdateRequest,
+    current_user: User = Depends(get_current_user_orm),
     authjwt: AuthJWT = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
@@ -305,6 +302,7 @@ def update_user_profile_image(
     Update only profile picture URL for a specific user.
     Allowed field: profile_picture_url
     """
+    require_self_or_admin(user_id, current_user)
     user_service = UserService(db)
     return user_service.update_user_profile_image(
         user_id, profile_picture_url=str(payload.profile_picture_url)
@@ -312,6 +310,7 @@ def update_user_profile_image(
     
 @user_routes.get("/all", response_model=PagedUserResponse)
 def get_all_users(
+    admin: User = Depends(require_admin),
     authjwt: AuthJWT = Depends(validate_token),
     page: int = Query(1, ge=1),
     size: int = Query(10, ge=1),
@@ -321,38 +320,74 @@ def get_all_users(
     return user_service.get_all_users_paged(page, size)
 
 @user_routes.get("/{user_id}", response_model=UserResponse)
-def get_user_by_id(user_id: str, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    # Add admin check here if needed
+def get_user_by_id(
+    user_id: str,
+    current_user: User = Depends(get_current_user_orm),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    require_self_or_admin(user_id, current_user)
     user_service = UserService(db)
     return user_service.get_user_by_id(user_id)
 
 
 @user_routes.put("/{user_id}", response_model=UserResponse)
-def update_user_endpoint(user_id: str, payload: UserUpdateRequest, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
+def update_user_endpoint(
+    user_id: str,
+    payload: UserUpdateRequest,
+    current_user: User = Depends(get_current_user_orm),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    require_self_or_admin(user_id, current_user)
     user_service = UserService(db)
     return user_service.update_user(user_id, payload)
 
 
 @user_routes.patch("/{user_id}", response_model=UserResponse)
-def patch_user_endpoint(user_id: str, payload: UserUpdateRequest, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
+def patch_user_endpoint(
+    user_id: str,
+    payload: UserUpdateRequest,
+    current_user: User = Depends(get_current_user_orm),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    require_self_or_admin(user_id, current_user)
     user_service = UserService(db)
     return user_service.update_user(user_id, payload)
 
 @user_routes.put("/{user_id}/status", response_model=MessageResponse)
-def update_user_status(user_id: str, enabled: bool = Query(...), authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    # Add admin check here if needed
+def update_user_status(
+    user_id: str,
+    enabled: bool = Query(...),
+    admin: User = Depends(require_admin),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
     user_service = UserService(db)
     user_service.set_user_enabled_status(user_id, enabled)
     return {"message": "User status updated successfully"}
 
 @user_routes.delete("/{user_id}", response_model=MessageResponse)
-def delete_user(user_id: str, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    # Add admin check here if needed
+def delete_user(
+    user_id: str,
+    admin: User = Depends(require_admin),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
     user_service = UserService(db)
     return user_service.delete_user(user_id)
 
 @user_routes.put("/{user_id}/role/{role_id}", response_model=MessageResponse)
-def update_user_role(user_id: str, role_id: str, authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    # Add admin check here if needed
-    user_service = UserService(db)
-    return user_service.update_user_role(user_id, role_id)
+def update_user_role(
+    user_id: str,
+    role_id: str,
+    admin: User = Depends(require_admin),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    # Role model not implemented; block privilege escalation surface.
+    raise HTTPException(
+        status_code=501,
+        detail="Role management is not enabled. Configure ADMIN_USER_IDS / ADMIN_EMAILS instead.",
+    )

@@ -72,6 +72,14 @@ async def lifespan(app: FastAPI):
                     )
                 logger.info("[APP_STARTUP] Added subscription_plans.credit_allocations column")
 
+        if "otps" in insp.get_table_names():
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE otps ALTER COLUMN otp TYPE VARCHAR(128)"))
+                logger.info("[APP_STARTUP] Ensured otps.otp column supports hashed OTPs")
+            except Exception as alter_err:
+                logger.debug("[APP_STARTUP] otps.otp alter skipped: %s", alter_err)
+
         db = SessionLocal()
         try:
             synced = CreditService(db).sync_plan_credit_allocations()
@@ -110,7 +118,10 @@ app = FastAPI(
     license_info={
         "name": "MIT",
     },
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 
@@ -122,23 +133,31 @@ async def root_health():
 
 @app.get("/", include_in_schema=False)
 async def api_root():
-    return RedirectResponse(url="/docs")
+    if settings.DEBUG:
+        return RedirectResponse(url="/docs")
+    return {"status": "ok", "service": settings.SERVICE_NAME}
 
 
 @app.get("/swagger", include_in_schema=False)
 async def swagger_redirect():
-    return RedirectResponse(url="/docs")
+    if settings.DEBUG:
+        return RedirectResponse(url="/docs")
+    from fastapi import HTTPException
+    raise HTTPException(status_code=404, detail="Not found")
 
 
 # -----------------------------------------------------------
-# Middleware (CORS)
+# Middleware (CORS) — explicit origins only (never * + credentials)
 # -----------------------------------------------------------
+_cors_origins = [
+    o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins or ["https://useautobus.com"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Api-Key"],
 )
 
 
