@@ -12,12 +12,39 @@ logger = logging.getLogger(__name__)
 class WhatsAppService:
     """Service for sending messages via Meta's WhatsApp Cloud API"""
 
-    def __init__(self):
-        self.api_key = os.getenv("META_API_KEY")
+    def __init__(self, api_key: Optional[str] = None, phone_number_id: Optional[str] = None):
+        self.api_key = (api_key or os.getenv("META_API_KEY") or "").strip() or None
         self.base_url = (
             os.getenv("WHATSAPP_GRAPH_BASE_URL") or "https://graph.facebook.com/v25.0"
         ).rstrip("/")
-        self.default_phone_id = (os.getenv("WHATSAPP_phone_ID") or "").strip()
+        self.default_phone_id = (
+            (phone_number_id or os.getenv("WHATSAPP_phone_ID") or "").strip()
+        )
+
+    @classmethod
+    def for_phone_id(cls, phone_id: str, db=None) -> "WhatsAppService":
+        """Prefer tenant token from WhatsApp Embedded Signup; fall back to platform key."""
+        token = None
+        if phone_id and db is not None:
+            try:
+                from core.whatsapp.model.WhatsAppAccount import WhatsAppAccount
+                from core.whatsapp.service.meta_embedded_signup_service import (
+                    MetaWhatsAppService,
+                )
+
+                row = (
+                    db.query(WhatsAppAccount)
+                    .filter(
+                        WhatsAppAccount.phone_number_id == str(phone_id),
+                        WhatsAppAccount.is_active.is_(True),
+                    )
+                    .first()
+                )
+                if row and row.access_token_encrypted:
+                    token = MetaWhatsAppService.decrypt_token(row.access_token_encrypted)
+            except Exception as exc:
+                logger.warning("Tenant WhatsApp token lookup failed: %s", exc)
+        return cls(api_key=token, phone_number_id=phone_id)
 
     def create_registration_flow(self, phone_id: str) -> Optional[str]:
         """

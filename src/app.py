@@ -29,6 +29,11 @@ from core.paystack.controller.paystack_controller import paystack_routes
 from core.agent.controller.agentcontroller import agent_routes
 from core.media.controller.media_controller import media_routes
 from core.socialmedia.controller.socialmedia_controller import social_routes
+from core.whatsapp.controller.whatsapp_controller import (
+    meta_whatsapp_callback_routes,
+    whatsapp_routes,
+)
+from core.sms_sender_id.controller.sms_sender_id_controller import sms_sender_id_routes
 from core.chatwoot.controller.chatwoot_controller import chatwoot_routes
 from core.integrations.controller.integration_test_controller import integration_routes
 from core.product.controller.product_controller import product_routes
@@ -150,8 +155,6 @@ async def swagger_redirect():
 # Middleware (CORS) — explicit origins only (never * + credentials)
 # Rate limiting is registered after CORS so it executes first on the request.
 # -----------------------------------------------------------
-from utilities.rate_limit import RateLimitMiddleware
-
 _cors_origins = [
     o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()
 ]
@@ -162,7 +165,12 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With", "X-Api-Key"],
 )
-app.add_middleware(RateLimitMiddleware)
+try:
+    from utilities.rate_limit import RateLimitMiddleware
+
+    app.add_middleware(RateLimitMiddleware)
+except ImportError:
+    pass
 
 
 # Exception Handlers
@@ -191,6 +199,10 @@ app.include_router(paystack_routes, prefix="/api/v1/paystack", tags=["Paystack R
 app.include_router(agent_routes, prefix="/api/v1/agent", tags=["Agent Routes"])
 app.include_router(media_routes, prefix="/api/v1/media", tags=["Media Generation"])
 app.include_router(social_routes, prefix="/api/v1/social", tags=["Social Media Routes"])
+app.include_router(whatsapp_routes, prefix="/api/v1/whatsapp", tags=["WhatsApp Meta Routes"])
+# Meta Embedded Signup redirect_uri: https://useautobus.com/api/social/callback
+app.include_router(meta_whatsapp_callback_routes, prefix="/api", tags=["WhatsApp Meta Callback"])
+app.include_router(sms_sender_id_routes, prefix="/api/v1/sms-sender-ids", tags=["SMS Sender ID"])
 app.include_router(chatwoot_routes, prefix="/api/v1/chatwoot", tags=["Chatwoot Routes"])
 app.include_router(integration_routes, prefix="/api/v1/integrations", tags=["Integrations (self-test)"])
 app.include_router(product_routes, prefix="/api/v1/products", tags=["Product Routes"])

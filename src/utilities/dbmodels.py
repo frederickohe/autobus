@@ -38,6 +38,8 @@ _model_modules = [
 	"core.socialmedia.model.PostizOrganization",
 	"core.socialmedia.model.DigitalMarketingPostAsset",
 	"core.chatwoot.model.ChatwootAccount",
+	"core.whatsapp.model.WhatsAppAccount",
+	"core.sms_sender_id.model.SmsSenderIdRegistration",
 	"core.product.model.product",
 	"core.orders.model.order",
  

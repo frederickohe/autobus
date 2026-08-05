@@ -211,10 +211,16 @@ services:
 
       # Meta WhatsApp Cloud API (webhook verify + outbound send / media)
       META_API_KEY: ${META_API_KEY:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_APP_ID: ${META_APP_ID:-2213025492844421}
+      META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-1090469396641282}
+      META_WHATSAPP_REDIRECT_URI: ${META_WHATSAPP_REDIRECT_URI:-https://useautobus.com/api/social/callback}
+      PUBLIC_WEBHOOK_API_KEY: ${PUBLIC_WEBHOOK_API_KEY:-}
       VERIFY_TOKEN: ${VERIFY_TOKEN:-}
       WHATSAPP_phone_ID: ${WHATSAPP_phone_ID:-}
       WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID:-}
-      WHATSAPP_GRAPH_BASE_URL: ${WHATSAPP_GRAPH_BASE_URL:-https://graph.facebook.com/v24.0}
+      WHATSAPP_GRAPH_BASE_URL: ${WHATSAPP_GRAPH_BASE_URL:-https://graph.facebook.com/v25.0}
+      WHATSAPP_REGISTER_PIN: ${WHATSAPP_REGISTER_PIN:-123456}
 
       # Qdrant RAG stack: use `http://greenbrain_rag_api:8088` when backend joins `greenbrain_rag`
       # (see `networks` below). Otherwise use a host-reachable URL, e.g.

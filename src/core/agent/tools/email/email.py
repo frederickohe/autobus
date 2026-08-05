@@ -67,15 +67,20 @@ class EmailTool(BaseTool):
             decode_responses=True
         )
         self.db_pool = db_pool or next(get_db())
+        smtp_password = (
+            os.getenv('ZEPTOMAIL_SMTP_PASSWORD')
+            or os.getenv('ZEPTOMAIL_API_TOKEN')
+            or ''
+        ).strip()
         self.config = email_config or {
             'provider': 'zeptomail',
             'smtp_host': os.getenv('ZEPTOMAIL_SMTP_HOST', 'smtp.zeptomail.com'),
             'smtp_port': int(os.getenv('ZEPTOMAIL_SMTP_PORT', 587)),
             'smtp_username': os.getenv('ZEPTOMAIL_SMTP_USERNAME', 'emailapikey'),
-            'smtp_password': os.getenv('ZEPTOMAIL_SMTP_PASSWORD'),
-            'sender_domain': os.getenv('ZEPTOMAIL_SENDER_DOMAIN', 'greenbraintech.com'),
+            'smtp_password': smtp_password,
+            'sender_domain': os.getenv('ZEPTOMAIL_SENDER_DOMAIN', 'useautobus.com'),
             'api_key': os.getenv('EMAIL_PROVIDER_API_KEY'),
-            'default_from_domain': 'autobus.africa',
+            'default_from_domain': 'useautobus.com',
             'tracking_enabled': True,
             'rate_limit_per_user': 100
         }
@@ -141,10 +146,19 @@ class EmailTool(BaseTool):
     def _send_via_zeptomail(self, sender_email: str, to_email: str, subject: str, body: str) -> bool:
         """Send via Zoho Zeptomail SMTP."""
         port = int(os.getenv('ZEPTOMAIL_SMTP_PORT', 587))
-        smtp_server = os.getenv('ZEPTOMAIL_SMTP_HOST')
-        username = os.getenv('ZEPTOMAIL_SMTP_USERNAME')
-        password = os.getenv('ZEPTOMAIL_SMTP_PASSWORD')
-        
+        smtp_server = os.getenv('ZEPTOMAIL_SMTP_HOST', 'smtp.zeptomail.com')
+        username = os.getenv('ZEPTOMAIL_SMTP_USERNAME', 'emailapikey')
+        password = (
+            os.getenv('ZEPTOMAIL_SMTP_PASSWORD')
+            or os.getenv('ZEPTOMAIL_API_TOKEN')
+            or self.config.get('smtp_password')
+            or ''
+        ).strip()
+
+        if not password:
+            logger.error("ZEPTOMAIL_SMTP_PASSWORD/ZEPTOMAIL_API_TOKEN not set; cannot send email")
+            return False
+
         message = body
         msg = EmailMessage()
         msg['Subject'] = subject

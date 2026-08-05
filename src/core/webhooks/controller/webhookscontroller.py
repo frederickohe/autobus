@@ -72,7 +72,10 @@ def verify_webhook(
 
     if mode == "subscribe" and verify_token == expected_verify_token:
         logger.info("WEBHOOK VERIFIED")
-        return int(challenge)
+        # Meta expects the raw challenge echoed back as plain text.
+        from fastapi.responses import PlainTextResponse
+
+        return PlainTextResponse(content=str(challenge or ""))
     else:
         logger.warning("Webhook verification failed")
         raise HTTPException(
@@ -555,7 +558,7 @@ def handle_incoming_message(value: dict, db: Session):
 
         elif message_type in ["video", "document"]:
             logger.info(f"Received {message_type} message from {phone}")
-            whatsapp_service = WhatsAppService()
+            whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
             whatsapp_service.send_message(
                 phone_id=phone_id,
                 recipient_phone=phone,
@@ -565,7 +568,7 @@ def handle_incoming_message(value: dict, db: Session):
 
         else:
             logger.warning(f"Unsupported message type: {message_type}")
-            whatsapp_service = WhatsAppService()
+            whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
             whatsapp_service.send_message(
                 phone_id=phone_id,
                 recipient_phone=phone,
@@ -588,7 +591,7 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     message_text = text_data.get("body")
     logger.info(f"Extracted text message: {message_text}")
 
-    whatsapp_service = WhatsAppService()
+    whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
     logger.info(f"Processing message through NLU for {phone}")
 
     nlu_system = AutobusNLUSystem()
@@ -649,7 +652,7 @@ def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Ses
             # Validate required fields
             if not all([first_name, last_name, user_phone, email, pin]):
                 logger.error("Missing required fields in registration data")
-                whatsapp_service = WhatsAppService()
+                whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
                 whatsapp_service.send_message(
                     phone_id=phone_id,
                     recipient_phone=phone,
@@ -671,7 +674,7 @@ def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Ses
 
             if existing_user:
                 logger.warning(f"User already exists: {email} or {normalized_wa_id}")
-                whatsapp_service = WhatsAppService()
+                whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
                 whatsapp_service.send_message(
                     phone_id=phone_id,
                     recipient_phone=phone,
@@ -708,7 +711,7 @@ def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Ses
             logger.info(f"User registered successfully: {user_id} - {email}")
 
             # Send confirmation message
-            whatsapp_service = WhatsAppService()
+            whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
             whatsapp_service.send_message(
                 phone_id=phone_id,
                 recipient_phone=phone,
@@ -720,7 +723,7 @@ def handle_interactive_message(message: dict, phone: str, phone_id: str, db: Ses
             db.rollback()
 
             # Send error message to user
-            whatsapp_service = WhatsAppService()
+            whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
             whatsapp_service.send_message(
                 phone_id=phone_id,
                 recipient_phone=phone,
@@ -808,7 +811,7 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
         
         logger.info(f"Received image message from {phone}, media_id: {media_id}")
 
-        whatsapp_service = WhatsAppService()
+        whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
         logger.info(f"Processing image through NLU for {phone}")
 
         nlu_system = AutobusNLUSystem()
@@ -867,7 +870,7 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
         
         logger.info(f"Received audio message from {phone}, media_id: {media_id}")
 
-        whatsapp_service = WhatsAppService()
+        whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
         logger.info(f"Processing audio through NLU for {phone}")
 
         nlu_system = AutobusNLUSystem()
