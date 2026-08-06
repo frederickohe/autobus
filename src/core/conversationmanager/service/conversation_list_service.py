@@ -355,10 +355,31 @@ class ConversationListService:
         if len(history) > 20:
             history = history[-20:]
         state["conversation_history"] = history
+
+        # Queue for customer delivery (public webchat poll / next inbound during intervention).
+        pending = list(state.get("pending_customer_messages") or [])
+        pending.append(message)
+        state["pending_customer_messages"] = pending
+
         row.conversation_state = state
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(row, "conversation_state")
         row.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(row)
+
+        # Keep NLU ConversationManager cache in sync when the same process handles webhooks.
+        try:
+            from core.nlu.service.conversation_manager import ConversationManager
+
+            cm = ConversationManager()
+            cached = cm.memory_cache.get(row.user_id)
+            if cached and cached.session_db_id == row.id:
+                cached.conversation_history = list(history)
+                cached.pending_customer_messages = list(pending)
+        except Exception:
+            pass
 
         user_names = self._load_user_fullnames({row.user_id})
         return self._to_detail(row, user_names)

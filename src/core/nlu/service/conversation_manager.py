@@ -30,6 +30,8 @@ class ConversationState:
     intervention_trigger: Optional[str] = None
     intervention_reason: Optional[str] = None
     intervention_created_at: Optional[str] = None
+    # Agent replies waiting to be shown to the customer (webchat poll / next inbound).
+    pending_customer_messages: List[str] = None
 
     def __post_init__(self):
         if not self.conversation_id:
@@ -46,6 +48,8 @@ class ConversationState:
             self.last_successful_transaction = {}
         if self.pending_expense_dates is None:
             self.pending_expense_dates = []
+        if self.pending_customer_messages is None:
+            self.pending_customer_messages = []
 
     def to_dict(self) -> Dict:
         return {
@@ -69,6 +73,7 @@ class ConversationState:
             "intervention_trigger": self.intervention_trigger,
             "intervention_reason": self.intervention_reason,
             "intervention_created_at": self.intervention_created_at,
+            "pending_customer_messages": self.pending_customer_messages or [],
         }
 
     @classmethod
@@ -128,7 +133,39 @@ class ConversationManager:
         )
         if len(state.conversation_history) > 20:
             state.conversation_history = state.conversation_history[-20:]
+        if role == "human":
+            pending = list(state.pending_customer_messages or [])
+            pending.append(content)
+            state.pending_customer_messages = pending
         self._save_conversation_state(state)
+
+    def queue_pending_customer_message(self, user_id: str, content: str) -> None:
+        """Queue an agent reply for delivery to the customer channel (webchat poll)."""
+        state = self.get_conversation_state(user_id)
+        pending = list(state.pending_customer_messages or [])
+        pending.append(content)
+        state.pending_customer_messages = pending
+        self._save_conversation_state(state)
+
+    def flush_pending_customer_messages(self, user_id: str) -> List[str]:
+        """Return and clear queued agent replies for this conversation session.
+
+        Always reloads from DB so replies written by the interventions API (another
+        request / DB session) are visible even if this process has a stale cache.
+        """
+        self.db.expire_all()
+        loaded = self._load_active_session_from_db(user_id)
+        if loaded:
+            self.memory_cache[user_id] = loaded
+            state = loaded
+        else:
+            state = self.get_conversation_state(user_id)
+
+        pending = [m for m in (state.pending_customer_messages or []) if str(m).strip()]
+        if pending:
+            state.pending_customer_messages = []
+            self._save_conversation_state(state)
+        return pending
 
     def _insert_row(self, state: ConversationState, payload: Dict):
         row = DailyConversation(
@@ -150,7 +187,10 @@ class ConversationManager:
                 .first()
             )
             if row:
+                from sqlalchemy.orm.attributes import flag_modified
+
                 row.conversation_state = payload
+                flag_modified(row, "conversation_state")
                 row.conversation_date = state.conversation_date or date.today()
                 row.updated_at = datetime.utcnow()
             else:

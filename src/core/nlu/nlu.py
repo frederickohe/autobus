@@ -256,6 +256,15 @@ class AutobusNLUSystem:
         # (We still record user messages into history below.)
         intervention_is_active = bool(getattr(state, "intervention_active", False))
 
+        # Flush agent replies before any history write — otherwise a stale in-memory
+        # state can overwrite pending_customer_messages that the interventions API queued.
+        pending_agent_replies: List[str] = []
+        if intervention_is_active:
+            pending_agent_replies = self.conversation_manager.flush_pending_customer_messages(
+                user_id
+            )
+            state = self.conversation_manager.get_conversation_state(user_id)
+
         logger.info("Received message from %s: %s", user_id, (user_message or "")[:200])
 
         if state.conversation_lifecycle == "awaiting_followup_help":
@@ -288,9 +297,13 @@ class AutobusNLUSystem:
             user_message, state.conversation_history, state.current_intent, media_context
         )
 
-        # If intervention is active, allow only end_intervention to proceed; otherwise ack and stop.
+        # If intervention is active, allow only end_intervention to proceed; otherwise
+        # deliver any queued agent replies (so webchat/WhatsApp customers see them).
         if intervention_is_active and intent != "end_intervention":
-            response = self.response_formatter.format_response("", "intervention_active")
+            if pending_agent_replies:
+                response = "\n\n".join(pending_agent_replies)
+            else:
+                response = self.response_formatter.format_response("", "intervention_active")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
 
@@ -301,6 +314,8 @@ class AutobusNLUSystem:
             state.intervention_reason = None
             self.conversation_manager._save_conversation_state(state)
             response = "Okay — I’m back. How can I help?"
+            if pending_agent_replies:
+                response = "\n\n".join(pending_agent_replies) + "\n\n" + response
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
 
@@ -319,34 +334,10 @@ class AutobusNLUSystem:
             response = self.response_formatter.format_response("", "ask_for_image_description")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
-        
-        # If the intent is not clear due to low confidence, return appropriate response
-        if intent == "intent_not_clear":
-            logger.info("Intent not clear for user %s; activating intervention", user_id)
-            self._activate_intervention(
-                user_id=user_id,
-                trigger="intent_not_clear",
-                reason=user_message or "intent not clear",
-            )
-            response = self.response_formatter.format_response("", "intervention_created")
-            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
-            return response
 
-        # Unknown intent should also request intervention (handover).
+        # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
+        # Remap to RAG business chat before intervention gates fire.
         from core.nlu.config import INTENTS
-        if intent == "unknown" or intent not in INTENTS:
-            logger.info("Unknown intent for user %s (intent=%s); activating intervention", user_id, intent)
-            self._activate_intervention(
-                user_id=user_id,
-                trigger="unknown_intent",
-                reason=user_message or "unknown intent",
-                metadata={"intent": intent},
-            )
-            response = self.response_formatter.format_response("", "intervention_created")
-            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
-            return response
-        
-        logger.info("Detected intent=%s missing=%s", intent, missing_slots)
 
         merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
         if merchant_id:
@@ -361,6 +352,33 @@ class AutobusNLUSystem:
                 missing_slots = []
                 state.current_intent = ""
                 state.collected_slots = {}
+        
+        # If the intent is not clear due to low confidence, return appropriate response
+        if intent == "intent_not_clear":
+            logger.info("Intent not clear for user %s; activating intervention", user_id)
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="intent_not_clear",
+                reason=user_message or "intent not clear",
+            )
+            response = self.response_formatter.format_response("", "intervention_created")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+
+        # Unknown intent should also request intervention (handover).
+        if intent == "unknown" or intent not in INTENTS:
+            logger.info("Unknown intent for user %s (intent=%s); activating intervention", user_id, intent)
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="unknown_intent",
+                reason=user_message or "unknown intent",
+                metadata={"intent": intent},
+            )
+            response = self.response_formatter.format_response("", "intervention_created")
+            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
+            return response
+        
+        logger.info("Detected intent=%s missing=%s", intent, missing_slots)
 
         # Validate and merge slots
         validated_slots = self.slot_manager.validate_slots(intent, extracted_slots)

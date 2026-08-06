@@ -219,6 +219,7 @@ def company_lookup(
         u = matches[0]
         return {
             "ok": True,
+            "requires_selection": False,
             "company_number": u.id,
             "display_name": _merchant_display_name(u),
             "matches": options,
@@ -227,9 +228,43 @@ def company_lookup(
     return {
         "ok": True,
         "requires_selection": True,
-        "message": f"Several businesses match '{query}'. Pick the one you mean.",
+        "message": f"Multiple businesses match '{query}'. Please select one.",
         "matches": options,
     }
+
+
+@webhooks_routes.get("/agent-messages")
+def poll_agent_messages(
+    customer_number: str = Query(..., min_length=1),
+    company_number: str = Query(..., min_length=1),
+    db: Session = Depends(get_db),
+    _: None = Depends(_require_public_api_key),
+):
+    """
+    Public chat bubble poll: return (and clear) agent intervention replies queued
+    for ``{company_number}:{customer_number}``.
+    """
+    cust = (customer_number or "").strip()
+    comp = (company_number or "").strip()
+    if not cust or not comp:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="customer_number and company_number are required",
+        )
+
+    merchant = db.query(User).filter(User.id == comp).first()
+    if not merchant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Unknown company_number",
+        )
+
+    from core.nlu.service.conversation_manager import ConversationManager
+
+    nlu_user_id = f"{comp}:{cust}"
+    cm = ConversationManager()
+    messages = cm.flush_pending_customer_messages(nlu_user_id)
+    return {"messages": messages, "count": len(messages)}
 
 
 @webhooks_routes.post("/send-whatsapp-message")
