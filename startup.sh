@@ -137,12 +137,11 @@ python -m alembic upgrade head 2>&1 | grep -v "INFO" || true
 echo "Starting Autobus application..."
 # Trust X-Forwarded-* from the edge proxy (Caddy) so redirects keep https://
 # instead of rewriting Location to http:// and breaking authenticated clients.
+# (Those are uvicorn settings — pass via ProxyHeadersUvicornWorker, not gunicorn CLI.)
 exec gunicorn \
 	--bind 0.0.0.0:8000 \
 	--workers 4 \
-	--worker-class uvicorn.workers.UvicornWorker \
-	--forwarded-allow-ips='*' \
-	--proxy-headers \
+	--worker-class src.uvicorn_worker.ProxyHeadersUvicornWorker \
 	--name autobus \
 	--error-logfile - \
 	--access-logfile - \
