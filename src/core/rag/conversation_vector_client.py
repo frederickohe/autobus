@@ -43,11 +43,23 @@ class ConversationVectorClient:
             h["X-API-Key"] = self.api_key
         return h
 
-    def search(self, *, tenant_id: str, query: str, limit: int = 5) -> List[dict[str, Any]]:
+    def search(
+        self,
+        *,
+        tenant_id: str,
+        query: str,
+        limit: int = 5,
+        score_threshold: Optional[float] = None,
+        sources: Optional[List[str]] = None,
+    ) -> List[dict[str, Any]]:
         if not self.base:
             return []
         url = f"{self.base}/v1/query"
-        payload = {"tenant_id": tenant_id, "query": query, "limit": limit}
+        payload: dict[str, Any] = {"tenant_id": tenant_id, "query": query, "limit": limit}
+        if score_threshold is not None:
+            payload["score_threshold"] = score_threshold
+        if sources:
+            payload["sources"] = list(sources)
         with httpx.Client(timeout=20.0) as client:
             r = client.post(url, json=payload, headers=self._headers())
             r.raise_for_status()

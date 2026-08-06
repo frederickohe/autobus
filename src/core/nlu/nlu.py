@@ -187,6 +187,32 @@ class AutobusNLUSystem:
             return self._conversation_completion_tool(user_id, outcome.message)
         return outcome.message
 
+    @staticmethod
+    def _wants_end_intervention(user_message: str) -> bool:
+        """Cheap heuristic so intervention turns skip full intent detection."""
+        t = (user_message or "").strip().lower()
+        if not t:
+            return False
+        phrases = (
+            "end intervention",
+            "stop intervention",
+            "never mind",
+            "nevermind",
+            "continue with the bot",
+            "continue with bot",
+            "back to the bot",
+            "back to bot",
+            "bot is fine",
+            "talk to the bot",
+            "talk to bot",
+            "resume bot",
+            "cancel agent",
+            "no agent needed",
+            "i don't need an agent",
+            "i dont need an agent",
+        )
+        return any(p in t for p in phrases)
+
     def _activate_intervention(
         self,
         *,
@@ -279,6 +305,16 @@ class AutobusNLUSystem:
         else:
             self.conversation_manager.update_conversation_history(user_id, "user", user_message)
 
+        # During intervention, pause automation immediately so customer messages land in
+        # history without waiting on intent detection (which also races admin writes).
+        if intervention_is_active and not self._wants_end_intervention(user_message):
+            if pending_agent_replies:
+                # Already stored as role=human; return for channels without a poll loop.
+                return "\n\n".join(pending_agent_replies)
+            # Hold message for the customer only — do not append to history so the
+            # admin live-chat thread stays user/human messages.
+            return self.response_formatter.format_response("", "intervention_active")
+
         # Process multimodal inputs (images/audio)
         media_context = {}
         if image_media_id or image_url or audio_media_id or audio_url:
@@ -297,15 +333,12 @@ class AutobusNLUSystem:
             user_message, state.conversation_history, state.current_intent, media_context
         )
 
-        # If intervention is active, allow only end_intervention to proceed; otherwise
-        # deliver any queued agent replies (so webchat/WhatsApp customers see them).
+        # Heuristic allowed us through for a possible end_intervention; if the model
+        # disagrees, keep automation paused.
         if intervention_is_active and intent != "end_intervention":
             if pending_agent_replies:
-                response = "\n\n".join(pending_agent_replies)
-            else:
-                response = self.response_formatter.format_response("", "intervention_active")
-            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
-            return response
+                return "\n\n".join(pending_agent_replies)
+            return self.response_formatter.format_response("", "intervention_active")
 
         # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
         # Remap to RAG business chat before intervention gates fire.
@@ -1482,6 +1515,53 @@ class AutobusNLUSystem:
             logger.warning(f"Could not fetch internal user ID for {user_id}: {e}")
             return user_id
 
+    def _format_merchant_product_catalog(
+        self, user_data: Optional[Dict[str, Any]]
+    ) -> Optional[str]:
+        """Build a grounded product catalog snippet from the merchant Product DB."""
+        merchant_id = (user_data or {}).get("merchant_id") or (user_data or {}).get(
+            "db_user_id"
+        )
+        if not merchant_id:
+            return None
+        db = None
+        try:
+            from core.product.service.product_service import ProductService
+
+            db = SessionLocal()
+            products = ProductService(db).get_products_by_user(
+                str(merchant_id), skip=0, limit=50
+            )
+            if not products:
+                return None
+            lines = ["## Product catalog (live inventory — authoritative for product names/prices)"]
+            for p in products:
+                price = getattr(p, "price", None)
+                stock = getattr(p, "number_in_stock", None)
+                category = (getattr(p, "category", None) or "").strip()
+                desc = (getattr(p, "description", None) or "").strip()
+                bits = [f"- {p.name}"]
+                if price is not None:
+                    bits.append(f"price={price}")
+                if category:
+                    bits.append(f"category={category}")
+                if stock is not None:
+                    bits.append(f"stock={stock}")
+                line = " | ".join(bits)
+                if desc:
+                    line += f" — {desc[:160]}"
+                lines.append(line)
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("[RAG] product catalog fallback failed: %s", e, exc_info=True)
+            return None
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
     def _process_conversational_with_rag(
         self,
         *,
@@ -1502,6 +1582,9 @@ class AutobusNLUSystem:
         rag_context = None
         rag_hit_count = 0
         rag_search_ok = False
+        # Knowledge answers must come from indexed documents/websites — not prior chat turns.
+        # Chat-turn upserts previously polluted retrieval and caused invented product catalogs.
+        knowledge_sources = ["document", "website"]
         if not self._conversation_rag.enabled():
             logger.warning(
                 "[RAG] RAG_SERVICE_URL not configured; conversational reply will lack indexed context"
@@ -1514,10 +1597,18 @@ class AutobusNLUSystem:
                     tenant_id=tenant_id,
                     query=user_message,
                     limit=12,
+                    score_threshold=0.35,
+                    sources=knowledge_sources,
                 )
                 rag_hit_count = len(hits or [])
                 rag_context = self._conversation_rag.format_context(hits)
                 rag_search_ok = True
+                logger.info(
+                    "[RAG] knowledge search tenant=%s hits=%s intent=%s",
+                    tenant_id,
+                    rag_hit_count,
+                    intent,
+                )
             except Exception as e:
                 logger.warning(f"[RAG] search failed for {user_id}: {e}", exc_info=True)
 
@@ -1532,17 +1623,34 @@ class AutobusNLUSystem:
             and rag_search_ok
             and rag_hit_count == 0
         ):
-            logger.info(
-                "[RAG] No knowledge hits for customer session %s; activating intervention",
-                user_id,
-            )
-            self._activate_intervention(
-                user_id=user_id,
-                trigger="insufficient_knowledge",
-                reason=user_message or "no relevant knowledge base hits",
-                metadata={"intent": intent, "tenant_id": tenant_id},
-            )
-            return self.response_formatter.format_response("", "intervention_created")
+            # Prefer merchant product catalog when documents are missing but products exist in DB.
+            catalog_context = self._format_merchant_product_catalog(user_data)
+            if catalog_context:
+                rag_context = catalog_context
+                logger.info(
+                    "[RAG] No document hits for %s; using product catalog fallback",
+                    user_id,
+                )
+            else:
+                logger.info(
+                    "[RAG] No knowledge hits for customer session %s; activating intervention",
+                    user_id,
+                )
+                self._activate_intervention(
+                    user_id=user_id,
+                    trigger="insufficient_knowledge",
+                    reason=user_message or "no relevant knowledge base hits",
+                    metadata={"intent": intent, "tenant_id": tenant_id},
+                )
+                return self.response_formatter.format_response("", "intervention_created")
+        elif is_customer and intent == "business_conversation":
+            # Augment document RAG with live product catalog when available.
+            catalog_context = self._format_merchant_product_catalog(user_data)
+            if catalog_context:
+                rag_context = (
+                    (rag_context + "\n\n" if rag_context else "")
+                    + catalog_context
+                )
 
         msg = self.intent_processor.process_conversational_intent(
             intent,
@@ -1554,27 +1662,8 @@ class AutobusNLUSystem:
             rag_context=rag_context,
         )
 
-        if tenant_id and self._conversation_rag.enabled():
-            try:
-                chatter_phone = (
-                    (user_data or {}).get("customer_phone")
-                    or (user_data or {}).get("user_id")
-                    or user_id
-                )
-                meta: Dict[str, Any] = {
-                    "user_phone": chatter_phone,
-                    "db_user_id": str(internal_user_id),
-                }
-                self._conversation_rag.upsert_turns(
-                    tenant_id=tenant_id,
-                    points=[
-                        {"text": user_message, "role": "user", "metadata": meta},
-                        {"text": msg, "role": "assistant", "metadata": meta},
-                    ],
-                )
-            except Exception as e:
-                logger.warning(f"[RAG] upsert failed for {user_id}: {e}", exc_info=True)
-
+        # Do not write chat turns back into the knowledge index. Prior assistant
+        # hallucinations were being retrieved as "facts" on later product questions.
         return msg
 
     def _route_conversational_intent_to_chatwoot(

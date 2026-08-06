@@ -96,6 +96,8 @@ class IntentProcessor:
                 system_prompt
                 + "\n\n## Retrieved memory (same tenant — primary source for company/business facts)\n"
                 + rag_context.strip()
+                + "\n\nGrounding rules: Only use facts from Retrieved memory / Product catalog above. "
+                + "Do not invent products, prices, or services that are not listed there."
             )
         else:
             system_prompt = (
@@ -103,14 +105,16 @@ class IntentProcessor:
                 + "\n\n## Retrieved memory\n"
                 + "No relevant indexed documents were retrieved for this question. "
                 + "Do not invent company or product facts. "
-                + "If the user asks about their business, say you need more information in their knowledge base."
+                + "If the user asks about products or the business, say you need more information "
+                + "in the knowledge base (or that a human agent can help)."
             )
-        
+
+        temperature = 0.2 if intent == "business_conversation" else 0.7
         response = self.llm_client.chat_completion(
             system_prompt=system_prompt,
             user_message=user_message,
             conversation_history=conversation_history,
-            temperature=0.7
+            temperature=temperature,
         )
         
         return self._format_conversational_response(intent, response, slots)

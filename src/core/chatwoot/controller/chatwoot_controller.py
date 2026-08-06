@@ -220,7 +220,12 @@ async def chatwoot_session(
         raise HTTPException(status_code=400, detail="CHATWOOT_PUBLIC_URL or CHATWOOT_BASE_URL must be set.")
 
     auth_url = _inboxes_settings_url(public_url, mapping.chatwoot_account_id)
-    pwd = derive_chatwoot_password(username=user.fullname)
+    pwd = derive_chatwoot_password(
+        username=(
+            getattr(user, "fullname", None) or getattr(user, "name", None) or user.email or ""
+        ).strip()
+        or user.email
+    )
     ready = await _probe_token(client)
 
     return ChatwootSessionResponse(
@@ -260,7 +265,12 @@ async def chatwoot_channel_link(
         raise HTTPException(status_code=400, detail="CHATWOOT_PUBLIC_URL or CHATWOOT_BASE_URL must be set.")
 
     auth_url = _inboxes_settings_url(public_url, mapping.chatwoot_account_id)
-    pwd = derive_chatwoot_password(username=user.fullname)
+    pwd = derive_chatwoot_password(
+        username=(
+            getattr(user, "fullname", None) or getattr(user, "name", None) or user.email or ""
+        ).strip()
+        or user.email
+    )
     ready = await _probe_token(client)
 
     autobus_meta: Optional[str] = None

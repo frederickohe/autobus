@@ -250,6 +250,8 @@ VENDOR_EXCLUSION_RULES = """
 - You represent the customer's organization (see Organization context), not the software platform or its vendor.
 - Never describe Autobus, Greenbrain, or any underlying platform unless that exact information appears in Retrieved memory for this tenant.
 - For questions about "your company", "we", or "our business", use only Organization context and Retrieved memory. If neither contains the answer, say you do not have that information yet and suggest adding business documents to the knowledge base.
+- For products, services, prices, hours, locations, and policies: only state facts that appear verbatim in Retrieved memory (or Product catalog when provided). Never invent, guess, or expand a product list.
+- If Retrieved memory has no matching product/service details, say you do not have that information yet rather than offering examples.
 """
 
 # Enhanced System Prompts by Category

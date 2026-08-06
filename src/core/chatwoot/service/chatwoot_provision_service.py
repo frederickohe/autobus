@@ -43,13 +43,16 @@ async def ensure_chatwoot_provisioned(db: Session, user_id: str) -> Optional[Cha
     if not user or not user.email:
         return None
 
+    display_name = (
+        getattr(user, "fullname", None) or getattr(user, "name", None) or user.email or ""
+    ).strip()
     account_name = (
-        (user.company or user.organization_workplace or user.fullname or "Autobus Client").strip()
+        (user.company or user.organization_workplace or display_name or "Autobus Client").strip()
         or "Autobus Client"
     )
     base_url = os.getenv("CHATWOOT_BASE_URL", "").strip()
     token = os.getenv("CHATWOOT_PLATFORM_API_TOKEN", "").strip()
-    chatwoot_password = derive_chatwoot_password(username=user.fullname)
+    chatwoot_password = derive_chatwoot_password(username=display_name or user.email)
     client = ChatwootClient(base_url=base_url, platform_api_token=token)
 
     try:
@@ -57,12 +60,16 @@ async def ensure_chatwoot_provisioned(db: Session, user_id: str) -> Optional[Cha
         cw_account_id, cw_user_id, cw_access_token = await client.provision_account_and_user(
             account_name=account_name,
             email=user.email,
-            name=(user.fullname or user.email).strip(),
+            name=display_name or user.email,
             password=chatwoot_password,
             support_email=user.email,
         )
     except ChatwootAPIError as e:
         logger.warning("[CHATWOOT] Lazy provisioning failed for user %s: %s", user_id, e)
+        return None
+    except Exception as e:
+        # e.g. httpx.ConnectError when Chatwoot FORCE_SSL redirects http→https inside Docker
+        logger.warning("[CHATWOOT] Lazy provisioning error for user %s: %s", user_id, e)
         return None
 
     mapping = ChatwootAccount(

@@ -84,9 +84,9 @@ def index_extracted_text_for_user(
             )
         total_batches = max(1, (len(points) + 63) // 64)
 
-        def _batch_done(done_batches: int) -> None:
+        def _batch_done(done_batches: int, total: int = 0) -> None:
             if on_index_progress:
-                on_index_progress(done_batches, total_batches)
+                on_index_progress(done_batches, total or total_batches)
 
         n = client.upsert_points_batched(
             tenant_id=tenant_id,
