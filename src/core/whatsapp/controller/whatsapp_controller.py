@@ -357,10 +357,31 @@ async def meta_social_callback(
     error: Optional[str] = Query(None),
     error_description: Optional[str] = Query(None),
     error_message: Optional[str] = Query(None),
+    error_reason: Optional[str] = Query(None),
     waba_id: Optional[str] = Query(None),
     phone_number_id: Optional[str] = Query(None),
     business_id: Optional[str] = Query(None),
 ):
+    """
+    Shared Meta redirect URI for WhatsApp Embedded Signup and Instagram Business Login.
+
+    Instagram states are prefixed with ``ig.``; everything else uses the WhatsApp handler.
+    """
+    from core.instagram.controller.instagram_controller import (
+        handle_instagram_oauth_callback,
+    )
+    from core.instagram.service.instagram_oauth_service import InstagramOAuthState
+
+    if InstagramOAuthState.is_instagram_state(state):
+        return await handle_instagram_oauth_callback(
+            db=db,
+            code=code,
+            state=state,
+            error=error,
+            error_description=error_description,
+            error_reason=error_reason or error_message,
+        )
+
     return await whatsapp_meta_callback(
         request=request,
         db=db,

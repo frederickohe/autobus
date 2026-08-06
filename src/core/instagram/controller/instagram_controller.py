@@ -1,0 +1,322 @@
+"""Instagram Business Login connect / accounts / callback helpers."""
+
+from __future__ import annotations
+
+import logging
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from another_fastapi_jwt_auth import AuthJWT
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
+from core.instagram.model.InstagramAccount import InstagramAccount
+from core.instagram.service.instagram_oauth_service import (
+    InstagramOAuthService,
+    InstagramOAuthState,
+)
+from utilities.dbconfig import get_db
+
+logger = logging.getLogger(__name__)
+
+instagram_routes = APIRouter()
+
+
+def validate_token(authjwt: AuthJWT = Depends()) -> str:
+    try:
+        authjwt.jwt_required()
+        return authjwt.get_jwt_subject()
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+
+class InstagramAccountResponse(BaseModel):
+    id: str
+    ig_user_id: str
+    username: Optional[str] = None
+    name: Optional[str] = None
+    account_type: Optional[str] = None
+    profile_picture_url: Optional[str] = None
+    is_active: bool
+    messaging_enabled: bool
+    publishing_enabled: bool
+    permissions: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class InstagramConnectResponse(BaseModel):
+    authorization_url: str
+    provider: str = "INSTAGRAM"
+    state: str
+    redirect_uri: str
+    message: str = (
+        "Open authorization_url to link Instagram via Business Login. "
+        "This enables messaging and publishing for Autobus."
+    )
+
+
+def _frontend_base() -> str:
+    return (os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com").rstrip("/")
+
+
+def _upsert_account(
+    db: Session,
+    *,
+    user_id: str,
+    ig_user_id: str,
+    access_token: str,
+    username: Optional[str],
+    name: Optional[str],
+    account_type: Optional[str],
+    profile_picture_url: Optional[str],
+    permissions: Optional[str],
+    token_expires_at: Optional[datetime],
+) -> InstagramAccount:
+    svc = InstagramOAuthService()
+    existing = (
+        db.query(InstagramAccount)
+        .filter(InstagramAccount.ig_user_id == ig_user_id)
+        .first()
+    )
+    if existing and existing.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This Instagram account is already linked to another Autobus account.",
+        )
+
+    token_enc = svc.encrypt_token(access_token)
+    if existing:
+        existing.username = username or existing.username
+        existing.name = name or existing.name
+        existing.account_type = account_type or existing.account_type
+        existing.profile_picture_url = profile_picture_url or existing.profile_picture_url
+        existing.permissions = permissions or existing.permissions
+        existing.access_token_encrypted = token_enc
+        existing.token_expires_at = token_expires_at
+        existing.is_active = True
+        existing.messaging_enabled = True
+        existing.publishing_enabled = True
+        existing.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    row = InstagramAccount(
+        id=str(uuid.uuid4()),
+        user_id=user_id,
+        ig_user_id=ig_user_id,
+        username=username,
+        name=name,
+        account_type=account_type,
+        profile_picture_url=profile_picture_url,
+        permissions=permissions,
+        access_token_encrypted=token_enc,
+        token_expires_at=token_expires_at,
+        is_active=True,
+        messaging_enabled=True,
+        publishing_enabled=True,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> InstagramAccount:
+    svc = InstagramOAuthService()
+    short = svc.exchange_code(code)
+    short_token = short["access_token"]
+    permissions = svc.permissions_list(short.get("permissions") or short.get("scope"))
+    user_id_from_token = short.get("user_id")
+
+    long_data = svc.exchange_long_lived(short_token)
+    access_token = long_data.get("access_token") or short_token
+    expires_at = svc.token_expiry(long_data.get("expires_in") or short.get("expires_in"))
+
+    profile: dict = {}
+    try:
+        profile = svc.fetch_profile(access_token)
+    except Exception as exc:
+        logger.warning("[IG] profile fetch failed, using token user_id: %s", exc)
+
+    ig_user_id = str(profile.get("id") or user_id_from_token or "").strip()
+    if not ig_user_id:
+        raise RuntimeError("Instagram login succeeded but no user id was returned.")
+
+    return _upsert_account(
+        db,
+        user_id=user_id,
+        ig_user_id=ig_user_id,
+        access_token=access_token,
+        username=profile.get("username"),
+        name=profile.get("name"),
+        account_type=profile.get("account_type"),
+        profile_picture_url=profile.get("profile_picture_url"),
+        permissions=",".join(permissions) if permissions else None,
+        token_expires_at=expires_at,
+    )
+
+
+def _success_html(account: InstagramAccount) -> str:
+    label = account.username or account.name or account.ig_user_id
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>Instagram linked</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{{font-family:system-ui,sans-serif;background:#0b1020;color:#e8eaf6;display:flex;
+align-items:center;justify-content:center;min-height:100vh;margin:0}}
+.card{{max-width:420px;padding:28px;border:1px solid #3d2a55;border-radius:16px;background:#161022}}
+a{{color:#f48fb1}}
+</style></head>
+<body><div class="card">
+<h1>Instagram linked</h1>
+<p>Connected <strong>@{label}</strong> to Autobus for messaging and publishing.</p>
+<p><a href="{_frontend_base()}">Back to Autobus</a></p>
+</div>
+<script>try{{window.opener&&window.opener.postMessage({{type:'AUTOBUS_INSTAGRAM_LINKED',ig_user_id:'{account.ig_user_id}'}},'*');}}catch(e){{}}
+setTimeout(function(){{window.location.replace('{_frontend_base()}/');}},2500);</script>
+</body></html>"""
+
+
+def _error_html(message: str) -> str:
+    safe = (
+        (message or "Authorization failed")
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"/><title>Instagram link failed</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+body{{font-family:system-ui,sans-serif;background:#140b0b;color:#ffebee;display:flex;
+align-items:center;justify-content:center;min-height:100vh;margin:0}}
+.card{{max-width:420px;padding:28px;border:1px solid #4a1f1f;border-radius:16px;background:#201010}}
+a{{color:#ff8a80}}
+</style></head>
+<body><div class="card"><h1>Instagram link failed</h1><p>{safe}</p>
+<p><a href="{_frontend_base()}">Back to Autobus</a></p></div></body></html>"""
+
+
+@instagram_routes.get("/connect", response_model=InstagramConnectResponse)
+async def instagram_connect(
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Return Instagram Business Login authorize URL for the authenticated user."""
+    try:
+        user_id = resolve_internal_user_id(db, jwt_subject)
+        svc = InstagramOAuthService()
+        svc.require_config()
+        state = InstagramOAuthState.create(user_id)
+        url = svc.build_authorize_url(state)
+        return InstagramConnectResponse(
+            authorization_url=url,
+            state=state,
+            redirect_uri=svc.redirect_uri,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[IG] connect failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@instagram_routes.get("/accounts", response_model=List[InstagramAccountResponse])
+async def list_instagram_accounts(
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    user_id = resolve_internal_user_id(db, jwt_subject)
+    rows = (
+        db.query(InstagramAccount)
+        .filter(InstagramAccount.user_id == user_id, InstagramAccount.is_active.is_(True))
+        .all()
+    )
+    return [InstagramAccountResponse.model_validate(r) for r in rows]
+
+
+@instagram_routes.delete("/accounts/{account_id}")
+async def disconnect_instagram_account(
+    account_id: str,
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    user_id = resolve_internal_user_id(db, jwt_subject)
+    row = (
+        db.query(InstagramAccount)
+        .filter(InstagramAccount.id == account_id, InstagramAccount.user_id == user_id)
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Instagram account not found")
+    row.is_active = False
+    db.commit()
+    return {"status": "ok", "message": "Instagram account disconnected"}
+
+
+async def handle_instagram_oauth_callback(
+    *,
+    db: Session,
+    code: Optional[str],
+    state: Optional[str],
+    error: Optional[str],
+    error_description: Optional[str],
+    error_reason: Optional[str],
+) -> HTMLResponse:
+    """Shared callback body used by /api/social/callback dispatcher."""
+    if error or error_reason:
+        msg = error_description or error_reason or error or "Authorization failed"
+        return HTMLResponse(_error_html(msg), status_code=400)
+
+    if not code:
+        return HTMLResponse(_error_html("Missing authorization code from Instagram."), status_code=400)
+
+    if not state:
+        return HTMLResponse(
+            _error_html("Missing state. Start linking again from Autobus Manage Channels."),
+            status_code=400,
+        )
+
+    user_id = InstagramOAuthState.validate(state)
+    if not user_id:
+        return HTMLResponse(
+            _error_html("Invalid or expired Instagram link session. Please try linking again."),
+            status_code=400,
+        )
+
+    try:
+        account = complete_instagram_onboarding(db, user_id=user_id, code=code)
+        return HTMLResponse(_success_html(account))
+    except Exception as exc:
+        logger.exception("[IG] oauth callback failed")
+        return HTMLResponse(_error_html(str(exc)), status_code=400)
+
+
+@instagram_routes.get("/callback", response_class=HTMLResponse)
+async def instagram_oauth_callback(
+    db: Session = Depends(get_db),
+    code: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    error_description: Optional[str] = Query(None),
+    error_reason: Optional[str] = Query(None),
+):
+    return await handle_instagram_oauth_callback(
+        db=db,
+        code=code,
+        state=state,
+        error=error,
+        error_description=error_description,
+        error_reason=error_reason,
+    )

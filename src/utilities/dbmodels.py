@@ -39,6 +39,7 @@ _model_modules = [
 	"core.socialmedia.model.DigitalMarketingPostAsset",
 	"core.chatwoot.model.ChatwootAccount",
 	"core.whatsapp.model.WhatsAppAccount",
+	"core.instagram.model.InstagramAccount",
 	"core.sms_sender_id.model.SmsSenderIdRegistration",
 	"core.product.model.product",
 	"core.orders.model.order",

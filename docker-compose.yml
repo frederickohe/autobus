@@ -215,6 +215,11 @@ services:
       META_APP_ID: ${META_APP_ID:-2213025492844421}
       META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-1090469396641282}
       META_WHATSAPP_REDIRECT_URI: ${META_WHATSAPP_REDIRECT_URI:-https://useautobus.com/api/social/callback}
+      # Instagram Business Login (API with Instagram Login) — app id differs from META_APP_ID
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-1370992838225688}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+      INSTAGRAM_REDIRECT_URI: ${INSTAGRAM_REDIRECT_URI:-https://useautobus.com/api/social/callback}
+      INSTAGRAM_OAUTH_SCOPES: ${INSTAGRAM_OAUTH_SCOPES:-instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments,instagram_business_content_publish,instagram_business_manage_insights}
       PUBLIC_WEBHOOK_API_KEY: ${PUBLIC_WEBHOOK_API_KEY:-}
       VERIFY_TOKEN: ${VERIFY_TOKEN:-}
       WHATSAPP_phone_ID: ${WHATSAPP_phone_ID:-}

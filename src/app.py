@@ -33,6 +33,7 @@ from core.whatsapp.controller.whatsapp_controller import (
     meta_whatsapp_callback_routes,
     whatsapp_routes,
 )
+from core.instagram.controller.instagram_controller import instagram_routes
 from core.sms_sender_id.controller.sms_sender_id_controller import sms_sender_id_routes
 from core.chatwoot.controller.chatwoot_controller import chatwoot_routes
 from core.integrations.controller.integration_test_controller import integration_routes
@@ -200,7 +201,9 @@ app.include_router(agent_routes, prefix="/api/v1/agent", tags=["Agent Routes"])
 app.include_router(media_routes, prefix="/api/v1/media", tags=["Media Generation"])
 app.include_router(social_routes, prefix="/api/v1/social", tags=["Social Media Routes"])
 app.include_router(whatsapp_routes, prefix="/api/v1/whatsapp", tags=["WhatsApp Meta Routes"])
-# Meta Embedded Signup redirect_uri: https://useautobus.com/api/social/callback
+app.include_router(instagram_routes, prefix="/api/v1/instagram", tags=["Instagram Business Login"])
+# Shared Meta redirect_uri (WhatsApp ES + Instagram Business Login):
+# https://useautobus.com/api/social/callback
 app.include_router(meta_whatsapp_callback_routes, prefix="/api", tags=["WhatsApp Meta Callback"])
 app.include_router(sms_sender_id_routes, prefix="/api/v1/sms-sender-ids", tags=["SMS Sender ID"])
 app.include_router(chatwoot_routes, prefix="/api/v1/chatwoot", tags=["Chatwoot Routes"])
