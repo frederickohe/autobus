@@ -116,4 +116,10 @@ async def reset_password_no_auth(
 def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
     """Verify OTP and enable user account"""
     auth_service = AuthService(db)
-    return auth_service.verify_and_enable_user(request.phone, request.otp)
+    result = auth_service.verify_and_enable_user(request.phone, request.otp)
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=400,
+            detail=result.get("message") or "Invalid or expired OTP",
+        )
+    return result

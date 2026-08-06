@@ -139,6 +139,7 @@ services:
       
       # OTP Configuration
       OTP_EXPIRE_MINUTES: ${OTP_EXPIRE_MINUTES:-5}
+      OTP_EXPIRE_SECONDS: ${OTP_EXPIRE_SECONDS:-300}
 
       # Rate limiting (Redis fixed-window per client IP)
       RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}

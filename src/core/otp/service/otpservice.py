@@ -35,7 +35,12 @@ class OTPService:
 
     def _format_otp_message(self, otp_code: str) -> str:
         """Format OTP message for SMS"""
-        return f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_SECONDS} seconds."
+        seconds = int(settings.OTP_EXPIRE_SECONDS)
+        if seconds >= 60 and seconds % 60 == 0:
+            validity = f"{seconds // 60} minutes"
+        else:
+            validity = f"{seconds} seconds"
+        return f"Your verification code is: {otp_code}. Valid for {validity}."
 
     def send_otp_phone(self, phone: str) -> OTPSendResponse:
         """Send OTP to phone number using Wirepick SMS"""

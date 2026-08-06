@@ -106,8 +106,13 @@ class Settings(BaseSettings):
     BLOTATO_OAUTH_BASE: str = os.environ.get('BLOTATO_OAUTH_BASE', 'https://app.blotato.com')
     
     # OTP Configuration
-    # Default to 30 seconds (can override via env).
-    OTP_EXPIRE_SECONDS: int = int(os.environ.get("OTP_EXPIRE_SECONDS", 30))
+    # Prefer OTP_EXPIRE_SECONDS; if unset, honor OTP_EXPIRE_MINUTES (compose default 5).
+    # Fallback is 5 minutes — 30s was too short for SMS delivery + user entry.
+    OTP_EXPIRE_SECONDS: int = (
+        int(os.environ["OTP_EXPIRE_SECONDS"])
+        if os.environ.get("OTP_EXPIRE_SECONDS")
+        else int(float(os.environ.get("OTP_EXPIRE_MINUTES", "5")) * 60)
+    )
     # Backward-compatible minutes value for any legacy call sites.
     OTP_EXPIRE_MINUTES: float = OTP_EXPIRE_SECONDS / 60
 
