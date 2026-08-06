@@ -11,7 +11,7 @@ if not GROQ_API_KEY:
     raise ValueError("GROQ_API_KEY environment variable is not set")
 
 GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
-MODEL = os.getenv("LLM_MODEL", "meta-llama/llama-4-scout-17b-16e-instruct")
+MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 AUDIO_TRANSCRIPTION_MODEL = os.getenv("AUDIO_TRANSCRIPTION_MODEL", "whisper-large-v3")
 
 # Local Model Configuration
@@ -42,6 +42,12 @@ INTENTS = {
     "business_conversation": {
         "description": "Handle business-related conversations",
         "slots": ["category", "user_query"],
+        "required_slots": [],
+        "category": "conversational"
+    },
+    "small_talk": {
+        "description": "Handle casual small talk unrelated to business actions",
+        "slots": [],
         "required_slots": [],
         "category": "conversational"
     },

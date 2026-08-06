@@ -307,6 +307,30 @@ class AutobusNLUSystem:
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
 
+        # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
+        # Remap to RAG business chat before intervention gates fire.
+        # Preserve explicit human handoff / resume and image-refusal intents.
+        from core.nlu.config import INTENTS
+
+        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        if merchant_id:
+            conversational_only = set(INTENT_CATEGORIES.get("conversational", []))
+            preserve_intents = {
+                "request_intervention",
+                "end_intervention",
+                "cannot_process_image",
+            }
+            if intent not in conversational_only and intent not in preserve_intents:
+                logger.info(
+                    "Customer session %s: overriding admin intent '%s' with business_conversation",
+                    user_id,
+                    intent,
+                )
+                intent = "business_conversation"
+                missing_slots = []
+                state.current_intent = ""
+                state.collected_slots = {}
+
         if intent == "end_intervention":
             # Return automation to normal flow for today
             state.intervention_active = False
@@ -334,24 +358,6 @@ class AutobusNLUSystem:
             response = self.response_formatter.format_response("", "ask_for_image_description")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
-
-        # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
-        # Remap to RAG business chat before intervention gates fire.
-        from core.nlu.config import INTENTS
-
-        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
-        if merchant_id:
-            conversational_only = set(INTENT_CATEGORIES.get("conversational", []))
-            if intent not in conversational_only:
-                logger.info(
-                    "Customer session %s: overriding admin intent '%s' with business_conversation",
-                    user_id,
-                    intent,
-                )
-                intent = "business_conversation"
-                missing_slots = []
-                state.current_intent = ""
-                state.collected_slots = {}
         
         # If the intent is not clear due to low confidence, return appropriate response
         if intent == "intent_not_clear":
@@ -1494,6 +1500,8 @@ class AutobusNLUSystem:
         )
 
         rag_context = None
+        rag_hit_count = 0
+        rag_search_ok = False
         if not self._conversation_rag.enabled():
             logger.warning(
                 "[RAG] RAG_SERVICE_URL not configured; conversational reply will lack indexed context"
@@ -1507,9 +1515,34 @@ class AutobusNLUSystem:
                     query=user_message,
                     limit=12,
                 )
+                rag_hit_count = len(hits or [])
                 rag_context = self._conversation_rag.format_context(hits)
+                rag_search_ok = True
             except Exception as e:
                 logger.warning(f"[RAG] search failed for {user_id}: {e}", exc_info=True)
+
+        # Customer FAQ/business questions with no indexed knowledge → human intervention.
+        # Only after a successful empty search (not on RAG auth/network failures).
+        is_customer = bool((user_data or {}).get("is_customer_session"))
+        if (
+            is_customer
+            and intent == "business_conversation"
+            and self._conversation_rag.enabled()
+            and tenant_id
+            and rag_search_ok
+            and rag_hit_count == 0
+        ):
+            logger.info(
+                "[RAG] No knowledge hits for customer session %s; activating intervention",
+                user_id,
+            )
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="insufficient_knowledge",
+                reason=user_message or "no relevant knowledge base hits",
+                metadata={"intent": intent, "tenant_id": tenant_id},
+            )
+            return self.response_formatter.format_response("", "intervention_created")
 
         msg = self.intent_processor.process_conversational_intent(
             intent,
