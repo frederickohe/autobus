@@ -338,7 +338,12 @@ class ProductService:
             
             self.db.add(inventory)
             self.db.commit()
-            self.db.refresh(product)
+            product = (
+                self.db.query(Product)
+                .options(joinedload(Product.images))
+                .filter(Product.product_id == product.product_id)
+                .first()
+            )
 
             logger.info(f"[PRODUCT_SERVICE] Product created successfully: {product.inventory_id} with inventory_id: {inventory.inventory_id}")
             return True, product, f"Product {product.inventory_id} created successfully with automatic inventory!"
@@ -425,7 +430,13 @@ class ProductService:
             if category:
                 query = query.filter(Product.category == category)
 
-            products = query.order_by(desc(Product.created_at)).offset(skip).limit(limit).all()
+            products = (
+                query.options(joinedload(Product.images))
+                .order_by(desc(Product.created_at))
+                .offset(skip)
+                .limit(limit)
+                .all()
+            )
             logger.info(f"[PRODUCT_SERVICE] Found {len(products)} products")
             return products
         except Exception as e:
@@ -451,7 +462,11 @@ class ProductService:
                 query = query.filter(Product.category == category)
 
             products = (
-                query.order_by(desc(Product.created_at)).offset(skip).limit(limit).all()
+                query.options(joinedload(Product.images))
+                .order_by(desc(Product.created_at))
+                .offset(skip)
+                .limit(limit)
+                .all()
             )
             logger.info(
                 f"[PRODUCT_SERVICE] Found {len(products)} products for user {resolved_user_id}"

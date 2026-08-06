@@ -46,6 +46,9 @@ from core.subscription.service.subscription_service import SubscriptionService
 from core.user.service.user_service import UserService
 from core.rag.rag_index_job_store import RagIndexJobStore
 from core.rag.rag_index_service import RagIndexService
+from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.tenant import resolve_effective_rag_tenant_id
+from core.cloudstorage.service.file_content_extractor import FileContentExtractor
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -385,19 +388,137 @@ async def delete_my_file(
     file_name: str,
     folder: StorageFolder = Query(...),
     authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
 ):
     subject = authjwt.get_jwt_subject()
     user_prefix = _safe_user_prefix(subject)
 
     safe_name = os.path.basename(file_name)
     key_name = f"{user_prefix}{safe_name}"
+    object_key = f"{storage_service.resolve_subfolder(folder=folder)}{key_name}"
 
     try:
         storage_service.delete_file(key_name, folder=folder)
     except Exception:
         raise HTTPException(status_code=404, detail=f"File not found: {safe_name}")
 
+    # Best-effort Qdrant cleanup so deleted files stop appearing in chat context.
+    if folder == StorageFolder.chatbot_files:
+        try:
+            user = UserService(db).get_current_user(subject)
+            tenant_id = resolve_effective_rag_tenant_id(_user_data_from_user(user))
+            if tenant_id:
+                ConversationVectorClient().delete_points(
+                    tenant_id=tenant_id,
+                    sources=["document", "website"],
+                    object_key=object_key,
+                    file_name=safe_name,
+                )
+        except Exception as e:
+            logger.warning("RAG delete after file remove failed: %s", e)
+
     return MessageResponse(message="File deleted successfully")
+
+
+@storage_routes.get("/me/rag-preview/{file_name}")
+async def preview_my_rag_file_text(
+    file_name: str,
+    folder: StorageFolder = Query(default=StorageFolder.chatbot_files),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """
+    Return extractable text for an indexed intelligence file (what RAG indexed),
+    not the raw binary. Used by the app for Word/PDF/spreadsheet previews.
+    """
+    subject = authjwt.get_jwt_subject()
+    user_prefix = _safe_user_prefix(subject)
+    safe_name = os.path.basename(file_name)
+    key_name = f"{user_prefix}{safe_name}"
+
+    try:
+        raw = storage_service.download_file_bytes(key_name, folder=folder)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"File not found: {safe_name}")
+
+    from types import SimpleNamespace
+
+    upload = SimpleNamespace(filename=safe_name, content_type=None)
+    text = FileContentExtractor.extract_content(upload, raw)  # type: ignore[arg-type]
+    if text is None:
+        text = ""
+    # Cap response size for mobile dialogs.
+    max_chars = 20000
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars]
+
+    return {
+        "file_name": safe_name,
+        "text": text,
+        "truncated": truncated,
+        "empty": not bool(text.strip()),
+    }
+
+
+@storage_routes.delete("/me/clear-intelligence", response_model=MessageResponse)
+async def clear_my_intelligence(
+    folder: StorageFolder = Query(default=StorageFolder.chatbot_files),
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Delete all indexed intelligence files for the user and remove matching
+    document/website vectors from Qdrant so they can re-upload cleanly.
+    """
+    subject = authjwt.get_jwt_subject()
+    user_prefix = _safe_user_prefix(subject)
+    user = UserService(db).get_current_user(subject)
+
+    objects = storage_service.list_files(folder=folder, prefix=user_prefix)
+    deleted_files = 0
+    for o in objects:
+        key = (o.get("key") or "").strip()
+        if not key or key.endswith("/"):
+            continue
+        # list_files returns full object keys including subfolder; delete_file
+        # expects key relative to the folder root (user_prefix + filename).
+        subfolder = storage_service.resolve_subfolder(folder=folder)
+        relative = key[len(subfolder) :] if key.startswith(subfolder) else key
+        try:
+            storage_service.delete_file(relative, folder=folder)
+            deleted_files += 1
+        except Exception as e:
+            logger.warning("Failed deleting intelligence object %s: %s", key, e)
+
+    deleted_points = 0
+    rag_warning = None
+    tenant_id = resolve_effective_rag_tenant_id(_user_data_from_user(user))
+    if tenant_id:
+        try:
+            deleted_points = ConversationVectorClient().delete_points(
+                tenant_id=tenant_id,
+                sources=["document", "website"],
+            )
+        except Exception as e:
+            logger.error("RAG clear intelligence failed: %s", e, exc_info=True)
+            rag_warning = str(e)
+
+    if rag_warning:
+        return MessageResponse(
+            message=(
+                f"Removed {deleted_files} file(s) from storage, but clearing the "
+                f"vector index failed ({rag_warning}). Rebuild/redeploy the RAG API "
+                "with /v1/points/delete, then clear again if needed."
+            )
+        )
+
+    return MessageResponse(
+        message=(
+            f"Intelligence cleared: removed {deleted_files} file(s) and "
+            f"{deleted_points} indexed chunk(s). You can upload again."
+        )
+    )
+
 
 @storage_routes.get("/download/{file_name}")
 async def download_file(

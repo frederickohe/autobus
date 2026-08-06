@@ -90,7 +90,7 @@ async def verify_account(
     db: Session = Depends(get_db)
 ):
     auth_service = AuthService(db)
-    return auth_service.verify_account(request.email)
+    return auth_service.verify_account(request)
 
 
 @auth_routes.post("/reset-password")

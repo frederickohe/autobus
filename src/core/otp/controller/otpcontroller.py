@@ -47,7 +47,8 @@ def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
     is_valid = otp_service.validate_otp(
         phone=request.phone,
         email=request.email,
-        otp=request.otp
+        otp=request.otp,
+        consume=request.consume,
     )
     
     if not is_valid:

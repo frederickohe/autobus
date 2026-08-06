@@ -80,7 +80,11 @@ def list_my_products(
         )
 
 
-@product_routes.post("/", response_model=ProductResponseDTO)
+# Register both "" and "/" so clients that omit the trailing slash do not get a
+# 307 redirect (Location often becomes http://… behind the proxy, which drops
+# Authorization and breaks create/list).
+@product_routes.post("", response_model=ProductResponseDTO)
+@product_routes.post("/", response_model=ProductResponseDTO, include_in_schema=False)
 def create_product(
     request: ProductCreateDTO,
     db: Session = Depends(get_db),
@@ -140,7 +144,8 @@ def get_product(
             detail=f"Error retrieving product: {str(e)}"
         )
 
-@product_routes.get("/", response_model=List[ProductResponseDTO])
+@product_routes.get("", response_model=List[ProductResponseDTO])
+@product_routes.get("/", response_model=List[ProductResponseDTO], include_in_schema=False)
 def list_products(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),

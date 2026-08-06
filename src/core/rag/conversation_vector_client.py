@@ -123,3 +123,33 @@ class ConversationVectorClient:
                 if on_batch_complete:
                     on_batch_complete(batch_idx, len(batches))
         return total
+
+    def delete_points(
+        self,
+        *,
+        tenant_id: str,
+        sources: Optional[List[str]] = None,
+        object_key: Optional[str] = None,
+        file_name: Optional[str] = None,
+    ) -> int:
+        """
+        POST /v1/points/delete — remove tenant-scoped points.
+
+        When ``sources`` is set (e.g. ``["document", "website"]``), only those
+        indexed intelligence items are removed; conversational turns are kept.
+        """
+        if not self.base:
+            return 0
+        url = f"{self.base}/v1/points/delete"
+        payload: dict[str, Any] = {"tenant_id": tenant_id}
+        if sources:
+            payload["sources"] = sources
+        if object_key:
+            payload["object_key"] = object_key
+        if file_name:
+            payload["file_name"] = file_name
+        with httpx.Client(timeout=60.0) as client:
+            r = client.post(url, json=payload, headers=self._headers())
+            r.raise_for_status()
+            data = r.json()
+        return int(data.get("deleted") or 0)

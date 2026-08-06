@@ -1,4 +1,5 @@
 import os
+import io
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from enum import Enum
@@ -207,6 +208,23 @@ class StorageService:
             )
             logger.info(f"Successfully downloaded {file_name} from {subfolder} in Contabo S3 to {destination_path}")
             return f"Downloaded {file_name} to {destination_path}"
+        except ClientError as e:
+            logger.error(f"Contabo S3 download error for {file_name}: {str(e)}")
+            raise
+
+    def download_file_bytes(
+        self,
+        file_name: str,
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+    ) -> bytes:
+        """Download an object from Contabo S3 into memory."""
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
+        s3_key = f"{subfolder}{file_name}"
+        try:
+            buf = io.BytesIO()
+            self.s3_client.download_fileobj(self.bucket, s3_key, buf)
+            return buf.getvalue()
         except ClientError as e:
             logger.error(f"Contabo S3 download error for {file_name}: {str(e)}")
             raise

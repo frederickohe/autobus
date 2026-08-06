@@ -191,8 +191,14 @@ class OTPService:
                 message="Failed to send OTP. Please try again."
             )
 
-    def validate_otp(self, phone: Optional[str] = None, email: Optional[str] = None, otp: str = None) -> bool:
-        """Validate OTP for phone or email"""
+    def validate_otp(
+        self,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+        otp: str = None,
+        consume: bool = True,
+    ) -> bool:
+        """Validate OTP for phone or email. Set consume=False to peek without deleting."""
         try:
             if not otp:
                 return False
@@ -222,8 +228,9 @@ class OTPService:
             if not (hashed_ok or legacy_ok):
                 return False
 
-            self.db.delete(otp_record)
-            self.db.commit()
+            if consume:
+                self.db.delete(otp_record)
+                self.db.commit()
             return True
 
         except Exception as e:

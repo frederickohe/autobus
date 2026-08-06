@@ -313,19 +313,32 @@ class AuthService:
                 detail="Invalid token"
             )
     
-    def verify_account(self, email: str):
-        """Check that an account exists for the given email (password recovery)."""
-        db_user = self.db.query(User).filter(User.email == email).first()
+    def verify_account(self, request: BaseModel):
+        """Check that an account exists for the given email or phone (password recovery)."""
+        email = getattr(request, "email", None)
+        phone = getattr(request, "phone", None)
+
+        if email:
+            db_user = self.db.query(User).filter(User.email == email).first()
+            not_found_detail = "No account found with this email"
+        elif phone:
+            db_user = self.db.query(User).filter(User.phone == phone).first()
+            not_found_detail = "No account found with this phone number"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Provide either email or phone",
+            )
 
         if not db_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="No account found with this email"
+                detail=not_found_detail,
             )
 
         return JSONResponse(
             status_code=200,
-            content={"message": "Account verified successfully"}
+            content={"message": "Account verified successfully"},
         )
             
     def reset_password(self, request: BaseModel):
@@ -380,22 +393,32 @@ class AuthService:
 
     def reset_password_no_auth(self, request: BaseModel):
         """
-        Forgotten-password reset. Requires a valid email OTP (sent via /api/v1/otp/send).
-        Never resets a password with email alone.
+        Forgotten-password reset. Requires a valid OTP sent via /api/v1/otp/send
+        to either the account email or phone. Never resets with identifier alone.
         """
         try:
             from core.otp.service.otpservice import OTPService
 
             otp_code = getattr(request, "otp", None)
+            email = getattr(request, "email", None)
+            phone = getattr(request, "phone", None)
+
             if not otp_code:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="OTP is required to reset password",
                 )
+            if bool(email) == bool(phone):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Provide either email or phone, not both or neither",
+                )
 
             otp_ok = OTPService(self.db).validate_otp(
-                email=request.email,
+                email=email,
+                phone=phone,
                 otp=str(otp_code).strip(),
+                consume=True,
             )
             if not otp_ok:
                 raise HTTPException(
@@ -403,21 +426,26 @@ class AuthService:
                     detail="Invalid or expired OTP",
                 )
 
-            db_user = self.db.query(User).filter(User.email == request.email).first()
+            if email:
+                db_user = self.db.query(User).filter(User.email == email).first()
+            else:
+                db_user = self.db.query(User).filter(User.phone == phone).first()
+
             if not db_user:
                 # OTP already consumed; do not reveal whether the account exists.
                 return JSONResponse(
                     status_code=200,
-                    content={"message": "If the email exists, password has been reset"},
+                    content={"message": "If the account exists, password has been reset"},
                 )
 
             db_user.hashed_password = self.hash_password(request.new_password)
             self.db.commit()
-            self.session_driver.remove_tokens(request.email)
+            if db_user.email:
+                self.session_driver.remove_tokens(db_user.email)
 
             return JSONResponse(
                 status_code=200,
-                content={"message": "If the email exists, password has been reset"},
+                content={"message": "If the account exists, password has been reset"},
             )
 
         except HTTPException:
