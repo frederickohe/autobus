@@ -74,15 +74,38 @@ class MetaWhatsAppService:
             raise ValueError(f"WhatsApp Meta config missing: {', '.join(missing)}")
 
     def build_onboard_url(self, state: str) -> str:
+        """
+        Build Meta WhatsApp Embedded Signup launch URL.
+
+        Default extras match Meta's standard Cloud API Embedded Signup
+        (`setup` + `sessionInfoVersion`). Do NOT force
+        `whatsapp_business_app_onboarding` unless coexistence is explicitly
+        enabled — that featureType against a normal Login-for-Business
+        configuration commonly surfaces Meta's "This link is broken" page.
+
+        Optional: set META_WHATSAPP_FEATURE_TYPE=whatsapp_business_app_onboarding
+        for WhatsApp Business App coexistence onboarding.
+        """
         self.require_config()
-        extras = {
-            "version": "v4",
-            "sessionInfoVersion": "3",
-            "featureType": "whatsapp_business_app_onboarding",
+        extras: Dict[str, Any] = {
+            "setup": {},
+            "sessionInfoVersion": (
+                os.getenv("META_WHATSAPP_SESSION_INFO_VERSION") or "3"
+            ).strip(),
         }
+        # Optional; only for coexistence / custom flows.
+        feature_type = (os.getenv("META_WHATSAPP_FEATURE_TYPE") or "").strip()
+        if feature_type:
+            extras["featureType"] = feature_type
+        version = (os.getenv("META_WHATSAPP_ES_VERSION") or "").strip()
+        if version:
+            extras["version"] = version
+
         params = {
             "app_id": self.app_id,
             "config_id": self.config_id,
+            "response_type": "code",
+            "scope": "whatsapp_business_messaging,whatsapp_business_management",
             "extras": json.dumps(extras, separators=(",", ":")),
             "redirect_uri": self.redirect_uri,
             "state": state,

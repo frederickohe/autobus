@@ -155,8 +155,16 @@ Provisioning is triggered on **first paid subscription** (and may also be checke
 
 ### Postiz Public API Proxy Endpoints (Autobus)
 
+- `GET /api/v1/social/connect/{platform}` → Postiz OAuth for mapped platforms (`facebook`, `linkedin`, `instagram`, `x`/`twitter`, `whatsapp`, `tiktok`); prefers `GET /api/public/v1/social/{slug}`, falls back to Postiz integrations UI
 - `GET /api/v1/social/postiz/integrations` → calls Postiz `GET /api/public/v1/integrations`
 - `POST /api/v1/social/postiz/posts` → calls Postiz `POST /api/public/v1/posts` (raw payload passthrough)
+
+#### TikTok (Postiz)
+
+1. Set `TIKTOK_CLIENT_ID` / `TIKTOK_CLIENT_SECRET` in `postiz-docker-compose/.env` and restart Postiz
+2. In TikTok Developer Portal, redirect URI: `https://postiz.useautobus.com/integrations/social/tiktok`
+3. Connect: `GET /api/v1/social/connect/tiktok`
+4. Publish via `POST /api/v1/social/postiz/posts` with Postiz TikTok settings (`privacy_level`, `content_posting_method`, etc.)
 
 API key resolution order for the Postiz proxy routes:
 1. User-scoped key from `postiz_organizations` (provisioned flow)

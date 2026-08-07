@@ -150,6 +150,7 @@ _POSTIZ_OAUTH_SLUG_BY_PLATFORM: Dict[str, str] = {
     "INSTAGRAM": "instagram",
     "TWITTER": "x",
     "WHATSAPP": "whatsapp",
+    "TIKTOK": "tiktok",
 }
 
 _CONNECT_PATH_TO_PLATFORM: Dict[str, str] = {
@@ -160,6 +161,7 @@ _CONNECT_PATH_TO_PLATFORM: Dict[str, str] = {
     "x": "TWITTER",
     "whatsapp": "WHATSAPP",
     "whatsapp-status": "WHATSAPP",
+    "tiktok": "TIKTOK",
 }
 
 
@@ -198,9 +200,23 @@ async def _build_postiz_platform_connect(
     postiz_login_ready = False
     postiz_login_payload: Dict[str, Any] = {}
     authorization_url = f"{browser_postiz_url}/integrations"
+    direct_oauth = False
+
+    if api_key:
+        try:
+            authorization_url = await PostizClient(base_url=postiz_base_url).get_social_connect_url(
+                api_key,
+                postiz_slug,
+            )
+            direct_oauth = True
+        except Exception as oauth_error:
+            logger.warning(
+                f"[SOCIAL] Postiz direct OAuth for {postiz_slug} failed "
+                f"(user {internal_user_id}): {oauth_error}; falling back to integrations page"
+            )
 
     if user and user.email:
-        postiz_password = derive_postiz_password(username=user.fullname)
+        postiz_password = derive_postiz_password(username=user.username)
         try:
             await PostizClient(base_url=postiz_base_url).login_local(
                 email=user.email,
@@ -223,6 +239,12 @@ async def _build_postiz_platform_connect(
         }
 
     provider_label = postiz_slug.replace("-", " ").title()
+    if direct_oauth:
+        message = f"Redirect the user to authorize {provider_label} via Postiz."
+    else:
+        message = (
+            f"Sign in to Postiz, then connect {provider_label} from the integrations page."
+        )
     return {
         "authorization_url": authorization_url,
         "platform": platform_upper,
@@ -230,10 +252,8 @@ async def _build_postiz_platform_connect(
         "postiz_ready": bool(api_key),
         "postiz_login_ready": postiz_login_ready,
         "postiz_login": postiz_login_payload,
-        "direct_oauth": False,
-        "message": (
-            f"Sign in to Postiz, then connect {provider_label} from the integrations page."
-        ),
+        "direct_oauth": direct_oauth,
+        "message": message,
     }
 
 

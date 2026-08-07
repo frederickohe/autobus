@@ -281,7 +281,8 @@ class PostizClient:
                     return str(url).strip()
             raise PostizAPIError(
                 "Postiz social connect response missing url; "
-                "ensure FACEBOOK_APP_ID/SECRET are configured on Postiz."
+                "ensure the provider client id/secret are configured on Postiz "
+                f"(integration={slug})."
             )
 
 
