@@ -55,7 +55,10 @@ class WhatsAppConnectResponse(BaseModel):
     provider: str = "META_WHATSAPP"
     state: str
     redirect_uri: str
-    message: str = "Open authorization_url to link WhatsApp via Meta Embedded Signup."
+    message: str = (
+        "Open authorization_url in a browser to link WhatsApp. "
+        "Autobus launches Meta Embedded Signup via the Facebook JS SDK on your domain."
+    )
 
 
 class WhatsAppCompleteRequest(BaseModel):
@@ -197,18 +200,173 @@ align-items:center;justify-content:center;min-height:100vh;margin:0}}
 <p><a style="color:#ff8a80" href="{_frontend_base()}">Back to Autobus</a></p></div></body></html>"""
 
 
+def _embedded_signup_launch_html(
+    *,
+    app_id: str,
+    config_id: str,
+    state: str,
+    extras_json: str,
+    callback_base: str,
+    graph_version: str = "v21.0",
+) -> str:
+    """Hosted Facebook JS SDK bridge — Meta's supported Embedded Signup launch path."""
+    # Values are embedded into JS string literals; keep them JSON-safe.
+    import json as _json
+
+    app_id_js = _json.dumps(app_id)
+    config_id_js = _json.dumps(config_id)
+    state_js = _json.dumps(state)
+    extras_js = extras_json  # already JSON object text
+    callback_js = _json.dumps(callback_base.rstrip("/"))
+    version_js = _json.dumps(graph_version)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Link WhatsApp · Autobus</title>
+  <style>
+    body{{font-family:system-ui,sans-serif;background:#0b1020;color:#e8eaf6;margin:0;
+      min-height:100vh;display:flex;align-items:center;justify-content:center}}
+    .card{{max-width:440px;padding:28px;border:1px solid #3d2a55;border-radius:16px;background:#161022}}
+    button{{background:#1877f2;color:#fff;border:0;border-radius:10px;padding:12px 18px;
+      font-size:15px;font-weight:600;cursor:pointer;width:100%}}
+    button:disabled{{opacity:.6;cursor:default}}
+    .muted{{opacity:.7;font-size:13px;line-height:1.45}}
+    .err{{color:#ff8a80;margin-top:12px;font-size:13px}}
+    code{{font-size:12px;opacity:.85}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1 style="margin:0 0 8px;font-size:20px">Link WhatsApp</h1>
+    <p class="muted">Sign in with Meta to connect your WhatsApp Business number to Autobus.</p>
+    <button id="btn" type="button">Continue with Meta</button>
+    <p id="status" class="muted" style="margin-top:14px">Loading Facebook SDK…</p>
+    <p id="err" class="err" hidden></p>
+  </div>
+  <script>
+    const APP_ID = {app_id_js};
+    const CONFIG_ID = {config_id_js};
+    const STATE = {state_js};
+    const EXTRAS = {extras_js};
+    const CALLBACK_BASE = {callback_js};
+    const GRAPH_VERSION = {version_js};
+    let session = {{ waba_id: null, phone_number_id: null, business_id: null }};
+
+    function setStatus(t) {{
+      const el = document.getElementById('status');
+      if (el) el.textContent = t;
+    }}
+    function setErr(t) {{
+      const el = document.getElementById('err');
+      if (!el) return;
+      if (!t) {{ el.hidden = true; el.textContent = ''; return; }}
+      el.hidden = false; el.textContent = t;
+    }}
+
+    function finishWithCode(code) {{
+      if (!code) {{
+        setErr('Meta did not return an authorization code. Try again.');
+        document.getElementById('btn').disabled = false;
+        return;
+      }}
+      const u = new URL(CALLBACK_BASE + '/api/social/callback');
+      u.searchParams.set('code', code);
+      u.searchParams.set('state', STATE);
+      if (session.waba_id) u.searchParams.set('waba_id', session.waba_id);
+      if (session.phone_number_id) u.searchParams.set('phone_number_id', session.phone_number_id);
+      if (session.business_id) u.searchParams.set('business_id', session.business_id);
+      setStatus('Finishing WhatsApp link…');
+      window.location.replace(u.toString());
+    }}
+
+    window.addEventListener('message', function (event) {{
+      if (!event.origin || event.origin.indexOf('facebook.com') === -1) return;
+      let data = event.data;
+      try {{ if (typeof data === 'string') data = JSON.parse(data); }} catch (e) {{ return; }}
+      if (!data || data.type !== 'WA_EMBEDDED_SIGNUP') return;
+      if (data.event === 'FINISH' || data.event === 'FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING') {{
+        const d = data.data || {{}};
+        session.waba_id = d.waba_id || session.waba_id;
+        session.phone_number_id = d.phone_number_id || session.phone_number_id;
+        session.business_id = d.business_id || session.business_id;
+      }} else if (data.event === 'CANCEL' || data.event === 'ERROR') {{
+        setErr((data.data && (data.data.error_message || data.data.error_id)) || 'Signup was cancelled.');
+        document.getElementById('btn').disabled = false;
+        setStatus('You can try again.');
+      }}
+    }});
+
+    function launchSignup() {{
+      setErr('');
+      document.getElementById('btn').disabled = true;
+      setStatus('Opening Meta WhatsApp signup…');
+      if (!window.FB) {{
+        setErr('Facebook SDK failed to load. Allow connect.facebook.net and try again.');
+        document.getElementById('btn').disabled = false;
+        return;
+      }}
+      FB.login(function (response) {{
+        const code = response && response.authResponse && response.authResponse.code;
+        if (code) {{
+          finishWithCode(code);
+          return;
+        }}
+        setErr('Meta login did not complete. If you closed the popup, tap Continue again.');
+        document.getElementById('btn').disabled = false;
+        setStatus('Ready when you are.');
+      }}, {{
+        config_id: CONFIG_ID,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: EXTRAS
+      }});
+    }}
+
+    window.fbAsyncInit = function () {{
+      FB.init({{
+        appId: APP_ID,
+        autoLogAppEvents: true,
+        xfbml: true,
+        version: GRAPH_VERSION
+      }});
+      setStatus('Ready — tap Continue with Meta.');
+      document.getElementById('btn').disabled = false;
+      // Auto-launch once for mobile deep-link / external browser flows.
+      setTimeout(launchSignup, 400);
+    }};
+
+    document.getElementById('btn').disabled = true;
+    document.getElementById('btn').addEventListener('click', launchSignup);
+  </script>
+  <script async defer crossorigin="anonymous"
+    src="https://connect.facebook.net/en_US/sdk.js"></script>
+</body>
+</html>"""
+
+
 @whatsapp_routes.get("/connect", response_model=WhatsAppConnectResponse)
 async def whatsapp_connect(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
+    raw_meta: bool = Query(
+        False,
+        description="If true, return Meta onboard URL directly (debug only).",
+    ),
 ):
-    """Return Meta WhatsApp Business App onboard URL for the authenticated user."""
+    """Return Autobus Embedded Signup bridge URL (Facebook JS SDK launch)."""
     try:
         user_id = resolve_internal_user_id(db, jwt_subject)
         svc = MetaWhatsAppService()
         svc.require_config()
         state = MetaWhatsAppOAuthState.create(user_id)
-        url = svc.build_onboard_url(state)
+        url = (
+            svc.build_onboard_url(state)
+            if raw_meta
+            else svc.build_launch_bridge_url(state)
+        )
         return WhatsAppConnectResponse(
             authorization_url=url,
             state=state,
@@ -220,6 +378,47 @@ async def whatsapp_connect(
         logger.exception("[WA] connect failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+
+@whatsapp_routes.get("/embedded-signup/launch", response_class=HTMLResponse)
+async def whatsapp_embedded_signup_launch(
+    state: str = Query(..., min_length=8),
+):
+    """
+    Public HTML bridge that runs FB.login Embedded Signup.
+    `state` must come from a prior authenticated GET /whatsapp/connect.
+    """
+    if not MetaWhatsAppOAuthState.peek(state):
+        return HTMLResponse(
+            _error_html(
+                "This WhatsApp link expired or is invalid. "
+                "Go back to Autobus → Manage Channels → Link WhatsApp and try again."
+            ),
+            status_code=400,
+        )
+
+    svc = MetaWhatsAppService()
+    try:
+        svc.require_config()
+    except ValueError as exc:
+        return HTMLResponse(_error_html(str(exc)), status_code=500)
+
+    import json as _json
+
+    graph_version = (
+        (os.getenv("WHATSAPP_GRAPH_BASE_URL") or "https://graph.facebook.com/v21.0")
+        .rstrip("/")
+        .split("/")[-1]
+        or "v21.0"
+    )
+    html = _embedded_signup_launch_html(
+        app_id=svc.app_id,
+        config_id=svc.config_id,
+        state=state,
+        extras_json=_json.dumps(svc.embedded_signup_extras()),
+        callback_base=_frontend_base(),
+        graph_version=graph_version if graph_version.startswith("v") else "v21.0",
+    )
+    return HTMLResponse(html)
 
 @whatsapp_routes.get("/accounts", response_model=List[WhatsAppAccountResponse])
 async def list_whatsapp_accounts(

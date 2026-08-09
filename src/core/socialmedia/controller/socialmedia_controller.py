@@ -146,22 +146,19 @@ def _get_user_for_jwt_subject(db: Session, jwt_subject: str) -> User:
 # Postiz Public API `GET /api/public/v1/social/{slug}` (direct provider OAuth).
 _POSTIZ_OAUTH_SLUG_BY_PLATFORM: Dict[str, str] = {
     "FACEBOOK": "facebook",
-    "LINKEDIN": "linkedin",
     "INSTAGRAM": "instagram",
-    "TWITTER": "x",
     "WHATSAPP": "whatsapp",
     "TIKTOK": "tiktok",
+    "YOUTUBE": "youtube",
 }
 
 _CONNECT_PATH_TO_PLATFORM: Dict[str, str] = {
     "facebook": "FACEBOOK",
-    "linkedin": "LINKEDIN",
     "instagram": "INSTAGRAM",
-    "twitter": "TWITTER",
-    "x": "TWITTER",
     "whatsapp": "WHATSAPP",
     "whatsapp-status": "WHATSAPP",
     "tiktok": "TIKTOK",
+    "youtube": "YOUTUBE",
 }
 
 
@@ -171,8 +168,6 @@ def _resolve_connect_platform(platform: str) -> tuple[str, Optional[str]]:
     platform_upper = _CONNECT_PATH_TO_PLATFORM.get(path_key) or platform.strip().upper().replace(
         " ", "_"
     )
-    if platform_upper == "X":
-        platform_upper = "TWITTER"
     postiz_slug = _POSTIZ_OAUTH_SLUG_BY_PLATFORM.get(platform_upper)
     return platform_upper, postiz_slug
 

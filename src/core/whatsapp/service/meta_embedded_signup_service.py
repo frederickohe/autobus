@@ -7,38 +7,109 @@ import logging
 import os
 import secrets
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Tuple
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
+import redis
 import requests
 
 from utilities.crypto import decrypt_secret, encrypt_secret
 
 logger = logging.getLogger(__name__)
 
+STATE_TTL_SECONDS = 30 * 60
+_redis_client: Optional[redis.Redis] = None
+
+
+def _redis() -> Optional[redis.Redis]:
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        password = os.getenv("REDIS_PASSWORD") or None
+        client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "localhost"),
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            password=password,
+            decode_responses=True,
+            socket_connect_timeout=2,
+            socket_timeout=2,
+        )
+        client.ping()
+        _redis_client = client
+        return _redis_client
+    except Exception as exc:
+        logger.warning("[WA] Redis unavailable for OAuth state: %s", exc)
+        return None
+
 
 class MetaWhatsAppOAuthState:
-    """In-memory CSRF state for Meta WhatsApp onboarding (Redis preferred later)."""
+    """CSRF state for WhatsApp Embedded Signup (Redis, in-memory fallback)."""
 
     _states: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
+    def _key(cls, state: str) -> str:
+        return f"autobus:oauth:whatsapp:{state}"
+
+    @classmethod
     def create(cls, user_id: str) -> str:
         state = secrets.token_urlsafe(32)
+        r = _redis()
+        if r is not None:
+            try:
+                r.setex(cls._key(state), STATE_TTL_SECONDS, user_id)
+                return state
+            except Exception as exc:
+                logger.warning("[WA] Redis setex failed, using memory: %s", exc)
         cls._states[state] = {
             "user_id": user_id,
-            "created_at": datetime.utcnow(),
-            "expires_at": datetime.utcnow() + timedelta(minutes=30),
+            "expires_at": datetime.now(timezone.utc)
+            + timedelta(seconds=STATE_TTL_SECONDS),
         }
         return state
 
     @classmethod
-    def validate(cls, state: str) -> Optional[str]:
+    def peek(cls, state: str) -> Optional[str]:
+        """Return user_id if state is valid without consuming it (launch page)."""
+        if not state:
+            return None
+        r = _redis()
+        if r is not None:
+            try:
+                user_id = r.get(cls._key(state))
+                if user_id:
+                    return str(user_id)
+            except Exception as exc:
+                logger.warning("[WA] Redis peek failed, trying memory: %s", exc)
         data = cls._states.get(state)
         if not data:
             return None
-        if datetime.utcnow() > data["expires_at"]:
+        if datetime.now(timezone.utc) > data["expires_at"]:
+            cls._states.pop(state, None)
+            return None
+        return data["user_id"]
+
+    @classmethod
+    def validate(cls, state: str) -> Optional[str]:
+        """Consume state and return user_id (callback / complete)."""
+        if not state:
+            return None
+        r = _redis()
+        if r is not None:
+            try:
+                key = cls._key(state)
+                user_id = r.get(key)
+                if user_id:
+                    r.delete(key)
+                    return str(user_id)
+            except Exception as exc:
+                logger.warning("[WA] Redis get failed, trying memory: %s", exc)
+        data = cls._states.get(state)
+        if not data:
+            return None
+        if datetime.now(timezone.utc) > data["expires_at"]:
             cls._states.pop(state, None)
             return None
         cls._states.pop(state, None)
@@ -75,16 +146,10 @@ class MetaWhatsAppService:
 
     def build_onboard_url(self, state: str) -> str:
         """
-        Build Meta WhatsApp Embedded Signup launch URL.
-
-        Default extras match Meta's standard Cloud API Embedded Signup
-        (`setup` + `sessionInfoVersion`). Do NOT force
-        `whatsapp_business_app_onboarding` unless coexistence is explicitly
-        enabled — that featureType against a normal Login-for-Business
-        configuration commonly surfaces Meta's "This link is broken" page.
-
-        Optional: set META_WHATSAPP_FEATURE_TYPE=whatsapp_business_app_onboarding
-        for WhatsApp Business App coexistence onboarding.
+        Direct Meta onboard URL (legacy / debug). Prefer build_launch_bridge_url —
+        Embedded Signup is designed to be launched via the Facebook JS SDK from
+        your own domain; opening Meta's onboard URL with redirect_uri often shows
+        "This link is broken".
         """
         self.require_config()
         extras: Dict[str, Any] = {
@@ -93,7 +158,6 @@ class MetaWhatsAppService:
                 os.getenv("META_WHATSAPP_SESSION_INFO_VERSION") or "3"
             ).strip(),
         }
-        # Optional; only for coexistence / custom flows.
         feature_type = (os.getenv("META_WHATSAPP_FEATURE_TYPE") or "").strip()
         if feature_type:
             extras["featureType"] = feature_type
@@ -101,19 +165,46 @@ class MetaWhatsAppService:
         if version:
             extras["version"] = version
 
+        # Match working partner implementations: no redirect_uri on this URL.
+        # Completion is via FB.login code + postMessage (bridge page) or popup.
         params = {
             "app_id": self.app_id,
             "config_id": self.config_id,
             "response_type": "code",
             "scope": "whatsapp_business_messaging,whatsapp_business_management",
             "extras": json.dumps(extras, separators=(",", ":")),
-            "redirect_uri": self.redirect_uri,
-            "state": state,
         }
         return (
             "https://business.facebook.com/messaging/whatsapp/onboard/?"
             + urlencode(params)
         )
+
+    def build_launch_bridge_url(self, state: str) -> str:
+        """
+        Autobus-hosted page that loads the Facebook JS SDK and calls FB.login
+        with the Embedded Signup config_id (Meta's supported launch path).
+        Served on useautobus.com so it matches App Domains / JS SDK allowlist.
+        """
+        self.require_config()
+        public_base = (
+            os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com"
+        ).rstrip("/")
+        return f"{public_base}/api/v1/whatsapp/embedded-signup/launch?state={quote(state, safe='')}"
+
+    def embedded_signup_extras(self) -> Dict[str, Any]:
+        extras: Dict[str, Any] = {
+            "setup": {},
+            "sessionInfoVersion": (
+                os.getenv("META_WHATSAPP_SESSION_INFO_VERSION") or "3"
+            ).strip(),
+        }
+        feature_type = (os.getenv("META_WHATSAPP_FEATURE_TYPE") or "").strip()
+        if feature_type:
+            extras["featureType"] = feature_type
+        version = (os.getenv("META_WHATSAPP_ES_VERSION") or "").strip()
+        if version:
+            extras["version"] = version
+        return extras
 
     def exchange_code(self, code: str) -> Dict[str, Any]:
         self.require_config()
