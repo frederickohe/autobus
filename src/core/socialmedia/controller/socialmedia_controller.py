@@ -211,7 +211,7 @@ async def _build_postiz_platform_connect(
             )
 
     if user and user.email:
-        postiz_password = derive_postiz_password(username=user.username)
+        postiz_password = derive_postiz_password(username=user.uname)
         try:
             await PostizClient(base_url=postiz_base_url).login_local(
                 email=user.email,
