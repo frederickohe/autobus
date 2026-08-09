@@ -100,8 +100,8 @@ async def _ensure_postiz_api_key(user_id: str, db: Session) -> Optional[str]:
     if not user:
         return None
 
-    company_name = (user.company or user.fullname or "Autobus Client").strip()
-    postiz_password = derive_postiz_password(username=user.fullname)
+    company_name = (user.company or _postiz_username_for_user(user) or "Autobus Client").strip()
+    postiz_password = derive_postiz_password(username=_postiz_username_for_user(user))
     client = PostizClient(base_url=postiz_base_url)
     postiz_org_id, postiz_api_key = await client.provision_org_and_get_public_api_key(
         email=user.email,
@@ -131,6 +131,18 @@ def validate_token(authjwt: AuthJWT = Depends()) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token"
         )
+
+
+def _postiz_username_for_user(user: User) -> str:
+    """Stable identifier for Postiz LOCAL password derivation (User.fullname)."""
+    for attr in ("fullname", "uname", "username"):
+        value = getattr(user, attr, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    email = getattr(user, "email", None)
+    if isinstance(email, str) and "@" in email:
+        return email.split("@", 1)[0].strip() or user.id
+    return str(user.id)
 
 
 def _get_user_for_jwt_subject(db: Session, jwt_subject: str) -> User:
@@ -211,27 +223,26 @@ async def _build_postiz_platform_connect(
             )
 
     if user and user.email:
-        postiz_password = derive_postiz_password(username=user.uname)
+        postiz_password = derive_postiz_password(username=_postiz_username_for_user(user))
         try:
             await PostizClient(base_url=postiz_base_url).login_local(
                 email=user.email,
                 password=postiz_password,
             )
             postiz_login_ready = True
+            postiz_login_payload = {
+                "login_page_url": f"{browser_postiz_url}/auth",
+                "body": {
+                    "email": user.email,
+                    "password": postiz_password,
+                    "providerToken": "",
+                    "provider": "LOCAL",
+                },
+            }
         except Exception as login_error:
             logger.warning(
                 f"[SOCIAL] Postiz auto-login failed for user {internal_user_id}: {login_error}"
             )
-
-        postiz_login_payload = {
-            "login_page_url": f"{browser_postiz_url}/auth",
-            "body": {
-                "email": user.email,
-                "password": postiz_password,
-                "providerToken": "",
-                "provider": "LOCAL",
-            },
-        }
 
     provider_label = postiz_slug.replace("-", " ").title()
     if direct_oauth:
@@ -694,7 +705,7 @@ async def postiz_auto_login(
         )
 
     browser_postiz_url = (os.getenv("POSTIZ_PUBLIC_URL", "").strip() or postiz_base_url).rstrip("/")
-    postiz_password = derive_postiz_password(username=user.fullname)
+    postiz_password = derive_postiz_password(username=_postiz_username_for_user(user))
 
     login_payload = {
         "email": user.email,
