@@ -203,25 +203,50 @@ async def _build_postiz_platform_connect(
     browser_postiz_url = (os.getenv("POSTIZ_PUBLIC_URL", "").strip() or postiz_base_url).rstrip(
         "/"
     )
-    user = db.query(User).filter(User.id == internal_user_id).first()
+    # Guard against misconfigured public URLs that would open Chatwoot (or another app).
+    if "chatwoot" in browser_postiz_url.lower():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "POSTIZ_PUBLIC_URL points at Chatwoot. Set it to your Postiz URL "
+                "(e.g. https://postiz.useautobus.com)."
+            ),
+        )
+
+    provider_label = postiz_slug.replace("-", " ").title()
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"No Postiz workspace for this account yet. "
+                f"Subscribe or provision Postiz, then link {provider_label}."
+            ),
+        )
+
+    try:
+        authorization_url = await PostizClient(base_url=postiz_base_url).get_social_connect_url(
+            api_key,
+            postiz_slug,
+        )
+    except Exception as oauth_error:
+        logger.warning(
+            f"[SOCIAL] Postiz direct OAuth for {postiz_slug} failed "
+            f"(user {internal_user_id}): {oauth_error}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Could not start {provider_label} OAuth. "
+                f"Configure {postiz_slug.upper()} client credentials on Postiz "
+                f"(redirect URI https://postiz.useautobus.com/integrations/social/{postiz_slug}) "
+                f"and restart Postiz. Details: {oauth_error}"
+            ),
+        ) from oauth_error
+
+    # Optional Postiz LOCAL login payload (not used for direct provider OAuth).
     postiz_login_ready = False
     postiz_login_payload: Dict[str, Any] = {}
-    authorization_url = f"{browser_postiz_url}/integrations"
-    direct_oauth = False
-
-    if api_key:
-        try:
-            authorization_url = await PostizClient(base_url=postiz_base_url).get_social_connect_url(
-                api_key,
-                postiz_slug,
-            )
-            direct_oauth = True
-        except Exception as oauth_error:
-            logger.warning(
-                f"[SOCIAL] Postiz direct OAuth for {postiz_slug} failed "
-                f"(user {internal_user_id}): {oauth_error}; falling back to integrations page"
-            )
-
+    user = db.query(User).filter(User.id == internal_user_id).first()
     if user and user.email:
         postiz_password = derive_postiz_password(username=_postiz_username_for_user(user))
         try:
@@ -244,22 +269,15 @@ async def _build_postiz_platform_connect(
                 f"[SOCIAL] Postiz auto-login failed for user {internal_user_id}: {login_error}"
             )
 
-    provider_label = postiz_slug.replace("-", " ").title()
-    if direct_oauth:
-        message = f"Redirect the user to authorize {provider_label} via Postiz."
-    else:
-        message = (
-            f"Sign in to Postiz, then connect {provider_label} from the integrations page."
-        )
     return {
         "authorization_url": authorization_url,
         "platform": platform_upper,
         "provider": "POSTIZ",
-        "postiz_ready": bool(api_key),
+        "postiz_ready": True,
         "postiz_login_ready": postiz_login_ready,
         "postiz_login": postiz_login_payload,
-        "direct_oauth": direct_oauth,
-        "message": message,
+        "direct_oauth": True,
+        "message": f"Redirect the user to authorize {provider_label} via Postiz.",
     }
 
 
@@ -673,6 +691,48 @@ async def postiz_list_integrations(
         client = PostizClient(postiz_base_url)
         raw = await client.list_integrations(api_key)
         return normalize_postiz_integrations_list(raw)
+    except PostizAPIError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@social_routes.delete("/postiz/integrations/{integration_id}")
+async def postiz_delete_integration(
+    integration_id: str,
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Unlink a Postiz channel for the current user-business.
+    Proxies Postiz `DELETE /api/public/v1/integrations/{id}`.
+    """
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    iid = (integration_id or "").strip()
+    if not iid:
+        raise HTTPException(status_code=400, detail="integration_id is required")
+    if iid.startswith("autobus-ig-"):
+        raise HTTPException(
+            status_code=400,
+            detail="Use DELETE /api/v1/instagram/accounts/{id} for Autobus Instagram accounts.",
+        )
+
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    api_key = _resolve_postiz_api_key(internal_user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    try:
+        client = PostizClient(postiz_base_url)
+        result = await client.delete_integration(api_key, iid)
+        logger.info(
+            f"[SOCIAL] Postiz integration deleted: {iid} by user {internal_user_id}"
+        )
+        return {"status": "ok", "message": "Account unlinked", "result": result}
     except PostizAPIError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

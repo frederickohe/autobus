@@ -285,6 +285,39 @@ class PostizClient:
                 f"(integration={slug})."
             )
 
+    async def delete_integration(
+        self,
+        public_api_key: str,
+        integration_id: str,
+        timeout_s: float = 20.0,
+    ) -> Dict[str, Any]:
+        """
+        Disconnect a channel via Postiz Public API
+        (`DELETE /api/public/v1/integrations/{id}`).
+        """
+        iid = (integration_id or "").strip()
+        if not iid:
+            raise PostizAPIError("integration id is required")
+
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            res = await client.delete(
+                self._url(f"/api/public/v1/integrations/{iid}"),
+                headers={"Authorization": public_api_key},
+            )
+            # Postiz treats missing channels as already deleted.
+            if res.status_code == 404:
+                return {"id": iid, "deleted": True, "already_gone": True}
+            if res.status_code >= 400:
+                raise PostizAPIError(
+                    f"Postiz delete integration failed ({res.status_code}): {res.text}"
+                )
+            if not res.text.strip():
+                return {"id": iid, "deleted": True}
+            data = res.json()
+            if isinstance(data, dict):
+                return data
+            return {"id": iid, "deleted": True, "value": data}
+
 
 def postiz_enabled() -> bool:
     return bool(os.getenv("POSTIZ_BASE_URL", "").strip())
