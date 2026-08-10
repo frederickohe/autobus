@@ -11,7 +11,7 @@ from typing import List, Optional
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
@@ -20,6 +20,7 @@ from core.instagram.service.instagram_oauth_service import (
     InstagramOAuthService,
     InstagramOAuthState,
 )
+from core.instagram.service.instagram_publish_service import InstagramPublishService
 from utilities.dbconfig import get_db
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,24 @@ class InstagramConnectResponse(BaseModel):
         "Open authorization_url to link Instagram via Business Login. "
         "This enables messaging and publishing for Autobus."
     )
+
+
+class InstagramPublishRequest(BaseModel):
+    account_id: str = Field(..., description="Autobus Instagram account UUID")
+    caption: str = Field("", description="Post caption / text")
+    media_urls: List[str] = Field(
+        default_factory=list,
+        description="Public HTTPS image/video URLs (required for Instagram)",
+    )
+
+
+class InstagramPublishResponse(BaseModel):
+    success: bool = True
+    post_id: str
+    creation_id: Optional[str] = None
+    media_type: Optional[str] = None
+    account_id: str
+    message: str = "Published to Instagram"
 
 
 def _frontend_base() -> str:
@@ -263,6 +282,58 @@ async def disconnect_instagram_account(
     row.is_active = False
     db.commit()
     return {"status": "ok", "message": "Instagram account disconnected"}
+
+
+@instagram_routes.post("/posts", response_model=InstagramPublishResponse)
+async def publish_instagram_post(
+    body: InstagramPublishRequest,
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Publish an image, carousel, or reel to a linked Instagram Business account."""
+    user_id = resolve_internal_user_id(db, jwt_subject)
+    account_id = (body.account_id or "").strip()
+    if not account_id:
+        raise HTTPException(status_code=400, detail="account_id is required")
+
+    row = (
+        db.query(InstagramAccount)
+        .filter(
+            InstagramAccount.id == account_id,
+            InstagramAccount.user_id == user_id,
+            InstagramAccount.is_active.is_(True),
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Instagram account not found")
+
+    media = [u.strip() for u in (body.media_urls or []) if u and str(u).strip()]
+    if not media:
+        raise HTTPException(
+            status_code=400,
+            detail="Instagram requires at least one public media URL",
+        )
+
+    try:
+        result = InstagramPublishService().publish(
+            row,
+            caption=body.caption or "",
+            media_urls=media,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[IG] publish failed")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return InstagramPublishResponse(
+        post_id=str(result.get("post_id") or ""),
+        creation_id=result.get("creation_id"),
+        media_type=result.get("media_type"),
+        account_id=account_id,
+        message=f"Published to Instagram (@{row.username or row.ig_user_id})",
+    )
 
 
 async def handle_instagram_oauth_callback(
