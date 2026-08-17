@@ -2,7 +2,7 @@ import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import unquote
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
@@ -317,6 +317,51 @@ class PostizClient:
             if isinstance(data, dict):
                 return data
             return {"id": iid, "deleted": True, "value": data}
+
+
+def facebook_login_config_id() -> str:
+    """Login for Business config for Postiz Page publishing (not WhatsApp ES)."""
+    return (
+        os.getenv("FACEBOOK_LOGIN_CONFIG_ID", "").strip()
+        or os.getenv("POSTIZ_FACEBOOK_CONFIG_ID", "").strip()
+        or os.getenv("META_FACEBOOK_PAGE_CONFIG_ID", "").strip()
+    )
+
+
+def apply_facebook_login_config_id(
+    authorization_url: str,
+    *,
+    config_id: Optional[str] = None,
+    slug: Optional[str] = None,
+) -> str:
+    """
+    Postiz's Facebook OAuth URL only sends `scope=`. Business-type Meta apps
+    (WhatsApp/Messenger) require Facebook Login for Business `config_id`,
+    otherwise Meta shows "this app isn't available" after login.
+    """
+    url = (authorization_url or "").strip()
+    if not url:
+        return url
+    if slug and slug.strip().lower() != "facebook":
+        return url
+    cid = (config_id or facebook_login_config_id()).strip()
+    if not cid:
+        return url
+
+    parts = urlsplit(url)
+    host = (parts.netloc or "").split("@")[-1].split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in {"facebook.com", "m.facebook.com", "web.facebook.com"}:
+        return url
+
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query["config_id"] = cid
+    # Meta: Login for Business uses config_id instead of scope.
+    query.pop("scope", None)
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
 
 
 def postiz_enabled() -> bool:

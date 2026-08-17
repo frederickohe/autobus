@@ -155,7 +155,7 @@ Provisioning is triggered on **first paid subscription** (and may also be checke
 
 ### Postiz Public API Proxy Endpoints (Autobus)
 
-- `GET /api/v1/social/connect/{platform}` → Postiz direct OAuth for mapped platforms (`facebook`, `whatsapp`, `tiktok`, `youtube`); requires provider credentials on Postiz (`GET /api/public/v1/social/{slug}`) — no Chatwoot/Postiz-UI fallback
+- `GET /api/v1/social/connect/{platform}` → Postiz direct OAuth for mapped platforms (`facebook`, `instagram`, `whatsapp`, `tiktok`, `youtube`); requires provider credentials on Postiz (`GET /api/public/v1/social/{slug}`). Instagram tries `instagram` then `instagram-standalone`.
 - `GET /api/v1/social/postiz/integrations` → calls Postiz `GET /api/public/v1/integrations`
 - `DELETE /api/v1/social/postiz/integrations/{id}` → calls Postiz `DELETE /api/public/v1/integrations/{id}` (unlink)
 - `POST /api/v1/social/postiz/posts` → calls Postiz `POST /api/public/v1/posts` (raw payload passthrough)

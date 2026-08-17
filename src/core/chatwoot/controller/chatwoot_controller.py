@@ -102,6 +102,10 @@ def _inboxes_settings_url(public_url: str, account_id: int) -> str:
     return f"{public_url.rstrip('/')}/app/accounts/{int(account_id)}/settings/inboxes"
 
 
+def _inbox_new_url(public_url: str, account_id: int) -> str:
+    return f"{public_url.rstrip('/')}/app/accounts/{int(account_id)}/settings/inboxes/new"
+
+
 def _normalize_channel(raw: str) -> str:
     c = (raw or "").strip().lower()
     if not c:
@@ -264,7 +268,7 @@ async def chatwoot_channel_link(
     if not public_url:
         raise HTTPException(status_code=400, detail="CHATWOOT_PUBLIC_URL or CHATWOOT_BASE_URL must be set.")
 
-    auth_url = _inboxes_settings_url(public_url, mapping.chatwoot_account_id)
+    auth_url = _inbox_new_url(public_url, mapping.chatwoot_account_id)
     pwd = derive_chatwoot_password(
         username=(
             getattr(user, "fullname", None) or getattr(user, "name", None) or user.email or ""
@@ -272,12 +276,6 @@ async def chatwoot_channel_link(
         or user.email
     )
     ready = await _probe_token(client)
-
-    autobus_meta: Optional[str] = None
-    if ch == "whatsapp":
-        base = os.getenv("AUTOBUS_PUBLIC_API_URL", "").strip()
-        if base:
-            autobus_meta = f"{base.rstrip('/')}/api/v1/webhooks/start-dialog"
 
     return ChatwootChannelLinkResponse(
         channel=ch,
@@ -290,10 +288,10 @@ async def chatwoot_channel_link(
             "login_page_url": f"{public_url.rstrip('/')}/app/login",
             "body": {"email": user.email, "password": pwd},
         },
-        autobus_meta_webhook_url=autobus_meta,
+        autobus_meta_webhook_url=None,
         message=(
-            "In Chatwoot, add this channel at authorization_url (use channel_hint to pick the provider). "
-            "If you route WhatsApp through Autobus instead of Chatwoot, point Meta to autobus_meta_webhook_url when configured."
+            f"Sign in to Chatwoot, then add a {ch} inbox at authorization_url "
+            f"(choose {ch} on the new-inbox screen)."
         ),
     )
 

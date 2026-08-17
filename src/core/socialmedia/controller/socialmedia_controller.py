@@ -6,9 +6,8 @@ API routes for social media account management and posting
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import os
-from typing import Any, Dict
 import uuid
 
 from fastapi.responses import JSONResponse
@@ -31,6 +30,7 @@ from core.socialmedia.service.blotato_api_service import (
 from core.socialmedia.service.postiz_api_service import (
     PostizClient,
     PostizAPIError,
+    apply_facebook_login_config_id,
     derive_postiz_password,
     normalize_postiz_integrations_list,
 )
@@ -167,10 +167,17 @@ _POSTIZ_OAUTH_SLUG_BY_PLATFORM: Dict[str, str] = {
 _CONNECT_PATH_TO_PLATFORM: Dict[str, str] = {
     "facebook": "FACEBOOK",
     "instagram": "INSTAGRAM",
+    "instagram-standalone": "INSTAGRAM",
     "whatsapp": "WHATSAPP",
     "whatsapp-status": "WHATSAPP",
     "tiktok": "TIKTOK",
     "youtube": "YOUTUBE",
+}
+
+# If the primary Postiz social slug fails, try these (Instagram Graph vs Business Login).
+_POSTIZ_OAUTH_SLUG_FALLBACKS: Dict[str, List[str]] = {
+    "instagram": ["instagram-standalone"],
+    "instagram-standalone": ["instagram"],
 }
 
 
@@ -180,7 +187,12 @@ def _resolve_connect_platform(platform: str) -> tuple[str, Optional[str]]:
     platform_upper = _CONNECT_PATH_TO_PLATFORM.get(path_key) or platform.strip().upper().replace(
         " ", "_"
     )
-    postiz_slug = _POSTIZ_OAUTH_SLUG_BY_PLATFORM.get(platform_upper)
+    if path_key == "instagram-standalone":
+        postiz_slug = "instagram-standalone"
+    elif path_key == "whatsapp-status":
+        postiz_slug = "whatsapp"
+    else:
+        postiz_slug = _POSTIZ_OAUTH_SLUG_BY_PLATFORM.get(platform_upper)
     return platform_upper, postiz_slug
 
 
@@ -223,25 +235,53 @@ async def _build_postiz_platform_connect(
             ),
         )
 
-    try:
-        authorization_url = await PostizClient(base_url=postiz_base_url).get_social_connect_url(
-            api_key,
-            postiz_slug,
+    slugs_to_try: List[str] = [postiz_slug]
+    for extra in _POSTIZ_OAUTH_SLUG_FALLBACKS.get(postiz_slug, []):
+        if extra not in slugs_to_try:
+            slugs_to_try.append(extra)
+
+    authorization_url: Optional[str] = None
+    last_oauth_error: Optional[Exception] = None
+    used_slug = postiz_slug
+    postiz_client = PostizClient(base_url=postiz_base_url)
+    for slug in slugs_to_try:
+        try:
+            authorization_url = await postiz_client.get_social_connect_url(api_key, slug)
+            used_slug = slug
+            break
+        except Exception as oauth_error:
+            last_oauth_error = oauth_error
+            logger.warning(
+                f"[SOCIAL] Postiz direct OAuth for {slug} failed "
+                f"(user {internal_user_id}): {oauth_error}"
+            )
+
+    if not authorization_url:
+        redirect_hints = ", ".join(
+            f"https://postiz.useautobus.com/integrations/social/{slug}"
+            for slug in slugs_to_try
         )
-    except Exception as oauth_error:
-        logger.warning(
-            f"[SOCIAL] Postiz direct OAuth for {postiz_slug} failed "
-            f"(user {internal_user_id}): {oauth_error}"
+        cred_hint = (
+            "Meta/Instagram"
+            if used_slug.startswith("instagram") or postiz_slug.startswith("instagram")
+            else used_slug.upper()
         )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=(
                 f"Could not start {provider_label} OAuth. "
-                f"Configure {postiz_slug.upper()} client credentials on Postiz "
-                f"(redirect URI https://postiz.useautobus.com/integrations/social/{postiz_slug}) "
-                f"and restart Postiz. Details: {oauth_error}"
+                f"Configure {cred_hint} client credentials on Postiz "
+                f"(redirect URI {redirect_hints}) "
+                f"and restart Postiz. Details: {last_oauth_error}"
             ),
-        ) from oauth_error
+        ) from last_oauth_error
+
+    authorization_url = apply_facebook_login_config_id(
+        authorization_url,
+        slug=used_slug,
+    )
+
+    provider_label = used_slug.replace("-", " ").title()
 
     # Optional Postiz LOCAL login payload (not used for direct provider OAuth).
     postiz_login_ready = False

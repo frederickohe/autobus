@@ -215,6 +215,9 @@ services:
       META_APP_SECRET: ${META_APP_SECRET:-}
       META_APP_ID: ${META_APP_ID:-2213025492844421}
       META_WHATSAPP_CONFIG_ID: ${META_WHATSAPP_CONFIG_ID:-1090469396641282}
+      # Facebook Login for Business config for Postiz Page publishing (Digital Marketing).
+      # Separate from META_WHATSAPP_CONFIG_ID (Embedded Signup).
+      FACEBOOK_LOGIN_CONFIG_ID: ${FACEBOOK_LOGIN_CONFIG_ID:-1362543882717290}
       META_WHATSAPP_REDIRECT_URI: ${META_WHATSAPP_REDIRECT_URI:-https://useautobus.com/api/social/callback}
       # Instagram Business Login (API with Instagram Login) — app id differs from META_APP_ID
       INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-1370992838225688}
