@@ -11,6 +11,7 @@ class PlanResponse(BaseModel):
     agents: List[str]
     description: Optional[str]
     is_active: bool
+    apple_product_ids: Optional[Dict[str, str]] = None
 
 
 class SubscriptionResponse(BaseModel):
@@ -35,6 +36,8 @@ class SubscriptionStatusResponse(BaseModel):
     expires_at: Optional[str] = None
     days_remaining: int
     status: str
+    payment_provider: Optional[str] = None
+    apple_product_id: Optional[str] = None
 
 
 class PlanCreateResponse(BaseModel):

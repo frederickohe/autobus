@@ -153,6 +153,11 @@ class Settings(BaseSettings):
     PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()
     PAYSTACK_BILLING_CALLBACK_URL: str = os.environ.get("PAYSTACK_BILLING_CALLBACK_URL", "").strip()
 
+    # Apple In-App Purchase (StoreKit 2)
+    APPLE_BUNDLE_ID: str = os.environ.get("APPLE_BUNDLE_ID", "").strip()
+    APPLE_IAP_PRODUCT_PREFIX: str = os.environ.get("APPLE_IAP_PRODUCT_PREFIX", "autobus").strip()
+    APPLE_IAP_PRODUCT_MAP: str = os.environ.get("APPLE_IAP_PRODUCT_MAP", "").strip()
+
     @property
     def DB_DSN(self) -> URL:
         return URL.create(

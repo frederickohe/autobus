@@ -21,6 +21,7 @@ from core.subscription.dto.response.subscription_response import (
     PlanResponse,
     PlanCreateResponse
 )
+from core.iap.apple_product_map import apple_product_ids_for_plan
 
 subscription_routes = APIRouter()
 
@@ -99,7 +100,8 @@ def get_subscription_plans(db: Session = Depends(get_db)):
             features=plan.get_features_list(),
             agents=plan.get_agents_list(),
             description=plan.description,
-            is_active=plan.is_active
+            is_active=plan.is_active,
+            apple_product_ids=apple_product_ids_for_plan(plan),
         )
         for plan in plans
     ]
@@ -250,7 +252,8 @@ def create_subscription_plan(
             features=plan.get_features_list(),
             agents=plan.get_agents_list(),
             description=plan.description,
-            is_active=plan.is_active
+            is_active=plan.is_active,
+            apple_product_ids=apple_product_ids_for_plan(plan),
         )
     )
 

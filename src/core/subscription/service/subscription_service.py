@@ -79,7 +79,17 @@ class SubscriptionService:
                 "message": "Failed to subscribe user"
             }
 
-    def subscribe_user(self, user_id: str, plan_id: int, payment_reference: str = None) -> dict:
+    def subscribe_user(
+        self,
+        user_id: str,
+        plan_id: int,
+        payment_reference: str = None,
+        expires_at: datetime = None,
+        amount_paid: float = None,
+        payment_provider: str = None,
+        apple_original_transaction_id: str = None,
+        apple_product_id: str = None,
+    ) -> dict:
         """Subscribe user to a plan"""
         try:
             # Check if plan exists
@@ -98,15 +108,19 @@ class SubscriptionService:
                     "message": "User already has an active subscription. Upgrade instead."
                 }
 
-            # Create new subscription (30 days from now)
-            expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+            # Create new subscription (30 days from now unless the store provides expiry)
+            if expires_at is None:
+                expires_at = datetime.now(timezone.utc) + timedelta(days=30)
             
             new_subscription = UserSubscription(
                 user_id=user_id,
                 plan_id=plan_id,
-                amount_paid=plan.price,
+                amount_paid=plan.price if amount_paid is None else amount_paid,
                 expires_at=expires_at,
                 payment_reference=payment_reference,
+                payment_provider=payment_provider,
+                apple_original_transaction_id=apple_original_transaction_id,
+                apple_product_id=apple_product_id,
                 status=SubscriptionStatus.ACTIVE
             )
 
@@ -248,7 +262,7 @@ class SubscriptionService:
                 "subscription_id": new_subscription.id,
                 "plan_name": plan.name,
                 "expires_at": expires_at.isoformat(),
-                "amount_paid": plan.price
+                "amount_paid": new_subscription.amount_paid,
             }
 
         except Exception as e:
@@ -258,6 +272,86 @@ class SubscriptionService:
                 "success": False,
                 "message": "Failed to create subscription"
             }
+
+    def apply_apple_subscription(
+        self,
+        user_id: str,
+        plan_id: int,
+        *,
+        payment_reference: str,
+        expires_at: datetime,
+        amount_paid: float,
+        apple_original_transaction_id: str,
+        apple_product_id: str,
+    ) -> dict:
+        """Create or refresh a subscription from a verified App Store transaction."""
+        plan = self.get_plan_by_id(plan_id)
+        if not plan:
+            return {"success": False, "message": "Subscription plan not found"}
+
+        linked = (
+            self.db.query(UserSubscription)
+            .filter(
+                UserSubscription.apple_original_transaction_id == apple_original_transaction_id
+            )
+            .order_by(UserSubscription.created_at.desc())
+            .first()
+        )
+        if linked and linked.user_id != user_id:
+            return {
+                "success": False,
+                "message": "This Apple subscription is already linked to another Autobus account",
+            }
+
+        now = datetime.now(timezone.utc)
+        if linked:
+            linked.plan_id = plan_id
+            linked.status = SubscriptionStatus.ACTIVE
+            linked.expires_at = expires_at
+            linked.amount_paid = amount_paid
+            linked.payment_reference = payment_reference
+            linked.payment_provider = "apple_iap"
+            linked.apple_product_id = apple_product_id
+            linked.cancelled_at = None
+            linked.updated_at = now
+            self.db.commit()
+            self.db.refresh(linked)
+            try:
+                from core.credits.service.credit_service import CreditService
+                CreditService(self.db).initialize_credits_for_subscription(user_id, linked)
+            except Exception as e:
+                logger.warning(f"Credit initialization failed for Apple IAP user {user_id}: {e}")
+            try:
+                self.initialize_user_agents_from_subscription(user_id)
+            except Exception as e:
+                logger.error(f"Error initializing user agents after Apple IAP for {user_id}: {e}")
+            return {
+                "success": True,
+                "message": "Apple subscription updated",
+                "subscription_id": linked.id,
+                "plan_name": plan.name,
+                "expires_at": expires_at.isoformat(),
+                "amount_paid": amount_paid,
+            }
+
+        existing = self.get_user_active_subscription(user_id)
+        if existing:
+            existing.status = SubscriptionStatus.CANCELLED
+            existing.cancelled_at = now
+            existing.updated_at = now
+            existing.notes = ((existing.notes or "") + " | Replaced by Apple IAP").strip(" |")
+            self.db.commit()
+
+        return self.subscribe_user(
+            user_id,
+            plan_id,
+            payment_reference,
+            expires_at=expires_at,
+            amount_paid=amount_paid,
+            payment_provider="apple_iap",
+            apple_original_transaction_id=apple_original_transaction_id,
+            apple_product_id=apple_product_id,
+        )
 
     def upgrade_subscription_by_phone(self, phone: str, new_plan_id: int, payment_reference: str = None) -> dict:
         """Upgrade user's subscription using phone number"""
@@ -515,6 +609,8 @@ class SubscriptionService:
                     "expires_at": None,
                     "days_remaining": 0,
                     "status": "NO_USER",
+                    "payment_provider": None,
+                    "apple_product_id": None,
                 }
             
             return self.get_user_subscription_status(user.id)
@@ -533,6 +629,8 @@ class SubscriptionService:
                 "expires_at": None,
                 "days_remaining": 0,
                 "status": "ERROR",
+                "payment_provider": None,
+                "apple_product_id": None,
             }
 
     def get_user_subscription_status(self, user_id: str) -> dict:
@@ -552,6 +650,8 @@ class SubscriptionService:
                 "expires_at": None,
                 "days_remaining": 0,
                 "status": "NO_SUBSCRIPTION",
+                "payment_provider": None,
+                "apple_product_id": None,
             }
 
         return {
@@ -568,6 +668,8 @@ class SubscriptionService:
             "status": subscription.status.value
             if hasattr(subscription.status, "value")
             else str(subscription.status),
+            "payment_provider": subscription.payment_provider,
+            "apple_product_id": subscription.apple_product_id,
         }
 
 

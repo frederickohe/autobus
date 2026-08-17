@@ -31,6 +31,9 @@ class UserSubscription(Base):
     
     # Metadata
     payment_reference: Mapped[Optional[str]] = mapped_column(String(255))  # For tracking payments
+    payment_provider: Mapped[Optional[str]] = mapped_column(String(32))  # paystack | apple_iap | free
+    apple_original_transaction_id: Mapped[Optional[str]] = mapped_column(String(255))
+    apple_product_id: Mapped[Optional[str]] = mapped_column(String(255))
     notes: Mapped[Optional[str]] = mapped_column(Text)  # Any additional notes
     
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

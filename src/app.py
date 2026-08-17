@@ -21,6 +21,7 @@ from core.payments.controller.invoicecontroller import invoice_routes
 from core.payments.controller.paymentcontroller import payment_routes
 from core.otp.controller.otpcontroller import otp_routes
 from core.subscription.controller.subscription_controller import subscription_routes
+from core.iap.controller.apple_iap_controller import apple_iap_routes
 from core.credits.controller.credit_controller import credit_routes
 from core.webhooks.controller.webhookscontroller import webhooks_routes
 from core.customers.controller.customer_controller import customer_routes
@@ -77,6 +78,34 @@ async def lifespan(app: FastAPI):
                         )
                     )
                 logger.info("[APP_STARTUP] Added subscription_plans.credit_allocations column")
+            for col_name, col_sql in (
+                ("apple_product_id_monthly", "VARCHAR(255)"),
+                ("apple_product_id_yearly", "VARCHAR(255)"),
+            ):
+                if col_name not in cols:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE subscription_plans ADD COLUMN {col_name} {col_sql}"
+                            )
+                        )
+                    logger.info(f"[APP_STARTUP] Added subscription_plans.{col_name} column")
+
+        if "user_subscriptions" in insp.get_table_names():
+            sub_cols = {c["name"] for c in insp.get_columns("user_subscriptions")}
+            for col_name, col_sql in (
+                ("payment_provider", "VARCHAR(32)"),
+                ("apple_original_transaction_id", "VARCHAR(255)"),
+                ("apple_product_id", "VARCHAR(255)"),
+            ):
+                if col_name not in sub_cols:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE user_subscriptions ADD COLUMN {col_name} {col_sql}"
+                            )
+                        )
+                    logger.info(f"[APP_STARTUP] Added user_subscriptions.{col_name} column")
 
         if "otps" in insp.get_table_names():
             try:
@@ -192,6 +221,7 @@ app.include_router(billing_routes, prefix="/api/v1/billing", tags=["Billing Serv
 app.include_router(invoice_routes, prefix="/api/v1/invoice", tags=["Invoice Routes"])
 app.include_router(otp_routes, prefix="/api/v1/otp", tags=["OTP Routes"])
 app.include_router(subscription_routes, prefix="/api/v1/subscription", tags=["Subscription Routes"])
+app.include_router(apple_iap_routes, prefix="/api/v1/iap", tags=["Apple In-App Purchase"])
 app.include_router(credit_routes, prefix="/api/v1/credits", tags=["Credit Routes"])
 app.include_router(customer_routes, prefix="/api/v1/customers", tags=["Customer Routes"])
 app.include_router(webhooks_routes, prefix="/api/v1/webhooks", tags=["Webhooks Routes"])

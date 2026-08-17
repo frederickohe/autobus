@@ -24,6 +24,8 @@ class SubscriptionPlan(Base):
     agents: Mapped[str] = mapped_column(Text, nullable=False, default='[]')  # JSON string list of agent identifiers
     credit_allocations: Mapped[Optional[str]] = mapped_column(Text)  # JSON: per-resource monthly credits
     description: Mapped[Optional[str]] = mapped_column(Text)
+    apple_product_id_monthly: Mapped[Optional[str]] = mapped_column(String(255))
+    apple_product_id_yearly: Mapped[Optional[str]] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
