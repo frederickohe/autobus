@@ -62,7 +62,7 @@ class InstagramConnectResponse(BaseModel):
     redirect_uri: str
     message: str = (
         "Open authorization_url to link Instagram via Business Login. "
-        "This enables messaging and publishing for Autobus."
+        "This enables inbox messaging and Digital Marketing posting."
     )
 
 
@@ -168,11 +168,15 @@ def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> In
     except Exception as exc:
         logger.warning("[IG] profile fetch failed, using token user_id: %s", exc)
 
-    ig_user_id = str(profile.get("id") or user_id_from_token or "").strip()
+    # Messaging webhooks identify the business by the professional account id
+    # (`user_id`), not the app-scoped `/me.id`.
+    ig_user_id = str(
+        profile.get("user_id") or user_id_from_token or profile.get("id") or ""
+    ).strip()
     if not ig_user_id:
         raise RuntimeError("Instagram login succeeded but no user id was returned.")
 
-    return _upsert_account(
+    account = _upsert_account(
         db,
         user_id=user_id,
         ig_user_id=ig_user_id,
@@ -184,6 +188,11 @@ def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> In
         permissions=",".join(permissions) if permissions else None,
         token_expires_at=expires_at,
     )
+    try:
+        svc.subscribe_webhooks(access_token, account.ig_user_id)
+    except Exception as exc:
+        logger.warning("[IG] webhook subscribe failed: %s", exc)
+    return account
 
 
 def _success_html(account: InstagramAccount) -> str:
@@ -199,7 +208,7 @@ a{{color:#f48fb1}}
 </style></head>
 <body><div class="card">
 <h1>Instagram linked</h1>
-<p>Connected <strong>@{label}</strong> to Autobus for messaging and publishing.</p>
+<p>Connected <strong>@{label}</strong> to Autobus for inbox messaging and Digital Marketing posting.</p>
 <p><a href="{_frontend_base()}">Back to Autobus</a></p>
 </div>
 <script>try{{window.opener&&window.opener.postMessage({{type:'AUTOBUS_INSTAGRAM_LINKED',ig_user_id:'{account.ig_user_id}'}},'*');}}catch(e){{}}

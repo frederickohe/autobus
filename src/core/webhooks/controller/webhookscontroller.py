@@ -4,7 +4,7 @@ import re
 import hmac
 import hashlib
 from datetime import datetime
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 from core.webhooks.dto.response.simple_chat_response import SimpleChatResponse
 from utilities.dbconfig import get_db
 from sqlalchemy.orm import Session
@@ -39,9 +39,22 @@ def _require_public_api_key(x_api_key: Optional[str] = Header(None, alias="X-Api
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
 
+def _meta_webhook_secrets() -> list:
+    secrets = []
+    for raw in (
+        settings.META_APP_SECRET,
+        os.getenv("META_APP_SECRET"),
+        os.getenv("INSTAGRAM_APP_SECRET"),
+    ):
+        val = (raw or "").strip()
+        if val and val not in secrets:
+            secrets.append(val)
+    return secrets
+
+
 def _verify_meta_signature(raw_body: bytes, signature_header: Optional[str]) -> None:
-    secret = (settings.META_APP_SECRET or os.getenv("META_APP_SECRET") or "").strip()
-    if not secret:
+    secrets = _meta_webhook_secrets()
+    if not secrets:
         if settings.DEBUG:
             logger.warning("META_APP_SECRET not set; skipping Meta signature verification")
             return
@@ -51,10 +64,12 @@ def _verify_meta_signature(raw_body: bytes, signature_header: Optional[str]) -> 
         )
     if not signature_header or not signature_header.startswith("sha256="):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing Meta signature")
-    expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     provided = signature_header.split("=", 1)[1].strip()
-    if not hmac.compare_digest(expected, provided):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Meta signature")
+    for secret in secrets:
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(expected, provided):
+            return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid Meta signature")
 
 @webhooks_routes.get("/start-dialog")
 def verify_webhook(
@@ -419,6 +434,9 @@ async def start_dialog(
 
         _verify_meta_signature(raw_body, request.headers.get("X-Hub-Signature-256"))
 
+        if str(payload.get("object") or "").lower() == "instagram":
+            return handle_instagram_webhook(payload, db)
+
         # Extract entry and changes
         entries = payload.get("entry", [])
         if not entries:
@@ -467,6 +485,84 @@ async def start_dialog(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error processing webhook"
         )
+
+
+def _ig_message_text(message: Any) -> str:
+    if not isinstance(message, dict):
+        return str(message or "").strip()
+    if message.get("is_echo"):
+        return ""
+    text = message.get("text")
+    if isinstance(text, dict):
+        return str(text.get("body") or text.get("text") or "").strip()
+    if text:
+        return str(text).strip()
+    return ""
+
+
+def handle_instagram_webhook(payload: dict, db: Session):
+    """Handle Instagram Login messaging webhooks (inbox DMs)."""
+    from core.instagram.model.InstagramAccount import InstagramAccount
+    from core.instagram.service.instagram_oauth_service import InstagramOAuthService
+
+    events = []
+    for entry in payload.get("entry") or []:
+        if not isinstance(entry, dict):
+            continue
+        for item in entry.get("messaging") or []:
+            if isinstance(item, dict):
+                events.append(item)
+        for change in entry.get("changes") or []:
+            if not isinstance(change, dict):
+                continue
+            field = str(change.get("field") or "")
+            value = change.get("value") if isinstance(change.get("value"), dict) else {}
+            if field in {"messages", "messaging"}:
+                events.append(value)
+
+    if not events:
+        return {"status": "ok", "message": "No Instagram messaging events"}
+
+    svc = InstagramOAuthService()
+    handled = 0
+    for event in events:
+        sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
+        recipient = event.get("recipient") if isinstance(event.get("recipient"), dict) else {}
+        sender_id = str(sender.get("id") or "").strip()
+        recipient_id = str(recipient.get("id") or "").strip()
+        if not sender_id or not recipient_id or sender_id == recipient_id:
+            continue
+        text = _ig_message_text(event.get("message") or {})
+        if not text:
+            continue
+
+        account = (
+            db.query(InstagramAccount)
+            .filter(
+                InstagramAccount.ig_user_id == recipient_id,
+                InstagramAccount.is_active.is_(True),
+                InstagramAccount.messaging_enabled.is_(True),
+            )
+            .first()
+        )
+        if not account:
+            logger.warning("[IG webhook] no linked account for ig_user_id=%s", recipient_id)
+            continue
+
+        nlu_user_id = f"{account.user_id}:ig:{sender_id}"
+        nlu_system = AutobusNLUSystem(db_session=db)
+        reply = nlu_system.process_message(nlu_user_id, text)
+        token = svc.decrypt_token(account.access_token_encrypted)
+        sent = svc.send_text(token, sender_id, reply or "")
+        if not sent:
+            logger.error("[IG webhook] failed to send reply to %s", sender_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send Instagram reply",
+            )
+        handled += 1
+
+    return {"status": "ok", "message": f"Processed {handled} Instagram message(s)"}
 
 
 async def handle_simple_chat(

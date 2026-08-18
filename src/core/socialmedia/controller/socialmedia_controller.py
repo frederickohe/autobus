@@ -321,6 +321,33 @@ async def _build_postiz_platform_connect(
     }
 
 
+def _instagram_business_login_connect(internal_user_id: str) -> Dict[str, Any]:
+    """Instagram inbox + Digital Marketing posting use Autobus Business Login, not Postiz."""
+    from core.instagram.service.instagram_oauth_service import (
+        InstagramOAuthService,
+        InstagramOAuthState,
+    )
+
+    svc = InstagramOAuthService()
+    try:
+        svc.require_config()
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    state = InstagramOAuthState.create(internal_user_id)
+    return {
+        "authorization_url": svc.build_authorize_url(state),
+        "platform": "INSTAGRAM",
+        "provider": "INSTAGRAM",
+        "direct_oauth": True,
+        "state": state,
+        "redirect_uri": svc.redirect_uri,
+        "message": (
+            "Open authorization_url to link Instagram via Business Login. "
+            "This enables inbox messaging and Digital Marketing posting."
+        ),
+    }
+
+
 # ==================== OAuth Flow Routes ====================
 
 @social_routes.get("/connect/{platform}")
@@ -349,6 +376,9 @@ async def initiate_oauth_flow(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Unsupported platform. Supported: {', '.join(valid_platforms)}",
             )
+
+        if platform_upper == "INSTAGRAM" or (postiz_slug or "").startswith("instagram"):
+            return _instagram_business_login_connect(internal_user_id)
 
         postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
         if postiz_slug and postiz_base_url:

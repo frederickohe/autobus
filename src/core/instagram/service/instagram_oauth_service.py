@@ -214,7 +214,9 @@ class InstagramOAuthService:
     def fetch_profile(self, access_token: str) -> Dict[str, Any]:
         url = f"{self.graph_base}/me"
         params = {
-            "fields": "id,username,name,account_type,profile_picture_url",
+            # Meta returns `id` as the app-scoped user id; `user_id` is the
+            # Instagram professional account id used in webhook recipient ids.
+            "fields": "id,user_id,username,name,account_type,profile_picture_url",
             "access_token": access_token,
         }
         resp = requests.get(url, params=params, timeout=30)
@@ -222,6 +224,61 @@ class InstagramOAuthService:
             logger.error("[IG] /me failed: %s %s", resp.status_code, resp.text[:400])
             resp.raise_for_status()
         return resp.json()
+
+    def _versioned_graph(self) -> str:
+        ver = (os.getenv("INSTAGRAM_GRAPH_VERSION") or "v21.0").strip().strip("/")
+        return f"{self.graph_base}/{ver}"
+
+    def subscribe_webhooks(self, access_token: str, ig_user_id: str) -> bool:
+        """Subscribe this Instagram user to the app's webhook fields (inbox DMs)."""
+        ig_id = (ig_user_id or "").strip()
+        token = (access_token or "").strip()
+        if not ig_id or not token:
+            return False
+        url = f"{self._versioned_graph()}/{ig_id}/subscribed_apps"
+        fields = (
+            os.getenv("INSTAGRAM_WEBHOOK_FIELDS")
+            or "messages,messaging_seen,comments,live_comments,mentions"
+        ).strip()
+        resp = requests.post(
+            url,
+            params={"subscribed_fields": fields, "access_token": token},
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            logger.warning(
+                "[IG] subscribed_apps failed (%s): %s",
+                resp.status_code,
+                resp.text[:400],
+            )
+            return False
+        data = resp.json() if resp.content else {}
+        ok = bool(data.get("success", True)) if isinstance(data, dict) else True
+        logger.info("[IG] subscribed_apps ig_user_id=%s success=%s", ig_id, ok)
+        return ok
+
+    def send_text(self, access_token: str, recipient_igsid: str, text: str) -> bool:
+        """Send an Instagram DM via Instagram API with Instagram Login."""
+        token = (access_token or "").strip()
+        to = (recipient_igsid or "").strip()
+        body = (text or "").strip()
+        if not token or not to or not body:
+            return False
+        url = f"{self._versioned_graph()}/me/messages"
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={"recipient": {"id": to}, "message": {"text": body}},
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                "[IG] send message failed (%s): %s",
+                resp.status_code,
+                resp.text[:400],
+            )
+            return False
+        return True
 
     def encrypt_token(self, token: str) -> str:
         encrypted = encrypt_secret(token)
