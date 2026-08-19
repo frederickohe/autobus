@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from core.interventions.model.Intervention import Intervention
@@ -67,7 +68,13 @@ class InterventionService:
     def close_intervention(self, *, intervention_id: int, user_id: str) -> Intervention:
         intervention = (
             self.db.query(Intervention)
-            .filter(Intervention.id == int(intervention_id), Intervention.user_id == user_id)
+            .filter(
+                Intervention.id == int(intervention_id),
+                or_(
+                    Intervention.user_id == user_id,
+                    Intervention.user_id.like(f"{user_id}:%"),
+                ),
+            )
             .first()
         )
         if not intervention:
@@ -86,7 +93,12 @@ class InterventionService:
         status: Optional[str] = None,
         limit: int = 50,
     ) -> List[Intervention]:
-        q = self.db.query(Intervention).filter(Intervention.user_id == user_id)
+        q = self.db.query(Intervention).filter(
+            or_(
+                Intervention.user_id == user_id,
+                Intervention.user_id.like(f"{user_id}:%"),
+            )
+        )
         if status:
             q = q.filter(Intervention.status == status)
         return q.order_by(Intervention.created_at.desc()).limit(int(limit)).all()

@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from another_fastapi_jwt_auth import AuthJWT
 
 from core.user.controller.usercontroller import validate_token, get_db
-from core.conversationmanager.service.conversation_list_service import ConversationListService
+from core.conversationmanager.service.conversation_list_service import (
+    ConversationListService,
+    CustomerDeliveryError,
+)
 from core.interventions.service.intervention_service import InterventionService
 from core.nlu.service.conversation_manager import ConversationManager
 
@@ -120,14 +123,22 @@ def send_human_message(
     authjwt: AuthJWT = Depends(validate_token),
 ):
     """
-    Records a human/agent message into the daily conversation history.
-    Delivery to external channels (WhatsApp/Chatwoot) can be performed by the calling app.
+    Record a human/agent reply and deliver it on the customer's channel
+    (WhatsApp / Instagram immediately; public webchat via pending poll).
     """
     user_id = authjwt.get_jwt_subject()
 
     if session_id is not None:
         service = ConversationListService(db)
-        detail = service.append_human_message_to_session(user_id, int(session_id), message)
+        try:
+            detail = service.append_human_message_to_session(
+                user_id, int(session_id), message
+            )
+        except CustomerDeliveryError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
         if not detail:
             existing = service.get_session_detail(user_id, int(session_id))
             if not existing:
@@ -166,8 +177,8 @@ def close_intervention(
 
     closed = svc.close_intervention(intervention_id=intervention_id, user_id=user_id)
 
-    # Turn the bot back on for the day.
-    state = cm.get_conversation_state(user_id)
+    # Turn the bot back on for the scoped customer session, not the merchant's own chat.
+    state = cm.get_conversation_state(closed.user_id)
     if state.intervention_id == int(intervention_id):
         state.intervention_active = False
         state.intervention_trigger = None

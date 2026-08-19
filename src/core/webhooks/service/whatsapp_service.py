@@ -46,6 +46,61 @@ class WhatsAppService:
                 logger.warning("Tenant WhatsApp token lookup failed: %s", exc)
         return cls(api_key=token, phone_number_id=phone_id)
 
+    @classmethod
+    def account_for_merchant(cls, merchant_id: str, db):
+        """Active WhatsApp row for this Autobus business, including phone-matched owners."""
+        if not merchant_id or db is None:
+            return None
+        try:
+            from core.user.model.User import User
+            from core.whatsapp.model.WhatsAppAccount import WhatsAppAccount
+            from utilities.phone_utils import (
+                convert_to_local_ghana_format,
+                normalize_ghana_phone_number,
+            )
+        except Exception as exc:
+            logger.warning("WhatsApp merchant account lookup imports failed: %s", exc)
+            return None
+
+        row = (
+            db.query(WhatsAppAccount)
+            .filter(
+                WhatsAppAccount.user_id == str(merchant_id),
+                WhatsAppAccount.is_active.is_(True),
+            )
+            .first()
+        )
+        if row:
+            return row
+
+        merchant = db.query(User).filter(User.id == str(merchant_id)).first()
+        phone = (merchant.phone if merchant else None) or ""
+        if not phone.strip():
+            return None
+
+        def _variants(raw: str) -> set:
+            raw = (raw or "").strip()
+            if not raw:
+                return set()
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            return {
+                raw,
+                digits,
+                convert_to_local_ghana_format(raw),
+                normalize_ghana_phone_number(raw),
+                digits[-9:] if len(digits) >= 9 else "",
+            } - {"", None}
+
+        want = _variants(phone)
+        for acc in (
+            db.query(WhatsAppAccount)
+            .filter(WhatsAppAccount.is_active.is_(True))
+            .all()
+        ):
+            if want & _variants(acc.display_phone_number or ""):
+                return acc
+        return None
+
     def create_registration_flow(self, phone_id: str) -> Optional[str]:
         """
         Create the registration Flow template in Meta using the local JSON definition.
