@@ -39,6 +39,26 @@ def get_my_subscription_status(
     return SubscriptionStatusResponse(**data)
 
 
+@subscription_routes.post("/me/enroll-free", response_model=SubscriptionResponse)
+def enroll_free_plan(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Grant the complimentary Free plan. Used by the iOS app while App Store IAP is under review."""
+    user_service = UserService(db)
+    user = user_service.get_current_user(authjwt.get_jwt_subject())
+    subscription_service = SubscriptionService(db)
+    result = subscription_service.enroll_free_plan(user.id)
+
+    if not result["success"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result["message"],
+        )
+
+    return SubscriptionResponse(**result)
+
+
 @subscription_routes.post("/me/cancel", response_model=SubscriptionResponse)
 def cancel_my_subscription(
     authjwt: AuthJWT = Depends(validate_token),

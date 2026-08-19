@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from core.interventions.model.Intervention import Intervention
 from core.notification.service.event_notification_service import EventNotificationService
+from utilities.dbconfig import SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +57,17 @@ class InterventionService:
         self.db.refresh(intervention)
 
         try:
-            EventNotificationService(self.db).notify_intervention_active(
-                user_id=user_id,
-                intervention_id=int(intervention.id),
-                trigger=trigger,
-                reason=reason,
-                conversation_date=str(conv_date),
-            )
+            notify_db = SessionLocal()
+            try:
+                EventNotificationService(notify_db).notify_intervention_active(
+                    user_id=user_id,
+                    intervention_id=int(intervention.id),
+                    trigger=trigger,
+                    reason=reason,
+                    conversation_date=str(conv_date),
+                )
+            finally:
+                notify_db.close()
         except Exception:
             logger.exception(
                 "[INTERVENTIONS] Failed to notify owner for intervention %s (%s)",

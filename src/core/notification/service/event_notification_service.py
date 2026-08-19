@@ -22,9 +22,26 @@ class EventNotificationService:
         self.db = db
         self._notifications = NotificationService(db)
 
+    @staticmethod
+    def _is_placeholder_recipient(value: str) -> bool:
+        text = (value or "").strip().lower()
+        if not text:
+            return True
+        return (
+            text.startswith("change_me")
+            or "example.com" in text
+            or text in {"changeme", "admin", "user_id"}
+        )
+
     def _admin_recipient_ids(self) -> List[str]:
         raw = getattr(settings, "ADMIN_NOTIFICATION_USER_IDS", "") or ""
-        return [uid.strip() for uid in raw.split(",") if uid.strip()]
+        recipients: List[str] = []
+        for uid in raw.split(","):
+            uid = uid.strip()
+            if not uid or self._is_placeholder_recipient(uid):
+                continue
+            recipients.append(uid)
+        return recipients
 
     def _resolve_user_db_id(self, user_identifier: str) -> Optional[str]:
         if not user_identifier:
@@ -106,7 +123,21 @@ class EventNotificationService:
                 send_sms=send_sms,
                 sms_phone=sms_phone,
             )
+            logger.info(
+                "[EVENT_NOTIFICATION] Notified user %s event=%s sms=%s",
+                user_id,
+                data.get("event"),
+                bool(send_sms and sms_phone),
+            )
         except Exception as exc:
+            try:
+                self.db.rollback()
+            except Exception:
+                logger.debug(
+                    "[EVENT_NOTIFICATION] Rollback after notify failure for %s failed",
+                    user_id,
+                    exc_info=True,
+                )
             logger.error(
                 "[EVENT_NOTIFICATION] Failed to notify user %s (%s): %s",
                 user_id,
@@ -133,10 +164,25 @@ class EventNotificationService:
 
         skip = skip_user_ids or set()
         for admin_id in recipients:
-            resolved = self._resolve_user_db_id(admin_id) or admin_id
+            resolved = self._resolve_user_db_id(admin_id)
+            if not resolved:
+                logger.warning(
+                    "[EVENT_NOTIFICATION] Skipping unknown admin recipient %s for %s",
+                    admin_id,
+                    data.get("event"),
+                )
+                continue
             if admin_id in skip or resolved in skip:
                 continue
-            self._notify_user_safe(admin_id, notification_type, data, send_sms=send_sms)
+            admin = self.db.query(User).filter(User.id == resolved).first()
+            sms_phone = self._user_sms_phone(admin) if send_sms else None
+            self._notify_user_safe(
+                resolved,
+                notification_type,
+                data,
+                send_sms=bool(send_sms and sms_phone),
+                sms_phone=sms_phone,
+            )
 
     def notify_intervention_active(
         self,

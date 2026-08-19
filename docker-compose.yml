@@ -160,6 +160,12 @@ services:
       # Auto Migration Flag
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
 
+      # Intervention / order event notifications (owner SMS + optional admin inbox)
+      SMS_NOTIFICATION_ENABLED: ${SMS_NOTIFICATION_ENABLED:-true}
+      ADMIN_NOTIFICATION_USER_IDS: ${ADMIN_NOTIFICATION_USER_IDS:-}
+      ADMIN_USER_IDS: ${ADMIN_USER_IDS:-}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+
       # Language Model Configuration
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}

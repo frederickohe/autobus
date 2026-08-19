@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from core.subscription.model.subscription_plan import SubscriptionPlan
+from core.subscription.model.subscription_plan import BillingPeriod, SubscriptionPlan
 from core.subscription.model.user_subscription import UserSubscription, SubscriptionStatus
 from core.user.model.User import User
 import logging
@@ -28,8 +28,12 @@ class SubscriptionService:
         self.db = db
 
     def get_all_plans(self) -> List[SubscriptionPlan]:
-        """Get all active subscription plans"""
-        return self.db.query(SubscriptionPlan).filter(SubscriptionPlan.is_active == True).all()
+        """Get all active paid subscription plans (excludes the complimentary iOS Free plan)."""
+        return (
+            self.db.query(SubscriptionPlan)
+            .filter(SubscriptionPlan.is_active == True, SubscriptionPlan.price > 0)
+            .all()
+        )
 
     def get_plan_by_id(self, plan_id: int) -> Optional[SubscriptionPlan]:
         """Get subscription plan by ID"""
@@ -421,6 +425,7 @@ class SubscriptionService:
                 amount_paid=new_plan.price,
                 expires_at=expires_at,
                 payment_reference=payment_reference,
+                payment_provider="paystack" if payment_reference else None,
                 status=SubscriptionStatus.ACTIVE,
                 notes=f"Upgraded from plan {current_subscription.plan_id}"
             )
@@ -591,71 +596,121 @@ class SubscriptionService:
         features_list = subscription.plan.get_features_list()
         return feature.lower() in [f.lower() for f in features_list]
 
+    @staticmethod
+    def _is_paid_subscription(subscription: UserSubscription) -> bool:
+        """True when the active plan is a paid Paystack/Apple plan, not the iOS free grant."""
+        if not subscription or not subscription.is_active:
+            return False
+        provider = (subscription.payment_provider or "").strip().lower()
+        if provider == "free":
+            return False
+        if provider in ("paystack", "apple_iap"):
+            return True
+        price = subscription.plan.price if subscription.plan else 0
+        return (price or 0) > 0
+
+    def _empty_subscription_status(self, status: str) -> dict:
+        return {
+            "has_active_subscription": False,
+            "is_paid": False,
+            "subscription_id": None,
+            "plan_id": None,
+            "plan_name": None,
+            "plan_price": None,
+            "features": None,
+            "agents": None,
+            "amount_paid": None,
+            "expires_at": None,
+            "days_remaining": 0,
+            "status": status,
+            "payment_provider": None,
+            "apple_product_id": None,
+        }
+
+    def get_or_create_free_plan(self) -> SubscriptionPlan:
+        """Find a zero-price plan, or create the iOS complimentary Free plan."""
+        zero_price = (
+            self.db.query(SubscriptionPlan)
+            .filter(SubscriptionPlan.is_active == True, SubscriptionPlan.price <= 0)
+            .order_by(SubscriptionPlan.id.asc())
+            .first()
+        )
+        if zero_price:
+            return zero_price
+
+        named = (
+            self.db.query(SubscriptionPlan)
+            .filter(SubscriptionPlan.is_active == True)
+            .filter(SubscriptionPlan.name.ilike("%free%"))
+            .order_by(SubscriptionPlan.id.asc())
+            .first()
+        )
+        if named:
+            return named
+
+        plan = SubscriptionPlan(
+            name="Free",
+            price=0,
+            billing_period=BillingPeriod.MONTHLY,
+            billing_period_count=1,
+            features=json.dumps(["Order Management", "Emailing", "Customer Service"]),
+            agents=json.dumps([]),
+            description="Complimentary access for iOS while App Store subscriptions are under review.",
+            is_active=True,
+        )
+        self.db.add(plan)
+        self.db.commit()
+        self.db.refresh(plan)
+        logger.info(f"Created complimentary Free subscription plan (ID: {plan.id})")
+        return plan
+
+    def enroll_free_plan(self, user_id: str) -> dict:
+        """Idempotently grant the complimentary Free plan (iOS / App Review)."""
+        existing = self.get_user_active_subscription(user_id)
+        if existing:
+            return {
+                "success": True,
+                "message": "User already has an active subscription",
+                "subscription_id": existing.id,
+                "plan_name": existing.plan.name if existing.plan else None,
+                "expires_at": existing.expires_at.isoformat() if existing.expires_at else None,
+                "amount_paid": existing.amount_paid,
+            }
+
+        plan = self.get_or_create_free_plan()
+        return self.subscribe_user(
+            user_id,
+            plan.id,
+            payment_reference="ios_free_grant",
+            expires_at=datetime.now(timezone.utc) + timedelta(days=365),
+            amount_paid=0,
+            payment_provider="free",
+        )
+
     def get_user_subscription_status_by_phone(self, phone: str) -> dict:
         """Get user's subscription status using phone number"""
         try:
             # Find user by phone number
             user = self.db.query(User).filter(User.phone == phone).first()
             if not user:
-                return {
-                    "has_active_subscription": False,
-                    "subscription_id": None,
-                    "plan_id": None,
-                    "plan_name": None,
-                    "plan_price": None,
-                    "features": None,
-                    "agents": None,
-                    "amount_paid": None,
-                    "expires_at": None,
-                    "days_remaining": 0,
-                    "status": "NO_USER",
-                    "payment_provider": None,
-                    "apple_product_id": None,
-                }
+                return self._empty_subscription_status("NO_USER")
             
             return self.get_user_subscription_status(user.id)
         
         except Exception as e:
             logger.error(f"Error getting subscription status for user with phone {phone}: {str(e)}")
-            return {
-                "has_active_subscription": False,
-                "subscription_id": None,
-                "plan_id": None,
-                "plan_name": None,
-                "plan_price": None,
-                "features": None,
-                "agents": None,
-                "amount_paid": None,
-                "expires_at": None,
-                "days_remaining": 0,
-                "status": "ERROR",
-                "payment_provider": None,
-                "apple_product_id": None,
-            }
+            return self._empty_subscription_status("ERROR")
 
     def get_user_subscription_status(self, user_id: str) -> dict:
         """Get comprehensive subscription status for user"""
         subscription = self.get_user_active_subscription(user_id)
         
         if not subscription:
-            return {
-                "has_active_subscription": False,
-                "subscription_id": None,
-                "plan_id": None,
-                "plan_name": None,
-                "plan_price": None,
-                "features": None,
-                "agents": None,
-                "amount_paid": None,
-                "expires_at": None,
-                "days_remaining": 0,
-                "status": "NO_SUBSCRIPTION",
-                "payment_provider": None,
-                "apple_product_id": None,
-            }
+            return self._empty_subscription_status("NO_SUBSCRIPTION")
 
         return {
             "has_active_subscription": subscription.is_active,
+            "is_paid": self._is_paid_subscription(subscription),
             "subscription_id": subscription.id,
             "plan_id": subscription.plan.id,
             "plan_name": subscription.plan.name,
