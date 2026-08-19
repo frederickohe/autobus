@@ -21,6 +21,11 @@ from config import settings
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
+
+def _nlu_reply_text(response_message: Optional[str]) -> str:
+    return (response_message or "").strip()
+
+
 # Public routes: Meta uses verify_token / app secret; other helpers use X-Api-Key when configured.
 webhooks_routes = APIRouter()
 
@@ -551,8 +556,12 @@ def handle_instagram_webhook(payload: dict, db: Session):
         nlu_user_id = f"{account.user_id}:ig:{sender_id}"
         nlu_system = AutobusNLUSystem(db_session=db)
         reply = nlu_system.process_message(nlu_user_id, text)
+        outbound = _nlu_reply_text(reply)
+        if not outbound:
+            handled += 1
+            continue
         token = svc.decrypt_token(account.access_token_encrypted)
-        sent = svc.send_text(token, sender_id, reply or "")
+        sent = svc.send_text(token, sender_id, outbound)
         if not sent:
             logger.error("[IG webhook] failed to send reply to %s", sender_id)
             raise HTTPException(
@@ -603,9 +612,9 @@ async def handle_simple_chat(
         nlu_system = AutobusNLUSystem(db_session=db)
         response_message = nlu_system.process_message(nlu_user_id, msg)
 
-        logger.info(f"Generated response: {response_message}")
+        logger.info("Generated response: %s", (response_message or "")[:200])
 
-        return SimpleChatResponse(message=response_message)
+        return SimpleChatResponse(message=_nlu_reply_text(response_message))
 
     except Exception as e:
         logger.error(f"Error handling simple chat: {e}", exc_info=True)
@@ -791,13 +800,17 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
 
     nlu_system = AutobusNLUSystem(db_session=db)
     response_message = nlu_system.process_message(nlu_user_id, message_text)
+    outbound = _nlu_reply_text(response_message)
 
-    logger.info(f"Generated response: {response_message}")
+    logger.info("Generated response: %s", outbound[:200])
+
+    if not outbound:
+        return {"status": "success", "message": "Message recorded; no automated reply"}
 
     message_sent = whatsapp_service.send_message(
         phone_id=phone_id,
         recipient_phone=phone,
-        message_text=response_message
+        message_text=outbound
     )
 
     if not message_sent:
@@ -1025,13 +1038,17 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
             user_message,
             image_media_id=media_id,
         )
+        outbound = _nlu_reply_text(response_message)
 
-        logger.info(f"Generated response for image message: {response_message}")
+        logger.info("Generated response for image message: %s", outbound[:200])
+
+        if not outbound:
+            return {"status": "success", "message": "Image recorded; no automated reply"}
 
         message_sent = whatsapp_service.send_message(
             phone_id=phone_id,
             recipient_phone=phone,
-            message_text=response_message
+            message_text=outbound
         )
 
         if not message_sent:
@@ -1082,13 +1099,17 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
             user_message,
             audio_media_id=media_id,
         )
+        outbound = _nlu_reply_text(response_message)
 
-        logger.info(f"Generated response for audio message: {response_message}")
+        logger.info("Generated response for audio message: %s", outbound[:200])
+
+        if not outbound:
+            return {"status": "success", "message": "Audio recorded; no automated reply"}
 
         message_sent = whatsapp_service.send_message(
             phone_id=phone_id,
             recipient_phone=phone,
-            message_text=response_message
+            message_text=outbound
         )
 
         if not message_sent:

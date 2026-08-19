@@ -13,6 +13,8 @@ class ConversationState:
     user_id: str
     conversation_id: str = ""
     conversation_lifecycle: str = "active"  # active | awaiting_followup_help | completed
+    # After a RAG/FAQ answer: next user turn is checked for contentment before closing.
+    awaiting_satisfaction: bool = False
     session_db_id: Optional[int] = None
     current_intent: str = ""
     collected_slots: Dict = None
@@ -56,6 +58,7 @@ class ConversationState:
             "user_id": self.user_id,
             "conversation_id": self.conversation_id,
             "conversation_lifecycle": self.conversation_lifecycle,
+            "awaiting_satisfaction": self.awaiting_satisfaction,
             "session_db_id": self.session_db_id,
             "current_intent": self.current_intent,
             "collected_slots": self.collected_slots,
@@ -207,13 +210,42 @@ class ConversationManager:
         self.memory_cache[state.user_id] = state
 
     def finalize_completed_session(self, user_id: str):
-        """Mark the in-memory session completed, persist, and drop cache so the next turn starts fresh."""
+        """Mark the in-memory session completed, persist, and drop cache so the next turn starts fresh.
+
+        Completing also leaves intervention mode so the thread is no longer live; a later
+        customer message loads a new session and AI can reply again.
+        """
         state = self.memory_cache.get(user_id) or self._load_active_session_from_db(user_id)
         if not state:
             return
+        intervention_id = state.intervention_id
         state.conversation_lifecycle = "completed"
+        state.awaiting_satisfaction = False
+        state.intervention_active = False
         self._save_conversation_state(state)
         self.memory_cache.pop(user_id, None)
+        self._close_open_intervention_row(intervention_id)
+
+    def _close_open_intervention_row(self, intervention_id: Optional[int]) -> None:
+        if intervention_id is None:
+            return
+        try:
+            from core.interventions.model.Intervention import Intervention
+
+            row = (
+                self.db.query(Intervention)
+                .filter(Intervention.id == int(intervention_id))
+                .first()
+            )
+            if row and row.status == "open":
+                row.status = "closed"
+                row.closed_at = datetime.utcnow()
+                self.db.commit()
+        except Exception:
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
 
     def reset_conversation_state(self, user_id: str):
         """End the current session (same as abandoning / PIN error hard reset)."""

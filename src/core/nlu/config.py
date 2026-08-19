@@ -237,7 +237,7 @@ INTENTS = {
         "category": "system"
     },
     "end_intervention": {
-        "description": "User indicates they no longer need a human agent and want the bot to continue",
+        "description": "Legacy intent; ignored. Human interventions stay active until an agent marks the conversation completed.",
         "slots": [],
         "required_slots": [],
         "category": "system"

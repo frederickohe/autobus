@@ -222,7 +222,11 @@ class IntentDetector:
         HUMAN HANDOVER (INTERVENTIONS):
         - If the user asks to speak to a human / agent / support / representative, set intent to "request_intervention".
         - Examples: "talk to an agent", "human please", "I need support", "customer service", "can I speak to someone", "help me with an agent".
-        - If the user says they want to continue with the bot (e.g. "never mind", "continue", "bot is fine"), set intent to "end_intervention".
+        - Do not classify "never mind" / "continue with the bot" as ending an intervention. Once a human agent is involved, the bot stays paused until the agent completes the conversation.
+
+        CONVERSATION CLOSING:
+        - If the user is clearly finished (bye, goodbye, that's all, nothing else), set intent to "goodbye".
+        - If the user is only thanking the assistant or saying an answer helped (thanks, got it, that helps) without a new question, still prefer "goodbye" only when they also indicate they are done; otherwise keep the current conversational intent.
         
         CRITICAL RULES:
         - If user provides additional information for current intent: KEEP SAME INTENT

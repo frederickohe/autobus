@@ -28,7 +28,8 @@ def list_my_conversations(
     List the authenticated user's conversations, grouped as:
     - completed: sessions without active intervention (includes completed lifecycle
       and bot-active sessions); used for All Chats / history
-    - intervention_active: sessions where a human agent handover is active
+    - intervention_active: sessions where a human agent handover is active (until
+      the agent marks the conversation completed)
     """
     try:
         user_id = authjwt.get_jwt_subject()
@@ -98,10 +99,20 @@ def deactivate_intervention_for_session(
     db: Session = Depends(get_db),
     authjwt: AuthJWT = Depends(validate_token),
 ):
-    """Turn off human intervention for a conversation session."""
+    """Deprecated: completing the session is the only way to leave intervention mode."""
+    return complete_conversation_session(session_id, db, authjwt)
+
+
+@conversation_routes.post("/session/{session_id}/complete")
+def complete_conversation_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Mark a conversation completed. Closes any open intervention without resuming the bot on this thread."""
     user_id = authjwt.get_jwt_subject()
     service = ConversationListService(db)
-    detail = service.deactivate_intervention_for_session(user_id, session_id)
+    detail = service.complete_conversation_session(user_id, session_id)
     if not detail:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -110,5 +121,6 @@ def deactivate_intervention_for_session(
     return {
         "success": True,
         "intervention_active": detail.intervention_active,
+        "conversation_lifecycle": detail.conversation_lifecycle,
         "conversation": detail,
     }

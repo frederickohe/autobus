@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from fastapi import HTTPException
 from core.auth.service.authservice import AuthService
-from core.nlu.config import INTENT_CATEGORIES
+from core.nlu.config import INTENT_CATEGORIES, RESPONSE_TEMPLATES
 from core.chatwoot.model.ChatwootAccount import ChatwootAccount
 from core.chatwoot.service.chatwoot_api_service import ChatwootAccountClient
 from core.nlu.service.intentprocessor import IntentProcessor
@@ -76,12 +76,22 @@ class AutobusNLUSystem:
         self.db_session = db_session
         self._conversation_rag = ConversationVectorClient()
 
+    FOLLOWUP_HELP_QUESTION = "Is there anything else I can help you with?"
+    CONTINUE_HELP_PROMPT = "Sure — what else can I help you with?"
+
     @staticmethod
-    def _is_declining_more_help(text: str) -> bool:
+    def _normalize_chat_text(text: str) -> str:
         t = (text or "").lower().strip()
+        t = t.replace("’", "'").replace("‘", "'")
+        t = re.sub(r"[.!]+$", "", t).strip()
+        return t
+
+    @classmethod
+    def _is_declining_more_help(cls, text: str) -> bool:
+        t = cls._normalize_chat_text(text)
         if not t:
             return False
-        phrases = (
+        exact = {
             "no",
             "nope",
             "nah",
@@ -95,20 +105,188 @@ class AutobusNLUSystem:
             "not really",
             "i'm good",
             "im good",
+            "i am good",
             "all good",
             "that's it",
             "thats it",
+            "that is it",
             "we're done",
             "were done",
+            "we are done",
             "that's fine",
             "thats fine",
             "bye",
             "goodbye",
+            "good bye",
             "no more",
-        )
-        if t in phrases:
+            "i'm done",
+            "im done",
+            "done",
+            "that's all thanks",
+            "thats all thanks",
+            "no i'm fine",
+            "no im fine",
+        }
+        if t in exact:
             return True
-        return any(t.startswith(p + " ") or t.startswith(p + ",") for p in phrases if len(p) > 2)
+        contained = (
+            "that's all",
+            "thats all",
+            "that is all",
+            "nothing else",
+            "nothing more",
+            "no thanks",
+            "no thank you",
+            "no more help",
+            "that's it",
+            "thats it",
+        )
+        if any(p in t for p in contained):
+            return True
+        return any(t.startswith(p + " ") or t.startswith(p + ",") for p in exact if len(p) > 2)
+
+    @classmethod
+    def _is_bare_affirmative(cls, text: str) -> bool:
+        t = cls._normalize_chat_text(text)
+        return t in {
+            "yes",
+            "yeah",
+            "yep",
+            "yup",
+            "sure",
+            "ok",
+            "okay",
+            "please",
+            "yes please",
+            "yeah please",
+            "yes thanks",
+            "yea",
+        }
+
+    @classmethod
+    def _looks_like_new_request(cls, text: str) -> bool:
+        raw = (text or "").strip()
+        t = cls._normalize_chat_text(text)
+        if not t:
+            return False
+        if "?" in raw:
+            return True
+        starters = (
+            "what ",
+            "what's ",
+            "whats ",
+            "how ",
+            "when ",
+            "where ",
+            "why ",
+            "who ",
+            "which ",
+            "can you",
+            "could you",
+            "do you",
+            "does ",
+            "is there",
+            "are there",
+            "i want",
+            "i need",
+            "i'd like",
+            "id like",
+            "tell me",
+            "also ",
+            "another ",
+            "and also",
+            "please send",
+            "please tell",
+        )
+        if any(t.startswith(s) for s in starters):
+            return True
+        return len(t.split()) > 12
+
+    @classmethod
+    def _is_content_with_rag(cls, text: str) -> bool:
+        """True when the user is acknowledging a RAG answer rather than asking something new."""
+        t = cls._normalize_chat_text(text)
+        if not t or cls._looks_like_new_request(text):
+            return False
+        if cls._is_declining_more_help(text):
+            return False
+        exact = {
+            "thanks",
+            "thank you",
+            "thank you so much",
+            "thanks so much",
+            "thx",
+            "ty",
+            "ok",
+            "okay",
+            "ok thanks",
+            "okay thanks",
+            "ok thank you",
+            "got it",
+            "gotcha",
+            "perfect",
+            "great",
+            "awesome",
+            "cool",
+            "alright",
+            "all right",
+            "noted",
+            "understood",
+            "makes sense",
+            "that helps",
+            "that's helpful",
+            "thats helpful",
+            "that is helpful",
+            "very helpful",
+            "appreciate it",
+            "much appreciated",
+            "helpful",
+        }
+        if t in exact:
+            return True
+        prefixes = (
+            "thanks",
+            "thank you",
+            "thx",
+            "appreciate",
+            "got it",
+            "that helps",
+            "that's helpful",
+            "thats helpful",
+            "perfect",
+        )
+        return any(t.startswith(p) for p in prefixes)
+
+    def _goodbye_copy(self, user_id: str) -> str:
+        user_data = self._get_user_data(user_id)
+        if user_data and user_data.get("is_customer_session"):
+            return RESPONSE_TEMPLATES["conversational"]["customer_goodbye"]
+        return RESPONSE_TEMPLATES["conversational"]["goodbye"]
+
+    def _complete_with_goodbye(self, user_id: str, message: Optional[str] = None) -> str:
+        text = (message or self._goodbye_copy(user_id)).strip()
+        self.conversation_manager.update_conversation_history(user_id, "assistant", text)
+        self.conversation_manager.finalize_completed_session(user_id)
+        return text
+
+    def _ask_ending_question(self, user_id: str, lead: str = "") -> str:
+        state = self.conversation_manager.get_conversation_state(user_id)
+        state.conversation_lifecycle = "awaiting_followup_help"
+        state.awaiting_satisfaction = False
+        self.conversation_manager._save_conversation_state(state)
+        follow = self.FOLLOWUP_HELP_QUESTION
+        text = f"{lead.strip()}\n\n{follow}" if (lead or "").strip() else follow
+        self.conversation_manager.update_conversation_history(user_id, "assistant", text)
+        return text
+
+    def _mark_awaiting_satisfaction(self, user_id: str) -> None:
+        state = self.conversation_manager.get_conversation_state(user_id)
+        if getattr(state, "intervention_active", False):
+            return
+        if state.conversation_lifecycle == "completed":
+            return
+        state.awaiting_satisfaction = True
+        self.conversation_manager._save_conversation_state(state)
 
     @staticmethod
     def _looks_like_fresh_order_request(text: str) -> bool:
@@ -178,40 +356,15 @@ class AutobusNLUSystem:
         """After a fulfilled intent (HTTP 200): keep success text and prompt for more help."""
         state = self.conversation_manager.get_conversation_state(user_id)
         state.conversation_lifecycle = "awaiting_followup_help"
+        state.awaiting_satisfaction = False
         self.conversation_manager._save_conversation_state(state)
-        follow = "\n\nIs there anything else I can help you with?"
+        follow = f"\n\n{self.FOLLOWUP_HELP_QUESTION}"
         return f"{(success_message or '').strip()}{follow}"
 
     def _terminal_listener_apply(self, user_id: str, outcome: IntentHandlerResult) -> str:
         if outcome.http_status == 200:
             return self._conversation_completion_tool(user_id, outcome.message)
         return outcome.message
-
-    @staticmethod
-    def _wants_end_intervention(user_message: str) -> bool:
-        """Cheap heuristic so intervention turns skip full intent detection."""
-        t = (user_message or "").strip().lower()
-        if not t:
-            return False
-        phrases = (
-            "end intervention",
-            "stop intervention",
-            "never mind",
-            "nevermind",
-            "continue with the bot",
-            "continue with bot",
-            "back to the bot",
-            "back to bot",
-            "bot is fine",
-            "talk to the bot",
-            "talk to bot",
-            "resume bot",
-            "cancel agent",
-            "no agent needed",
-            "i don't need an agent",
-            "i dont need an agent",
-        )
-        return any(p in t for p in phrases)
 
     def _activate_intervention(
         self,
@@ -278,8 +431,6 @@ class AutobusNLUSystem:
         # Get conversation state
         state = self.conversation_manager.get_conversation_state(user_id)
 
-        # If a human intervention is active, pause automation unless the user explicitly ends it.
-        # (We still record user messages into history below.)
         intervention_is_active = bool(getattr(state, "intervention_active", False))
 
         # Flush agent replies before any history write — otherwise a stale in-memory
@@ -293,27 +444,36 @@ class AutobusNLUSystem:
 
         logger.info("Received message from %s: %s", user_id, (user_message or "")[:200])
 
-        if state.conversation_lifecycle == "awaiting_followup_help":
-            self.conversation_manager.update_conversation_history(user_id, "user", user_message)
-            if self._is_declining_more_help(user_message):
-                thanks = "You're welcome. Reach out anytime you need help."
-                self.conversation_manager.update_conversation_history(user_id, "assistant", thanks)
-                self.conversation_manager.finalize_completed_session(user_id)
-                return thanks
-            state.conversation_lifecycle = "active"
-            self.conversation_manager._save_conversation_state(state)
-        else:
-            self.conversation_manager.update_conversation_history(user_id, "user", user_message)
+        self.conversation_manager.update_conversation_history(user_id, "user", user_message)
+        state = self.conversation_manager.get_conversation_state(user_id)
 
-        # During intervention, pause automation immediately so customer messages land in
-        # history without waiting on intent detection (which also races admin writes).
-        if intervention_is_active and not self._wants_end_intervention(user_message):
+        # Once a team agent owns the thread, AI stays silent until the session is completed.
+        if intervention_is_active:
             if pending_agent_replies:
-                # Already stored as role=human; return for channels without a poll loop.
                 return "\n\n".join(pending_agent_replies)
-            # Hold message for the customer only — do not append to history so the
-            # admin live-chat thread stays user/human messages.
-            return self.response_formatter.format_response("", "intervention_active")
+            return ""
+
+        if state.conversation_lifecycle == "awaiting_followup_help":
+            if self._is_declining_more_help(user_message):
+                return self._complete_with_goodbye(user_id)
+            if self._is_bare_affirmative(user_message):
+                state.conversation_lifecycle = "active"
+                state.awaiting_satisfaction = False
+                self.conversation_manager._save_conversation_state(state)
+                self.conversation_manager.update_conversation_history(
+                    user_id, "assistant", self.CONTINUE_HELP_PROMPT
+                )
+                return self.CONTINUE_HELP_PROMPT
+            state.conversation_lifecycle = "active"
+            state.awaiting_satisfaction = False
+            self.conversation_manager._save_conversation_state(state)
+        elif getattr(state, "awaiting_satisfaction", False):
+            if self._is_declining_more_help(user_message):
+                return self._complete_with_goodbye(user_id)
+            if self._is_content_with_rag(user_message):
+                return self._ask_ending_question(user_id)
+            state.awaiting_satisfaction = False
+            self.conversation_manager._save_conversation_state(state)
 
         # Process multimodal inputs (images/audio)
         media_context = {}
@@ -333,16 +493,9 @@ class AutobusNLUSystem:
             user_message, state.conversation_history, state.current_intent, media_context
         )
 
-        # Heuristic allowed us through for a possible end_intervention; if the model
-        # disagrees, keep automation paused.
-        if intervention_is_active and intent != "end_intervention":
-            if pending_agent_replies:
-                return "\n\n".join(pending_agent_replies)
-            return self.response_formatter.format_response("", "intervention_active")
-
         # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
         # Remap to RAG business chat before intervention gates fire.
-        # Preserve explicit human handoff / resume and image-refusal intents.
+        # Preserve explicit human handoff and image-refusal intents.
         from core.nlu.config import INTENTS
 
         merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
@@ -350,7 +503,6 @@ class AutobusNLUSystem:
             conversational_only = set(INTENT_CATEGORIES.get("conversational", []))
             preserve_intents = {
                 "request_intervention",
-                "end_intervention",
                 "cannot_process_image",
             }
             if intent not in conversational_only and intent not in preserve_intents:
@@ -364,17 +516,13 @@ class AutobusNLUSystem:
                 state.current_intent = ""
                 state.collected_slots = {}
 
+        if intent == "goodbye":
+            return self._complete_with_goodbye(user_id)
+
         if intent == "end_intervention":
-            # Return automation to normal flow for today
-            state.intervention_active = False
-            state.intervention_trigger = None
-            state.intervention_reason = None
-            self.conversation_manager._save_conversation_state(state)
-            response = "Okay — I’m back. How can I help?"
-            if pending_agent_replies:
-                response = "\n\n".join(pending_agent_replies) + "\n\n" + response
-            self.conversation_manager.update_conversation_history(user_id, "assistant", response)
-            return response
+            # Customers cannot resume the bot mid-intervention; if this fires on an
+            # AI-owned session, treat it as continued conversation.
+            intent = "business_conversation" if merchant_id else "normal_conversation"
 
         if intent == "request_intervention":
             self._activate_intervention(
@@ -1382,6 +1530,8 @@ class AutobusNLUSystem:
                 slots=slots,
                 user_data=user_data,
             )
+            if intent not in ("greeting", "goodbye"):
+                self._mark_awaiting_satisfaction(user_id)
             return IntentHandlerResult(msg, None)
         elif intent in financial_tips_intents:
             msg = self.intent_processor.process_financial_tips_intent(

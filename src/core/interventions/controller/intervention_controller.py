@@ -177,13 +177,18 @@ def close_intervention(
 
     closed = svc.close_intervention(intervention_id=intervention_id, user_id=user_id)
 
-    # Turn the bot back on for the scoped customer session, not the merchant's own chat.
+    # Completing the conversation is what releases the thread; do not resume AI on this session.
+    list_service = ConversationListService(db)
     state = cm.get_conversation_state(closed.user_id)
-    if state.intervention_id == int(intervention_id):
+    session_id = getattr(state, "session_db_id", None)
+    if session_id:
+        list_service.complete_conversation_session(user_id, int(session_id))
+    else:
         state.intervention_active = False
-        state.intervention_trigger = None
-        state.intervention_reason = None
+        state.conversation_lifecycle = "completed"
+        state.awaiting_satisfaction = False
         cm._save_conversation_state(state)
+        cm.memory_cache.pop(closed.user_id, None)
 
     return {"success": True, "status": closed.status, "closed_at": closed.closed_at.isoformat() if closed.closed_at else None}
 

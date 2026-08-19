@@ -471,10 +471,22 @@ class ConversationListService:
     def deactivate_intervention_for_session(
         self, user_identifier: str, session_id: int
     ) -> Optional[ConversationDetailDTO]:
-        """Turn off intervention mode for a stored conversation session."""
+        """Deprecated alias: completing the session is the only way to leave intervention."""
+        return self.complete_conversation_session(user_identifier, session_id)
+
+    def complete_conversation_session(
+        self, user_identifier: str, session_id: int
+    ) -> Optional[ConversationDetailDTO]:
+        """Mark a session completed and close any open intervention.
+
+        The team agent stays in control for the life of an intervention; completing
+        the thread is what allows a later customer message to start a new AI session.
+        """
         row = self._session_owned_by_user(session_id, user_identifier)
         if not row:
             return None
+
+        from sqlalchemy.orm.attributes import flag_modified
 
         state = dict(row.conversation_state or {})
         intervention_id = state.get("intervention_id")
@@ -489,13 +501,24 @@ class ConversationListService:
                 intervention.closed_at = datetime.utcnow()
 
         state["intervention_active"] = False
-        state["intervention_id"] = None
-        state["intervention_trigger"] = None
-        state["intervention_reason"] = None
+        state["awaiting_satisfaction"] = False
+        state["conversation_lifecycle"] = "completed"
         row.conversation_state = state
+        flag_modified(row, "conversation_state")
         row.updated_at = datetime.utcnow()
         self.db.commit()
         self.db.refresh(row)
 
+        self._invalidate_nlu_session_cache(row.user_id)
+
         user_names = self._load_user_fullnames({row.user_id})
         return self._to_detail(row, user_names)
+
+    @staticmethod
+    def _invalidate_nlu_session_cache(conversation_user_id: str) -> None:
+        try:
+            from core.nlu.controller.nlucontroller import nlu_system
+
+            nlu_system.conversation_manager.memory_cache.pop(conversation_user_id, None)
+        except Exception:
+            pass
