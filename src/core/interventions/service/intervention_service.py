@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from core.interventions.model.Intervention import Intervention
 from core.notification.service.event_notification_service import EventNotificationService
+
+logger = logging.getLogger(__name__)
 
 
 class InterventionService:
@@ -61,7 +64,11 @@ class InterventionService:
                 conversation_date=str(conv_date),
             )
         except Exception:
-            pass
+            logger.exception(
+                "[INTERVENTIONS] Failed to notify owner for intervention %s (%s)",
+                intervention.id,
+                user_id,
+            )
 
         return intervention
 

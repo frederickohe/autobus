@@ -1,9 +1,9 @@
-"""In-app notifications for operational events (interventions, orders)."""
+"""In-app and SMS notifications for operational events (interventions, orders)."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -55,6 +55,40 @@ class EventNotificationService:
             cleaned = "0" + cleaned
         return cleaned
 
+    @staticmethod
+    def _split_conversation_user_id(user_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """Parse ``{merchant_id}:{customer_channel}`` conversation keys."""
+        if not user_id or ":" not in user_id:
+            return None, None
+        merchant_id, _, rest = user_id.partition(":")
+        merchant_id = merchant_id.strip()
+        rest = (rest or "").strip()
+        if not merchant_id or not rest:
+            return None, None
+        return merchant_id, rest
+
+    @staticmethod
+    def _customer_label_for_sms(customer_channel: Optional[str]) -> str:
+        if not customer_channel:
+            return "A customer"
+        channel = customer_channel.strip()
+        if channel.lower().startswith("ig:"):
+            return "An Instagram customer"
+        digits = "".join(ch for ch in channel if ch.isdigit())
+        if len(digits) >= 9:
+            return f"Customer {channel}"
+        return "A customer"
+
+    @staticmethod
+    def _user_sms_phone(user: Optional[User]) -> Optional[str]:
+        if user is None:
+            return None
+        for candidate in (getattr(user, "phone", None), getattr(user, "whatsapp_number", None)):
+            phone = (candidate or "").strip()
+            if phone:
+                return phone
+        return None
+
     def _notify_user_safe(
         self,
         user_id: str,
@@ -62,6 +96,7 @@ class EventNotificationService:
         data: Dict[str, Any],
         *,
         send_sms: bool = False,
+        sms_phone: Optional[str] = None,
     ) -> None:
         try:
             self._notifications.create_notification(
@@ -69,6 +104,7 @@ class EventNotificationService:
                 notification_type=notification_type,
                 data=data,
                 send_sms=send_sms,
+                sms_phone=sms_phone,
             )
         except Exception as exc:
             logger.error(
@@ -85,6 +121,7 @@ class EventNotificationService:
         data: Dict[str, Any],
         *,
         send_sms: bool = False,
+        skip_user_ids: Optional[Set[str]] = None,
     ) -> None:
         recipients = self._admin_recipient_ids()
         if not recipients:
@@ -94,7 +131,11 @@ class EventNotificationService:
             )
             return
 
+        skip = skip_user_ids or set()
         for admin_id in recipients:
+            resolved = self._resolve_user_db_id(admin_id) or admin_id
+            if admin_id in skip or resolved in skip:
+                continue
             self._notify_user_safe(admin_id, notification_type, data, send_sms=send_sms)
 
     def notify_intervention_active(
@@ -106,20 +147,61 @@ class EventNotificationService:
         reason: Optional[str] = None,
         conversation_date: Optional[str] = None,
     ) -> None:
-        """Notify admins that a conversation needs human attention."""
+        """Notify the business owner by SMS and in-app that a customer needs attention."""
+        merchant_id, customer_channel = self._split_conversation_user_id(user_id)
+        customer_label = self._customer_label_for_sms(customer_channel)
+        sms_body = (
+            f"AutoBus: {customer_label} needs your attention. "
+            "Open Live Chats to respond."
+        )
         display_reason = (reason or trigger or "Agent handover").strip()
         data = {
             "event": "intervention_active",
             "title": "Conversation needs attention",
             "content": f"A customer conversation was flagged for human support ({trigger}).",
-            "message": f"Intervention #{intervention_id}: {display_reason}",
+            "message": sms_body,
             "user_id": user_id,
             "intervention_id": intervention_id,
             "trigger": trigger,
             "reason": reason,
+            "display_reason": display_reason,
             "conversation_date": conversation_date,
+            "merchant_id": merchant_id,
+            "customer_channel": customer_channel,
         }
-        self._notify_admins(NotificationType.ALERT, data)
+
+        notified: Set[str] = set()
+        if merchant_id:
+            resolved = self._resolve_user_db_id(merchant_id)
+            if resolved:
+                merchant = self.db.query(User).filter(User.id == resolved).first()
+                sms_phone = self._user_sms_phone(merchant)
+                if not sms_phone:
+                    logger.warning(
+                        "[EVENT_NOTIFICATION] Merchant %s has no phone for intervention SMS",
+                        resolved,
+                    )
+                self._notify_user_safe(
+                    resolved,
+                    NotificationType.ALERT,
+                    data,
+                    send_sms=bool(sms_phone),
+                    sms_phone=sms_phone,
+                )
+                notified.add(resolved)
+            else:
+                logger.warning(
+                    "[EVENT_NOTIFICATION] Could not resolve merchant %s for intervention %s",
+                    merchant_id,
+                    intervention_id,
+                )
+        else:
+            logger.info(
+                "[EVENT_NOTIFICATION] Conversation %s is not merchant-scoped; skipping owner SMS",
+                user_id,
+            )
+
+        self._notify_admins(NotificationType.ALERT, data, skip_user_ids=notified)
 
     def notify_order_created(self, order: Order) -> None:
         """Notify admins (and the customer if registered) about a new order."""

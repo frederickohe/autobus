@@ -74,7 +74,12 @@ class NotificationService:
             raise HTTPException(status_code=404, detail="User not found")
 
         # Determine SMS phone number (use provided or from user profile)
-        sms_phone_to_use = sms_phone or getattr(user, 'phone', None)
+        sms_phone_to_use = (
+            (sms_phone or "").strip()
+            or (getattr(user, "phone", None) or "").strip()
+            or (getattr(user, "whatsapp_number", None) or "").strip()
+            or None
+        )
         
         # Create notification record
         notification = Notification(
