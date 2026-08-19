@@ -13,9 +13,8 @@ import logging
 import os
 from core.user.model.User import User
 from core.nlu.nlu import AutobusNLUSystem
-from core.subscription.service.subscription_service import SubscriptionService
 from core.webhooks.service.whatsapp_service import WhatsAppService
-from utilities.phone_utils import normalize_ghana_phone_number
+from utilities.phone_utils import convert_to_local_ghana_format, normalize_ghana_phone_number
 from core.auth.service.authservice import AuthService
 from config import settings
 
@@ -615,6 +614,70 @@ async def handle_simple_chat(
         )
 
 
+def _whatsapp_merchant_user(phone_id: str, db: Session):
+    """Resolve the Autobus business that owns the receiving WhatsApp number."""
+    from core.whatsapp.model.WhatsAppAccount import WhatsAppAccount
+
+    account = (
+        db.query(WhatsAppAccount)
+        .filter(
+            WhatsAppAccount.phone_number_id == str(phone_id),
+            WhatsAppAccount.is_active.is_(True),
+        )
+        .first()
+    )
+    if not account:
+        return None, None
+
+    display = (account.display_phone_number or "").strip()
+    merchant = None
+    if display:
+        candidates = {
+            display,
+            normalize_ghana_phone_number(display),
+            convert_to_local_ghana_format(display),
+        }
+        candidates = {c for c in candidates if c}
+        matches = db.query(User).filter(User.phone.in_(list(candidates))).all()
+        if len(matches) == 1:
+            merchant = matches[0]
+        elif len(matches) > 1:
+            logger.warning(
+                "Multiple Autobus users share WhatsApp display phone %s; using connected account owner",
+                display,
+            )
+
+    if merchant is None:
+        merchant = db.query(User).filter(User.id == account.user_id).first()
+
+    return account, merchant
+
+
+def _whatsapp_nlu_user_id(phone_id: str, customer_phone: str, db: Session) -> str:
+    """
+    Sender = customer (reply destination). Receiver phone_number_id = business.
+
+    Conversation key matches Instagram/webchat: ``{merchant_users.id}:{customer_phone}``.
+    """
+    customer = (customer_phone or "").strip()
+    _, merchant = _whatsapp_merchant_user(phone_id, db)
+    if merchant and merchant.id and customer:
+        logger.info(
+            "WhatsApp session merchant=%s company=%s customer=%s phone_number_id=%s",
+            merchant.id,
+            merchant.company or merchant.fullname,
+            customer,
+            phone_id,
+        )
+        return f"{merchant.id}:{customer}"
+
+    logger.warning(
+        "WhatsApp business account not resolved for phone_number_id=%s; using unscoped customer key",
+        phone_id,
+    )
+    return customer
+
+
 def handle_incoming_message(value: dict, db: Session):
     """
     Handles incoming messages from users.
@@ -723,10 +786,11 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     logger.info(f"Extracted text message: {message_text}")
 
     whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
-    logger.info(f"Processing message through NLU for {phone}")
+    nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
+    logger.info("Processing message through NLU for %s", nlu_user_id)
 
-    nlu_system = AutobusNLUSystem()
-    response_message = nlu_system.process_message(phone, message_text)
+    nlu_system = AutobusNLUSystem(db_session=db)
+    response_message = nlu_system.process_message(nlu_user_id, message_text)
 
     logger.info(f"Generated response: {response_message}")
 
@@ -943,11 +1007,10 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
         logger.info(f"Received image message from {phone}, media_id: {media_id}")
 
         whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
-        logger.info(f"Processing image through NLU for {phone}")
+        nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
+        logger.info("Processing image through NLU for %s", nlu_user_id)
 
-        nlu_system = AutobusNLUSystem()
-        subscription_service = SubscriptionService(db)
-        result = subscription_service.get_user_subscription_status_by_phone(phone)
+        nlu_system = AutobusNLUSystem(db_session=db)
 
         caption = image_data.get("caption", "").strip()
         if caption:
@@ -958,10 +1021,9 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
             logger.info("No caption provided with image, using default message")
 
         response_message = nlu_system.process_message(
-            phone,
+            nlu_user_id,
             user_message,
-            result["has_active_subscription"],
-            image_media_id=media_id
+            image_media_id=media_id,
         )
 
         logger.info(f"Generated response for image message: {response_message}")
@@ -1002,11 +1064,10 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
         logger.info(f"Received audio message from {phone}, media_id: {media_id}")
 
         whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
-        logger.info(f"Processing audio through NLU for {phone}")
+        nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
+        logger.info("Processing audio through NLU for %s", nlu_user_id)
 
-        nlu_system = AutobusNLUSystem()
-        subscription_service = SubscriptionService(db)
-        result = subscription_service.get_user_subscription_status_by_phone(phone)
+        nlu_system = AutobusNLUSystem(db_session=db)
 
         caption = audio_data.get("caption", "").strip()
         if caption:
@@ -1017,10 +1078,9 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
             logger.info("No caption provided with audio, using default message")
 
         response_message = nlu_system.process_message(
-            phone,
+            nlu_user_id,
             user_message,
-            result["has_active_subscription"],
-            audio_media_id=media_id
+            audio_media_id=media_id,
         )
 
         logger.info(f"Generated response for audio message: {response_message}")

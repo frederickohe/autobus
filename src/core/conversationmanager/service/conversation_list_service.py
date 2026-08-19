@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
@@ -13,6 +14,12 @@ from core.interventions.model.Intervention import Intervention
 from core.orders.model.order import Order
 from core.nlu.model.Conversation import DailyConversation
 from core.user.model.User import User
+
+logger = logging.getLogger(__name__)
+
+
+class CustomerDeliveryError(Exception):
+    """WhatsApp/Instagram send failed for an agent reply."""
 
 
 class ConversationListService:
@@ -332,6 +339,80 @@ class ConversationListService:
             updated_at=row.updated_at or datetime.utcnow(),
         )
 
+    def _deliver_agent_reply_to_customer_channel(
+        self, conversation_user_id: str, message: str
+    ) -> bool:
+        """
+        Push an agent reply to WhatsApp or Instagram when the session is on that channel.
+
+        Returns True if a live channel send succeeded (do not also queue for poll).
+        Returns False if there is no outbound channel (e.g. public webchat — queue instead).
+        Raises CustomerDeliveryError if a live channel send was required and failed.
+        """
+        text = (message or "").strip()
+        uid = (conversation_user_id or "").strip()
+        if not text or ":" not in uid:
+            return False
+
+        merchant_id, _, channel = uid.partition(":")
+        merchant_id = merchant_id.strip()
+        channel = (channel or "").strip()
+        if not merchant_id or not channel:
+            return False
+
+        if channel.startswith("ig:"):
+            igsid = channel[3:].strip()
+            if not self._send_instagram_agent_reply(merchant_id, igsid, text):
+                raise CustomerDeliveryError("Failed to send Instagram reply to the customer.")
+            return True
+
+        from core.webhooks.service.whatsapp_service import WhatsAppService
+
+        digits = "".join(ch for ch in channel if ch.isdigit())
+        if len(digits) < 9:
+            return False
+
+        account = WhatsAppService.account_for_merchant(merchant_id, self.db)
+        if not account:
+            return False
+
+        recipient = "".join(ch for ch in channel if ch.isdigit()) or channel
+        svc = WhatsAppService.for_phone_id(account.phone_number_id, self.db)
+        sent = svc.send_message(
+            phone_id=account.phone_number_id,
+            recipient_phone=recipient,
+            message_text=text,
+        )
+        if not sent:
+            raise CustomerDeliveryError("Failed to send WhatsApp reply to the customer.")
+        logger.info(
+            "[CONVERSATION] Delivered agent WhatsApp reply merchant=%s customer=%s",
+            merchant_id,
+            recipient,
+        )
+        return True
+
+    def _send_instagram_agent_reply(
+        self, merchant_id: str, igsid: str, message: str
+    ) -> bool:
+        from core.instagram.model.InstagramAccount import InstagramAccount
+        from core.instagram.service.instagram_oauth_service import InstagramOAuthService
+
+        account = (
+            self.db.query(InstagramAccount)
+            .filter(
+                InstagramAccount.user_id == merchant_id,
+                InstagramAccount.is_active.is_(True),
+                InstagramAccount.messaging_enabled.is_(True),
+            )
+            .first()
+        )
+        if not account:
+            return False
+        svc = InstagramOAuthService()
+        token = svc.decrypt_token(account.access_token_encrypted)
+        return svc.send_text(token, igsid, message)
+
     def append_human_message_to_session(
         self, user_identifier: str, session_id: int, message: str
     ) -> Optional[ConversationDetailDTO]:
@@ -343,6 +424,8 @@ class ConversationListService:
         state = dict(row.conversation_state or {})
         if not state.get("intervention_active"):
             return None
+
+        channel_sent = self._deliver_agent_reply_to_customer_channel(row.user_id, message)
 
         history = list(state.get("conversation_history") or [])
         history.append(
@@ -356,9 +439,10 @@ class ConversationListService:
             history = history[-20:]
         state["conversation_history"] = history
 
-        # Queue for customer delivery (public webchat poll / next inbound during intervention).
+        # Webchat poll only — WhatsApp/Instagram already received the live send.
         pending = list(state.get("pending_customer_messages") or [])
-        pending.append(message)
+        if not channel_sent:
+            pending.append(message)
         state["pending_customer_messages"] = pending
 
         row.conversation_state = state
