@@ -45,7 +45,6 @@ def _normalize_sender_id(value: str) -> str:
 
 class SmsSenderIdCreateRequest(BaseModel):
     sender_id: str = Field(..., min_length=3, max_length=32)
-    company_name: Optional[str] = Field(None, max_length=255)
     notes: Optional[str] = Field(None, max_length=2000)
 
     @field_validator("sender_id")
@@ -63,13 +62,22 @@ class SmsSenderIdCreateRequest(BaseModel):
             )
         return cleaned
 
-    @field_validator("company_name", "notes")
+    @field_validator("notes")
     @classmethod
     def strip_optional(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
         t = v.strip()
         return t or None
+
+
+def _company_name_from_user(db: Session, user_id: str) -> Optional[str]:
+    """Use the signup business name so Sender IDs cannot spoof another company."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        return None
+    name = (user.company or "").strip()
+    return name or None
 
 
 class SmsSenderIdRejectRequest(BaseModel):
@@ -115,6 +123,7 @@ def register_sms_sender_id(
 ):
     user_id = resolve_internal_user_id(db, jwt_subject)
     sender_id = body.sender_id
+    company_name = _company_name_from_user(db, user_id)
 
     existing = (
         db.query(SmsSenderIdRegistration)
@@ -128,7 +137,7 @@ def register_sms_sender_id(
     if existing:
         if existing.status == SmsSenderIdStatus.REJECTED:
             existing.status = SmsSenderIdStatus.PENDING
-            existing.company_name = body.company_name
+            existing.company_name = company_name
             existing.notes = body.notes
             existing.rejection_reason = None
             existing.reviewed_by = None
@@ -162,7 +171,7 @@ def register_sms_sender_id(
         id=_new_id(),
         user_id=user_id,
         sender_id=sender_id,
-        company_name=body.company_name,
+        company_name=company_name,
         notes=body.notes,
         status=SmsSenderIdStatus.PENDING,
         is_active=True,

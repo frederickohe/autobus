@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import secrets
@@ -60,36 +61,68 @@ class InstagramOAuthState:
     def _key(cls, state: str) -> str:
         return f"autobus:oauth:instagram:{state}"
 
+    @staticmethod
+    def normalize_return_to(return_to: Optional[str]) -> str:
+        value = (return_to or "web").strip().lower()
+        return "app" if value in {"app", "mobile", "ios", "android"} else "web"
+
     @classmethod
-    def create(cls, user_id: str) -> str:
+    def _encode_payload(cls, user_id: str, return_to: str) -> str:
+        return json.dumps(
+            {"user_id": user_id, "return_to": cls.normalize_return_to(return_to)},
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _parse_payload(cls, raw: Any) -> Optional[Dict[str, str]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+            user_id = str((data or {}).get("user_id") or "").strip()
+            if not user_id:
+                return None
+            return {
+                "user_id": user_id,
+                "return_to": cls.normalize_return_to((data or {}).get("return_to")),
+            }
+        return {"user_id": text, "return_to": "web"}
+
+    @classmethod
+    def create(cls, user_id: str, return_to: str = "web") -> str:
         raw = secrets.token_urlsafe(32)
         state = f"{STATE_PREFIX}{raw}"
+        payload = cls._encode_payload(user_id, return_to)
         r = _redis()
         if r is not None:
             try:
-                r.setex(cls._key(state), STATE_TTL_SECONDS, user_id)
+                r.setex(cls._key(state), STATE_TTL_SECONDS, payload)
                 return state
             except Exception as exc:
                 logger.warning("[IG] Redis setex failed, using memory: %s", exc)
         cls._states[state] = {
-            "user_id": user_id,
+            "value": payload,
             "expires_at": datetime.now(timezone.utc)
             + timedelta(seconds=STATE_TTL_SECONDS),
         }
         return state
 
     @classmethod
-    def validate(cls, state: str) -> Optional[str]:
+    def _take_raw(cls, state: str) -> Optional[str]:
         if not state or not state.startswith(STATE_PREFIX):
             return None
         r = _redis()
         if r is not None:
             try:
                 key = cls._key(state)
-                user_id = r.get(key)
-                if user_id:
+                raw = r.get(key)
+                if raw:
                     r.delete(key)
-                    return str(user_id)
+                    return str(raw)
             except Exception as exc:
                 logger.warning("[IG] Redis get failed, trying memory: %s", exc)
         data = cls._states.get(state)
@@ -99,7 +132,24 @@ class InstagramOAuthState:
             cls._states.pop(state, None)
             return None
         cls._states.pop(state, None)
-        return data["user_id"]
+        if data.get("value"):
+            return str(data["value"])
+        if data.get("user_id"):
+            return cls._encode_payload(str(data["user_id"]), "web")
+        return None
+
+    @classmethod
+    def consume(cls, state: Optional[str]) -> Optional[Dict[str, str]]:
+        """One-time consume. Returns ``user_id`` and ``return_to`` (app|web)."""
+        raw = cls._take_raw(state or "")
+        return cls._parse_payload(raw)
+
+    @classmethod
+    def validate(cls, state: str) -> Optional[str]:
+        data = cls.consume(state)
+        if not data:
+            return None
+        return data.get("user_id")
 
     @classmethod
     def is_instagram_state(cls, state: Optional[str]) -> bool:

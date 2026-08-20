@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import html as html_lib
+import json
 import logging
 import os
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -164,40 +167,126 @@ def complete_onboarding(
     )
 
 
-def _success_html(account: WhatsAppAccount) -> str:
-    phone = account.display_phone_number or account.phone_number_id
+def _app_deep_link(**query: str) -> str:
+    base = (os.getenv("AUTOBUS_APP_DEEP_LINK") or "autobus://oauth/whatsapp").strip()
+    if "instagram" in base and "whatsapp" not in base:
+        base = base.replace("instagram", "whatsapp")
+    parts = urlsplit(base)
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    q.update({k: v for k, v in query.items() if v})
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment)
+    )
+
+
+def _android_intent_url(app_url: str) -> str:
+    parts = urlsplit(app_url)
+    host_path = f"{parts.netloc}{parts.path}"
+    query = f"?{parts.query}" if parts.query else ""
+    package = (os.getenv("AUTOBUS_ANDROID_PACKAGE") or "com.autobus.app").strip()
+    return (
+        f"intent://{host_path}{query}#Intent;scheme={parts.scheme};"
+        f"package={package};end"
+    )
+
+
+def _result_html(
+    *,
+    title: str,
+    heading: str,
+    body_html: str,
+    return_to: str = "web",
+    error: bool = False,
+    extra_script: str = "",
+) -> str:
+    to_app = MetaWhatsAppOAuthState.normalize_return_to(return_to) == "app"
+    frontend = _frontend_base()
+    scheme_url = _app_deep_link(status="error" if error else "success")
+    intent_url = _android_intent_url(scheme_url)
+    bg = "#140b0b" if error else "#0b0f0c"
+    card_bg = "#201010" if error else "#102016"
+    border = "#4a1f1f" if error else "#1f3d2a"
+    link = "#ff8a80" if error else "#69f0ae"
+    if to_app:
+        primary_href = scheme_url
+        primary_label = "Open Autobus app"
+        fallback_note = (
+            "<p class=\"muted\">Tap below if the app does not open automatically.</p>"
+        )
+        redirect_js = f"""
+var schemeUrl = {json.dumps(scheme_url)};
+var intentUrl = {json.dumps(intent_url)};
+function openApp() {{
+  var isAndroid = /Android/i.test(navigator.userAgent || '');
+  window.location.replace(isAndroid ? intentUrl : schemeUrl);
+}}
+setTimeout(openApp, 250);
+"""
+    else:
+        primary_href = f"{frontend}/"
+        primary_label = "Back to Autobus"
+        fallback_note = ""
+        redirect_js = (
+            f"setTimeout(function(){{window.location.replace({json.dumps(frontend + '/')});}},2500);"
+        )
+
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>WhatsApp linked</title>
+<html><head><meta charset="utf-8"/><title>{html_lib.escape(title)}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-body{{font-family:system-ui,sans-serif;background:#0b0f0c;color:#e8f5e9;display:flex;
+body{{font-family:system-ui,sans-serif;background:{bg};color:#e8f5e9;display:flex;
 align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.card{{max-width:420px;padding:28px;border:1px solid #1f3d2a;border-radius:16px;background:#102016}}
+.card{{max-width:420px;padding:28px;border:1px solid {border};border-radius:16px;background:{card_bg}}}
 h1{{font-size:1.25rem;margin:0 0 8px}} p{{opacity:.85;line-height:1.45}}
-a{{color:#69f0ae}}
+a{{color:{link}}}
+.muted{{opacity:.7;font-size:14px;line-height:1.45}}
+.btn{{display:inline-block;margin-top:8px;padding:12px 16px;border-radius:10px;
+background:#1877f2;color:#fff;text-decoration:none;font-weight:600}}
 </style></head>
 <body><div class="card">
-<h1>WhatsApp connected</h1>
-<p>Number <strong>{phone}</strong> is linked to Autobus.</p>
-<p>You can close this window and return to Autobus.</p>
-<p><a href="{_frontend_base()}">Back to Autobus</a></p>
+<h1>{html_lib.escape(heading)}</h1>
+{body_html}
+{fallback_note}
+<p><a class="btn" href="{html_lib.escape(primary_href, quote=True)}">{html_lib.escape(primary_label)}</a></p>
 </div>
-<script>try{{window.opener&&window.opener.postMessage({{type:'AUTOBUS_WHATSAPP_LINKED',phone_number_id:'{account.phone_number_id}'}},'*');}}catch(e){{}}
-setTimeout(function(){{window.location.replace('{_frontend_base()}/');}},2500);</script>
+<script>{extra_script}
+{redirect_js}
+</script>
 </body></html>"""
 
 
-def _error_html(message: str) -> str:
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>WhatsApp link failed</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>
-body{{font-family:system-ui,sans-serif;background:#140b0b;color:#ffebee;display:flex;
-align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.card{{max-width:420px;padding:28px;border:1px solid #4a1f1f;border-radius:16px;background:#201010}}
-</style></head>
-<body><div class="card"><h1>WhatsApp link failed</h1><p>{message}</p>
-<p><a style="color:#ff8a80" href="{_frontend_base()}">Back to Autobus</a></p></div></body></html>"""
+def _success_html(account: WhatsAppAccount, *, return_to: str = "web") -> str:
+    phone = html_lib.escape(
+        str(account.display_phone_number or account.phone_number_id or ""),
+        quote=True,
+    )
+    phone_id_js = json.dumps(str(account.phone_number_id or ""))
+    return _result_html(
+        title="WhatsApp linked",
+        heading="WhatsApp connected",
+        body_html=(
+            f"<p>Number <strong>{phone}</strong> is linked to Autobus.</p>"
+            "<p>You can return to Autobus.</p>"
+        ),
+        return_to=return_to,
+        error=False,
+        extra_script=(
+            "try{window.opener&&window.opener.postMessage("
+            f"{{type:'AUTOBUS_WHATSAPP_LINKED',phone_number_id:{phone_id_js}}},'*');"
+            "}catch(e){}"
+        ),
+    )
+
+
+def _error_html(message: str, *, return_to: str = "web") -> str:
+    safe = html_lib.escape(message or "Authorization failed", quote=True)
+    return _result_html(
+        title="WhatsApp link failed",
+        heading="WhatsApp link failed",
+        body_html=f"<p>{safe}</p>",
+        return_to=return_to,
+        error=True,
+    )
 
 
 def _embedded_signup_launch_html(
@@ -207,24 +296,25 @@ def _embedded_signup_launch_html(
     state: str,
     extras_json: str,
     callback_base: str,
+    oauth_url: str,
     graph_version: str = "v21.0",
 ) -> str:
     """Hosted Facebook JS SDK bridge — Meta's supported Embedded Signup launch path."""
     # Values are embedded into JS string literals; keep them JSON-safe.
-    import json as _json
-
-    app_id_js = _json.dumps(app_id)
-    config_id_js = _json.dumps(config_id)
-    state_js = _json.dumps(state)
+    app_id_js = json.dumps(app_id)
+    config_id_js = json.dumps(config_id)
+    state_js = json.dumps(state)
     extras_js = extras_json  # already JSON object text
-    callback_js = _json.dumps(callback_base.rstrip("/"))
-    version_js = _json.dumps(graph_version)
+    callback_js = json.dumps(callback_base.rstrip("/"))
+    oauth_js = json.dumps(oauth_url)
+    version_js = json.dumps(graph_version)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta property="fb:app_id" content="{html_lib.escape(app_id, quote=True)}"/>
   <title>Link WhatsApp · Autobus</title>
   <style>
     body{{font-family:system-ui,sans-serif;background:#0b1020;color:#e8eaf6;margin:0;
@@ -243,7 +333,7 @@ def _embedded_signup_launch_html(
     <h1 style="margin:0 0 8px;font-size:20px">Link WhatsApp</h1>
     <p class="muted">Sign in with Meta to connect your WhatsApp Business number to Autobus.</p>
     <button id="btn" type="button">Continue with Meta</button>
-    <p id="status" class="muted" style="margin-top:14px">Loading Facebook SDK…</p>
+    <p id="status" class="muted" style="margin-top:14px">Tap Continue with Meta to open Facebook.</p>
     <p id="err" class="err" hidden></p>
   </div>
   <script>
@@ -253,6 +343,9 @@ def _embedded_signup_launch_html(
     const EXTRAS = {extras_js};
     const CALLBACK_BASE = {callback_js};
     const GRAPH_VERSION = {version_js};
+    const OAUTH_URL = {oauth_js};
+    const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     let session = {{ waba_id: null, phone_number_id: null, business_id: null }};
 
     function setStatus(t) {{
@@ -299,16 +392,24 @@ def _embedded_signup_launch_html(
       }}
     }});
 
+    function launchViaRedirect() {{
+      setStatus('Opening Facebook…');
+      window.location.assign(OAUTH_URL);
+    }}
+
     function launchSignup() {{
       setErr('');
       document.getElementById('btn').disabled = true;
       setStatus('Opening Meta WhatsApp signup…');
-      if (!window.FB) {{
-        setErr('Facebook SDK failed to load. Allow connect.facebook.net and try again.');
-        document.getElementById('btn').disabled = false;
+      // iOS Safari blocks FB.login popups (and often connect.facebook.net).
+      // Use a same-window Facebook Login for Business redirect instead.
+      if (IS_IOS || !window.FB) {{
+        launchViaRedirect();
         return;
       }}
+      const watchdog = setTimeout(launchViaRedirect, 2500);
       FB.login(function (response) {{
+        clearTimeout(watchdog);
         const code = response && response.authResponse && response.authResponse.code;
         if (code) {{
           finishWithCode(code);
@@ -332,14 +433,18 @@ def _embedded_signup_launch_html(
         xfbml: true,
         version: GRAPH_VERSION
       }});
+      if (IS_IOS) return;
       setStatus('Ready — tap Continue with Meta.');
       document.getElementById('btn').disabled = false;
-      // Auto-launch once for mobile deep-link / external browser flows.
+      // Auto-launch on Android/desktop only. iOS blocks this and leaves the button disabled.
       setTimeout(launchSignup, 400);
     }};
 
-    document.getElementById('btn').disabled = true;
+    document.getElementById('btn').disabled = false;
     document.getElementById('btn').addEventListener('click', launchSignup);
+    if (IS_IOS) {{
+      setStatus('Tap Continue with Meta to open Facebook.');
+    }}
   </script>
   <script async defer crossorigin="anonymous"
     src="https://connect.facebook.net/en_US/sdk.js"></script>
@@ -351,6 +456,15 @@ def _embedded_signup_launch_html(
 async def whatsapp_connect(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
+    return_to: str = Query(
+        "web",
+        description="After Meta returns to the HTTPS callback, send users to the mobile app (`app`) or website (`web`).",
+    ),
+    launch: str = Query(
+        "sdk",
+        description="sdk = Facebook JS SDK bridge (Android/web embed). "
+        "redirect = server 302 to Facebook OAuth (iOS Safari; popups are blocked).",
+    ),
     raw_meta: bool = Query(
         False,
         description="If true, return Meta onboard URL directly (debug only).",
@@ -361,12 +475,14 @@ async def whatsapp_connect(
         user_id = resolve_internal_user_id(db, jwt_subject)
         svc = MetaWhatsAppService()
         svc.require_config()
-        state = MetaWhatsAppOAuthState.create(user_id)
-        url = (
-            svc.build_onboard_url(state)
-            if raw_meta
-            else svc.build_launch_bridge_url(state)
-        )
+        state = MetaWhatsAppOAuthState.create(user_id, return_to=return_to)
+        launch_mode = (launch or "sdk").strip().lower()
+        if raw_meta:
+            url = svc.build_onboard_url(state)
+        elif launch_mode in {"redirect", "oauth", "ios"}:
+            url = svc.build_redirect_launch_url(state)
+        else:
+            url = svc.build_launch_bridge_url(state)
         return WhatsAppConnectResponse(
             authorization_url=url,
             state=state,
@@ -379,19 +495,27 @@ async def whatsapp_connect(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@whatsapp_routes.get("/embedded-signup/launch", response_class=HTMLResponse)
+@whatsapp_routes.get("/embedded-signup/launch")
 async def whatsapp_embedded_signup_launch(
     state: str = Query(..., min_length=8),
+    go: bool = Query(
+        False,
+        description="If true, 302 to Facebook OAuth instead of the JS SDK page.",
+    ),
 ):
     """
     Public HTML bridge that runs FB.login Embedded Signup.
     `state` must come from a prior authenticated GET /whatsapp/connect.
+    Pass `go=1` for a server-side redirect (iOS).
     """
-    if not MetaWhatsAppOAuthState.peek(state):
+    payload = MetaWhatsAppOAuthState.peek_payload(state)
+    return_to = (payload or {}).get("return_to") or "web"
+    if not payload:
         return HTMLResponse(
             _error_html(
                 "This WhatsApp link expired or is invalid. "
-                "Go back to Autobus → Manage Channels → Link WhatsApp and try again."
+                "Go back to Autobus → Manage Channels → Link WhatsApp and try again.",
+                return_to=return_to,
             ),
             status_code=400,
         )
@@ -400,23 +524,22 @@ async def whatsapp_embedded_signup_launch(
     try:
         svc.require_config()
     except ValueError as exc:
-        return HTMLResponse(_error_html(str(exc)), status_code=500)
+        return HTMLResponse(_error_html(str(exc), return_to=return_to), status_code=500)
 
-    import json as _json
+    if go:
+        return RedirectResponse(
+            url=svc.build_oauth_dialog_url(state),
+            status_code=302,
+        )
 
-    graph_version = (
-        (os.getenv("WHATSAPP_GRAPH_BASE_URL") or "https://graph.facebook.com/v21.0")
-        .rstrip("/")
-        .split("/")[-1]
-        or "v21.0"
-    )
     html = _embedded_signup_launch_html(
         app_id=svc.app_id,
         config_id=svc.config_id,
         state=state,
-        extras_json=_json.dumps(svc.embedded_signup_extras()),
+        extras_json=json.dumps(svc.embedded_signup_extras()),
         callback_base=_frontend_base(),
-        graph_version=graph_version if graph_version.startswith("v") else "v21.0",
+        oauth_url=svc.build_oauth_dialog_url(state),
+        graph_version=svc.graph_version(),
     )
     return HTMLResponse(html)
 
@@ -500,25 +623,44 @@ async def whatsapp_meta_callback(
 
     Also mounted at /api/social/callback to match META_WHATSAPP_REDIRECT_URI.
     """
+    early_return_to = "web"
+    if state:
+        peeked = MetaWhatsAppOAuthState.peek_payload(state)
+        if peeked:
+            early_return_to = peeked.get("return_to") or "web"
+
     if error or error_message:
         msg = error_description or error_message or error or "Authorization failed"
-        return HTMLResponse(_error_html(msg), status_code=400)
+        if state:
+            MetaWhatsAppOAuthState.validate_payload(state)
+        return HTMLResponse(_error_html(msg, return_to=early_return_to), status_code=400)
 
     if not code:
-        return HTMLResponse(_error_html("Missing authorization code from Meta."), status_code=400)
+        return HTMLResponse(
+            _error_html("Missing authorization code from Meta.", return_to=early_return_to),
+            status_code=400,
+        )
 
     if not state:
         return HTMLResponse(
-            _error_html("Missing state. Start linking again from Autobus Manage Channels."),
+            _error_html(
+                "Missing state. Start linking again from Autobus Manage Channels.",
+                return_to=early_return_to,
+            ),
             status_code=400,
         )
 
-    user_id = MetaWhatsAppOAuthState.validate(state)
-    if not user_id:
+    payload = MetaWhatsAppOAuthState.validate_payload(state)
+    if not payload:
         return HTMLResponse(
-            _error_html("Invalid or expired link session. Please try linking again."),
+            _error_html(
+                "Invalid or expired link session. Please try linking again.",
+                return_to=early_return_to,
+            ),
             status_code=400,
         )
+    user_id = payload["user_id"]
+    return_to = payload.get("return_to") or "web"
 
     q = request.query_params
     waba_id = waba_id or q.get("waba_id") or q.get("whatsapp_business_account_id")
@@ -536,10 +678,10 @@ async def whatsapp_meta_callback(
             phone_number_id=phone_number_id,
             business_id=business_id,
         )
-        return HTMLResponse(_success_html(account))
+        return HTMLResponse(_success_html(account, return_to=return_to))
     except Exception as exc:
         logger.exception("[WA] meta callback failed")
-        return HTMLResponse(_error_html(str(exc)), status_code=400)
+        return HTMLResponse(_error_html(str(exc), return_to=return_to), status_code=400)
 
 
 # Dedicated mount for Meta's configured redirect_uri:

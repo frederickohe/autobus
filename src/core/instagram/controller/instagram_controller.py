@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import html as html_lib
+import json
 import logging
 import os
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -86,6 +89,27 @@ class InstagramPublishResponse(BaseModel):
 
 def _frontend_base() -> str:
     return (os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com").rstrip("/")
+
+
+def _app_deep_link(**query: str) -> str:
+    base = (os.getenv("AUTOBUS_APP_DEEP_LINK") or "autobus://oauth/instagram").strip()
+    parts = urlsplit(base)
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    q.update({k: v for k, v in query.items() if v})
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment)
+    )
+
+
+def _android_intent_url(app_url: str) -> str:
+    parts = urlsplit(app_url)
+    host_path = f"{parts.netloc}{parts.path}"
+    query = f"?{parts.query}" if parts.query else ""
+    package = (os.getenv("AUTOBUS_ANDROID_PACKAGE") or "com.autobus.app").strip()
+    return (
+        f"intent://{host_path}{query}#Intent;scheme={parts.scheme};"
+        f"package={package};end"
+    )
 
 
 def _upsert_account(
@@ -195,58 +219,118 @@ def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> In
     return account
 
 
-def _success_html(account: InstagramAccount) -> str:
+def _success_html(account: InstagramAccount, *, return_to: str = "web") -> str:
     label = account.username or account.name or account.ig_user_id
+    safe_label = html_lib.escape(str(label or ""), quote=True)
+    ig_user_id_js = json.dumps(str(account.ig_user_id or ""))
+    return _result_html(
+        title="Instagram linked",
+        heading="Instagram linked",
+        body_html=(
+            f"<p>Connected <strong>@{safe_label}</strong> to Autobus for inbox "
+            "messaging and Digital Marketing posting.</p>"
+        ),
+        return_to=return_to,
+        error=False,
+        extra_script=(
+            "try{window.opener&&window.opener.postMessage("
+            f"{{type:'AUTOBUS_INSTAGRAM_LINKED',ig_user_id:{ig_user_id_js}}},'*');"
+            "}catch(e){}"
+        ),
+    )
+
+
+def _error_html(message: str, *, return_to: str = "web") -> str:
+    safe = html_lib.escape(message or "Authorization failed", quote=True)
+    return _result_html(
+        title="Instagram link failed",
+        heading="Instagram link failed",
+        body_html=f"<p>{safe}</p>",
+        return_to=return_to,
+        error=True,
+    )
+
+
+def _result_html(
+    *,
+    title: str,
+    heading: str,
+    body_html: str,
+    return_to: str,
+    error: bool,
+    extra_script: str = "",
+) -> str:
+    to_app = InstagramOAuthState.normalize_return_to(return_to) == "app"
+    frontend = _frontend_base()
+    scheme_url = _app_deep_link(status="error" if error else "success")
+    intent_url = _android_intent_url(scheme_url)
+    bg = "#140b0b" if error else "#0b1020"
+    card_bg = "#201010" if error else "#161022"
+    border = "#4a1f1f" if error else "#3d2a55"
+    link = "#ff8a80" if error else "#f48fb1"
+    if to_app:
+        primary_href = scheme_url
+        primary_label = "Open Autobus app"
+        fallback_note = (
+            "<p class=\"muted\">Instagram has to return here first. "
+            "Tap below if the app does not open automatically.</p>"
+        )
+        redirect_js = f"""
+var schemeUrl = {json.dumps(scheme_url)};
+var intentUrl = {json.dumps(intent_url)};
+function openApp() {{
+  var isAndroid = /Android/i.test(navigator.userAgent || '');
+  window.location.replace(isAndroid ? intentUrl : schemeUrl);
+}}
+setTimeout(openApp, 250);
+"""
+    else:
+        primary_href = f"{frontend}/"
+        primary_label = "Back to Autobus"
+        fallback_note = ""
+        redirect_js = (
+            f"setTimeout(function(){{window.location.replace({json.dumps(frontend + '/')});}},2500);"
+        )
+
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Instagram linked</title>
+<html><head><meta charset="utf-8"/><title>{html_lib.escape(title)}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-body{{font-family:system-ui,sans-serif;background:#0b1020;color:#e8eaf6;display:flex;
+body{{font-family:system-ui,sans-serif;background:{bg};color:#e8eaf6;display:flex;
 align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.card{{max-width:420px;padding:28px;border:1px solid #3d2a55;border-radius:16px;background:#161022}}
-a{{color:#f48fb1}}
+.card{{max-width:420px;padding:28px;border:1px solid {border};border-radius:16px;background:{card_bg}}}
+a{{color:{link}}}
+.muted{{opacity:.7;font-size:14px;line-height:1.45}}
+.btn{{display:inline-block;margin-top:8px;padding:12px 16px;border-radius:10px;
+background:#7c3aed;color:#fff;text-decoration:none;font-weight:600}}
 </style></head>
 <body><div class="card">
-<h1>Instagram linked</h1>
-<p>Connected <strong>@{label}</strong> to Autobus for inbox messaging and Digital Marketing posting.</p>
-<p><a href="{_frontend_base()}">Back to Autobus</a></p>
+<h1>{html_lib.escape(heading)}</h1>
+{body_html}
+{fallback_note}
+<p><a class="btn" href="{html_lib.escape(primary_href, quote=True)}">{html_lib.escape(primary_label)}</a></p>
 </div>
-<script>try{{window.opener&&window.opener.postMessage({{type:'AUTOBUS_INSTAGRAM_LINKED',ig_user_id:'{account.ig_user_id}'}},'*');}}catch(e){{}}
-setTimeout(function(){{window.location.replace('{_frontend_base()}/');}},2500);</script>
+<script>{extra_script}
+{redirect_js}
+</script>
 </body></html>"""
-
-
-def _error_html(message: str) -> str:
-    safe = (
-        (message or "Authorization failed")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><title>Instagram link failed</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>
-body{{font-family:system-ui,sans-serif;background:#140b0b;color:#ffebee;display:flex;
-align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.card{{max-width:420px;padding:28px;border:1px solid #4a1f1f;border-radius:16px;background:#201010}}
-a{{color:#ff8a80}}
-</style></head>
-<body><div class="card"><h1>Instagram link failed</h1><p>{safe}</p>
-<p><a href="{_frontend_base()}">Back to Autobus</a></p></div></body></html>"""
 
 
 @instagram_routes.get("/connect", response_model=InstagramConnectResponse)
 async def instagram_connect(
     jwt_subject: str = Depends(validate_token),
     db: Session = Depends(get_db),
+    return_to: str = Query(
+        "web",
+        description="After Instagram returns to the HTTPS callback, send users to the mobile app (`app`) or website (`web`).",
+    ),
 ):
     """Return Instagram Business Login authorize URL for the authenticated user."""
     try:
         user_id = resolve_internal_user_id(db, jwt_subject)
         svc = InstagramOAuthService()
         svc.require_config()
-        state = InstagramOAuthState.create(user_id)
+        state = InstagramOAuthState.create(user_id, return_to=return_to)
         url = svc.build_authorize_url(state)
         return InstagramConnectResponse(
             authorization_url=url,
@@ -355,32 +439,47 @@ async def handle_instagram_oauth_callback(
     error_reason: Optional[str],
 ) -> HTMLResponse:
     """Shared callback body used by /api/social/callback dispatcher."""
+    payload = InstagramOAuthState.consume(state)
+    return_to = (payload or {}).get("return_to") or "web"
+
     if error or error_reason:
         msg = error_description or error_reason or error or "Authorization failed"
-        return HTMLResponse(_error_html(msg), status_code=400)
+        return HTMLResponse(_error_html(msg, return_to=return_to), status_code=400)
 
     if not code:
-        return HTMLResponse(_error_html("Missing authorization code from Instagram."), status_code=400)
-
-    if not state:
         return HTMLResponse(
-            _error_html("Missing state. Start linking again from Autobus Manage Channels."),
+            _error_html(
+                "Missing authorization code from Instagram.",
+                return_to=return_to,
+            ),
             status_code=400,
         )
 
-    user_id = InstagramOAuthState.validate(state)
+    if not state:
+        return HTMLResponse(
+            _error_html(
+                "Missing state. Start linking again from Autobus Manage Channels.",
+                return_to=return_to,
+            ),
+            status_code=400,
+        )
+
+    user_id = (payload or {}).get("user_id") if payload else None
     if not user_id:
         return HTMLResponse(
-            _error_html("Invalid or expired Instagram link session. Please try linking again."),
+            _error_html(
+                "Invalid or expired Instagram link session. Please try linking again.",
+                return_to=return_to,
+            ),
             status_code=400,
         )
 
     try:
         account = complete_instagram_onboarding(db, user_id=user_id, code=code)
-        return HTMLResponse(_success_html(account))
+        return HTMLResponse(_success_html(account, return_to=return_to))
     except Exception as exc:
         logger.exception("[IG] oauth callback failed")
-        return HTMLResponse(_error_html(str(exc)), status_code=400)
+        return HTMLResponse(_error_html(str(exc), return_to=return_to), status_code=400)
 
 
 @instagram_routes.get("/callback", response_class=HTMLResponse)

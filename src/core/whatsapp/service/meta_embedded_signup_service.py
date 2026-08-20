@@ -49,21 +49,54 @@ class MetaWhatsAppOAuthState:
 
     _states: Dict[str, Dict[str, Any]] = {}
 
+    @staticmethod
+    def normalize_return_to(return_to: Optional[str]) -> str:
+        value = (return_to or "web").strip().lower()
+        return "app" if value in {"app", "mobile", "ios", "android"} else "web"
+
     @classmethod
     def _key(cls, state: str) -> str:
         return f"autobus:oauth:whatsapp:{state}"
 
     @classmethod
-    def create(cls, user_id: str) -> str:
+    def _encode_payload(cls, user_id: str, return_to: str) -> str:
+        return json.dumps(
+            {"user_id": user_id, "return_to": cls.normalize_return_to(return_to)},
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def _parse_payload(cls, raw: Any) -> Optional[Dict[str, str]]:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        if text.startswith("{"):
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                return None
+            user_id = str((data or {}).get("user_id") or "").strip()
+            if not user_id:
+                return None
+            return {
+                "user_id": user_id,
+                "return_to": cls.normalize_return_to((data or {}).get("return_to")),
+            }
+        return {"user_id": text, "return_to": "web"}
+
+    @classmethod
+    def create(cls, user_id: str, return_to: str = "web") -> str:
         state = secrets.token_urlsafe(32)
+        payload = cls._encode_payload(user_id, return_to)
         r = _redis()
         if r is not None:
             try:
-                r.setex(cls._key(state), STATE_TTL_SECONDS, user_id)
+                r.setex(cls._key(state), STATE_TTL_SECONDS, payload)
                 return state
             except Exception as exc:
                 logger.warning("[WA] Redis setex failed, using memory: %s", exc)
         cls._states[state] = {
+            "payload": payload,
             "user_id": user_id,
             "expires_at": datetime.now(timezone.utc)
             + timedelta(seconds=STATE_TTL_SECONDS),
@@ -71,16 +104,17 @@ class MetaWhatsAppOAuthState:
         return state
 
     @classmethod
-    def peek(cls, state: str) -> Optional[str]:
-        """Return user_id if state is valid without consuming it (launch page)."""
+    def peek_payload(cls, state: str) -> Optional[Dict[str, str]]:
+        """Return payload if state is valid without consuming it (launch page)."""
         if not state:
             return None
         r = _redis()
         if r is not None:
             try:
-                user_id = r.get(cls._key(state))
-                if user_id:
-                    return str(user_id)
+                raw = r.get(cls._key(state))
+                parsed = cls._parse_payload(raw)
+                if parsed:
+                    return parsed
             except Exception as exc:
                 logger.warning("[WA] Redis peek failed, trying memory: %s", exc)
         data = cls._states.get(state)
@@ -89,21 +123,28 @@ class MetaWhatsAppOAuthState:
         if datetime.now(timezone.utc) > data["expires_at"]:
             cls._states.pop(state, None)
             return None
-        return data["user_id"]
+        return cls._parse_payload(data.get("payload") or data.get("user_id"))
 
     @classmethod
-    def validate(cls, state: str) -> Optional[str]:
-        """Consume state and return user_id (callback / complete)."""
+    def peek(cls, state: str) -> Optional[str]:
+        """Return user_id if state is valid without consuming it (launch page)."""
+        payload = cls.peek_payload(state)
+        return payload["user_id"] if payload else None
+
+    @classmethod
+    def validate_payload(cls, state: str) -> Optional[Dict[str, str]]:
+        """Consume state and return payload (callback / complete)."""
         if not state:
             return None
         r = _redis()
         if r is not None:
             try:
                 key = cls._key(state)
-                user_id = r.get(key)
-                if user_id:
+                raw = r.get(key)
+                parsed = cls._parse_payload(raw)
+                if parsed:
                     r.delete(key)
-                    return str(user_id)
+                    return parsed
             except Exception as exc:
                 logger.warning("[WA] Redis get failed, trying memory: %s", exc)
         data = cls._states.get(state)
@@ -113,7 +154,13 @@ class MetaWhatsAppOAuthState:
             cls._states.pop(state, None)
             return None
         cls._states.pop(state, None)
-        return data["user_id"]
+        return cls._parse_payload(data.get("payload") or data.get("user_id"))
+
+    @classmethod
+    def validate(cls, state: str) -> Optional[str]:
+        """Consume state and return user_id (callback / complete)."""
+        payload = cls.validate_payload(state)
+        return payload["user_id"] if payload else None
 
 
 class MetaWhatsAppService:
@@ -179,6 +226,34 @@ class MetaWhatsAppService:
             + urlencode(params)
         )
 
+    def _public_base(self) -> str:
+        return (os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com").rstrip("/")
+
+    def graph_version(self) -> str:
+        version = self.graph_base.rstrip("/").split("/")[-1]
+        return version if version.startswith("v") else "v21.0"
+
+    def build_oauth_dialog_url(self, state: str) -> str:
+        """
+        Facebook Login for Business full-page dialog (no JS SDK / no popup).
+
+        iOS Safari blocks FB.login() popups and often blocks connect.facebook.net,
+        so the JS SDK bridge appears to load and then do nothing. This URL is the
+        same redirect pattern Instagram uses and works in Safari / Chrome.
+        """
+        self.require_config()
+        extras = json.dumps(self.embedded_signup_extras(), separators=(",", ":"))
+        params = {
+            "client_id": self.app_id,
+            "config_id": self.config_id,
+            "response_type": "code",
+            "override_default_response_type": "true",
+            "redirect_uri": self.redirect_uri,
+            "state": state,
+            "extras": extras,
+        }
+        return f"https://www.facebook.com/{self.graph_version()}/dialog/oauth?{urlencode(params)}"
+
     def build_launch_bridge_url(self, state: str) -> str:
         """
         Autobus-hosted page that loads the Facebook JS SDK and calls FB.login
@@ -186,10 +261,20 @@ class MetaWhatsAppService:
         Served on useautobus.com so it matches App Domains / JS SDK allowlist.
         """
         self.require_config()
-        public_base = (
-            os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com"
-        ).rstrip("/")
-        return f"{public_base}/api/v1/whatsapp/embedded-signup/launch?state={quote(state, safe='')}"
+        return f"{self._public_base()}/api/v1/whatsapp/embedded-signup/launch?state={quote(state, safe='')}"
+
+    def build_redirect_launch_url(self, state: str) -> str:
+        """
+        Autobus URL that 302s to the Facebook OAuth dialog.
+
+        Starting on our domain then redirecting avoids iOS popup blockers and
+        still presents facebook.com as a first-party navigation from Autobus.
+        """
+        self.require_config()
+        return (
+            f"{self._public_base()}/api/v1/whatsapp/embedded-signup/launch"
+            f"?state={quote(state, safe='')}&go=1"
+        )
 
     def embedded_signup_extras(self) -> Dict[str, Any]:
         extras: Dict[str, Any] = {
