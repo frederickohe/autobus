@@ -9,8 +9,6 @@ import os
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
 from another_fastapi_jwt_auth import AuthJWT
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import HTMLResponse
@@ -89,27 +87,6 @@ class InstagramPublishResponse(BaseModel):
 
 def _frontend_base() -> str:
     return (os.getenv("BASE_FRONTEND_URL") or "https://useautobus.com").rstrip("/")
-
-
-def _app_deep_link(**query: str) -> str:
-    base = (os.getenv("AUTOBUS_APP_DEEP_LINK") or "autobus://oauth/instagram").strip()
-    parts = urlsplit(base)
-    q = dict(parse_qsl(parts.query, keep_blank_values=True))
-    q.update({k: v for k, v in query.items() if v})
-    return urlunsplit(
-        (parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment)
-    )
-
-
-def _android_intent_url(app_url: str) -> str:
-    parts = urlsplit(app_url)
-    host_path = f"{parts.netloc}{parts.path}"
-    query = f"?{parts.query}" if parts.query else ""
-    package = (os.getenv("AUTOBUS_ANDROID_PACKAGE") or "com.autobus.app").strip()
-    return (
-        f"intent://{host_path}{query}#Intent;scheme={parts.scheme};"
-        f"package={package};end"
-    )
 
 
 def _upsert_account(
@@ -262,28 +239,20 @@ def _result_html(
 ) -> str:
     to_app = InstagramOAuthState.normalize_return_to(return_to) == "app"
     frontend = _frontend_base()
-    scheme_url = _app_deep_link(status="error" if error else "success")
-    intent_url = _android_intent_url(scheme_url)
     bg = "#140b0b" if error else "#0b1020"
     card_bg = "#201010" if error else "#161022"
     border = "#4a1f1f" if error else "#3d2a55"
     link = "#ff8a80" if error else "#f48fb1"
     if to_app:
-        primary_href = scheme_url
-        primary_label = "Open Autobus app"
+        # Do not auto-navigate to autobus:// — in-app browsers (Safari View /
+        # Chrome Custom Tabs) treat that custom scheme as a broken page.
+        primary_href = ""
+        primary_label = ""
         fallback_note = (
-            "<p class=\"muted\">Instagram has to return here first. "
-            "Tap below if the app does not open automatically.</p>"
+            "<p class=\"muted\">Tap the <strong>X</strong> at the top right "
+            "to return to Autobus.</p>"
         )
-        redirect_js = f"""
-var schemeUrl = {json.dumps(scheme_url)};
-var intentUrl = {json.dumps(intent_url)};
-function openApp() {{
-  var isAndroid = /Android/i.test(navigator.userAgent || '');
-  window.location.replace(isAndroid ? intentUrl : schemeUrl);
-}}
-setTimeout(openApp, 250);
-"""
+        redirect_js = ""
     else:
         primary_href = f"{frontend}/"
         primary_label = "Back to Autobus"
@@ -308,7 +277,7 @@ background:#7c3aed;color:#fff;text-decoration:none;font-weight:600}}
 <h1>{html_lib.escape(heading)}</h1>
 {body_html}
 {fallback_note}
-<p><a class="btn" href="{html_lib.escape(primary_href, quote=True)}">{html_lib.escape(primary_label)}</a></p>
+{f'<p><a class="btn" href="{html_lib.escape(primary_href, quote=True)}">{html_lib.escape(primary_label)}</a></p>' if primary_href else ""}
 </div>
 <script>{extra_script}
 {redirect_js}
