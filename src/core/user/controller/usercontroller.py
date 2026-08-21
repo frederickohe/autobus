@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 from core.user.dto.response.message_response import MessageResponse
 from core.user.dto.response.user_response import UserResponse
 from core.user.dto.response.sent_emails_response import SentEmailsResponse, SentEmailItem
+from core.user.dto.response.sent_sms_response import SentSmsResponse, SentSmsItem
+from core.customers.service.customer_messaging_service import CustomerMessagingService
 
 from core.user.service.user_service import UserService
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
@@ -99,6 +101,37 @@ def list_my_sent_emails(
             )
         )
     return SentEmailsResponse(emails=items, total_returned=len(items))
+
+
+@user_routes.get("/me/sms/sent", response_model=SentSmsResponse)
+def list_my_sent_sms(
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """
+    Recent SMS sent through Autobus customer messaging, keyed by your account.
+
+    History is populated when a send succeeds from the messaging feature; max 100 retained in Redis.
+    """
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    user = user_service.get_current_user(current_user_email)
+    messaging = CustomerMessagingService(db)
+    rows = messaging.list_sent_sms_for_user(user.id, limit=limit)
+    items: List[SentSmsItem] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        items.append(
+            SentSmsItem(
+                phone=str(r.get("phone") or r.get("to") or ""),
+                message=str(r.get("message") or r.get("body") or ""),
+                sent_at=str(r.get("sent_at") or ""),
+                status=str(r.get("status") or "Sent"),
+            )
+        )
+    return SentSmsResponse(messages=items, total_returned=len(items))
 
 
 @user_routes.get("/me/notifications", response_model=PagedNotificationResponse)

@@ -1,10 +1,13 @@
+import json
 import logging
 import os
 import smtplib
 import ssl
+from datetime import datetime, timezone
 from email.message import EmailMessage
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
+import redis
 from sqlalchemy.orm import Session
 
 from config import settings
@@ -19,15 +22,18 @@ from core.wirepick.service.wirepickservice import WirepickSMSService, WirepickSM
 logger = logging.getLogger(__name__)
 
 _SMS_NETWORKS = {Network.MTN, Network.VOD, Network.AIR}
+_SENT_SMS_KEY_PREFIX = "sms:sent:"
+_SENT_SMS_MAX = 100
 
 
 class CustomerMessagingService:
     """Send custom SMS or email to saved customers by customer ID."""
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, redis_client=None):
         self.db = db
         self.customer_service = CustomerService(db)
         self.sms_service = WirepickSMSService()
+        self._redis_client = redis_client
 
     def send_sms(
         self,
@@ -72,6 +78,12 @@ class CustomerMessagingService:
             try:
                 sms_result = self.sms_service.send_sms(phone, message)
                 if sms_result.get("success"):
+                    self._record_sent_sms(
+                        user_id,
+                        phone=phone,
+                        message=message,
+                        status="Sent",
+                    )
                     results.append(
                         CustomerMessageRecipientResult(
                             customer_id=customer.id,
@@ -184,6 +196,75 @@ class CustomerMessagingService:
                 )
 
         return self._build_response(results)
+
+    def _redis(self):
+        if self._redis_client is not None:
+            return self._redis_client
+        redis_password = os.getenv("REDIS_PASSWORD", "autobus098")
+        self._redis_client = redis.Redis(
+            host=os.getenv("REDIS_HOST", "redis"),
+            port=int(os.getenv("REDIS_PORT", 6379)),
+            password=redis_password if redis_password else None,
+            db=0,
+            decode_responses=True,
+        )
+        return self._redis_client
+
+    def _history_user_id(self, user_id: str) -> Optional[str]:
+        return self.customer_service._resolve_user_db_id(user_id) or (user_id or "").strip() or None
+
+    def _record_sent_sms(
+        self,
+        user_id: str,
+        *,
+        phone: str,
+        message: str,
+        status: str = "Sent",
+    ) -> None:
+        """Append outbound SMS metadata for Sent SMS history (newest first)."""
+        history_user_id = self._history_user_id(user_id)
+        if not history_user_id:
+            return
+        try:
+            payload = json.dumps(
+                {
+                    "phone": phone,
+                    "message": message,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                    "status": status,
+                }
+            )
+            key = f"{_SENT_SMS_KEY_PREFIX}{history_user_id}"
+            client = self._redis()
+            client.lpush(key, payload)
+            client.ltrim(key, 0, _SENT_SMS_MAX - 1)
+        except Exception as e:
+            logger.warning("Could not record sent SMS for user %s: %s", user_id, e)
+
+    def list_sent_sms_for_user(self, user_id: str, limit: int = 20) -> List[Dict[str, Any]]:
+        """Return recent SMS sent by this user through customer messaging (Redis-backed)."""
+        if limit < 1:
+            limit = 1
+        if limit > 50:
+            limit = 50
+        history_user_id = self._history_user_id(user_id)
+        if not history_user_id:
+            return []
+        key = f"{_SENT_SMS_KEY_PREFIX}{history_user_id}"
+        try:
+            raw = self._redis().lrange(key, 0, limit - 1)
+        except Exception as e:
+            logger.error("Redis error listing sent SMS for %s: %s", user_id, e)
+            return []
+        out: List[Dict[str, Any]] = []
+        for row in raw or []:
+            try:
+                parsed = json.loads(row)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if isinstance(parsed, dict):
+                out.append(parsed)
+        return out
 
     @staticmethod
     def _send_email(from_email: str, to_email: str, subject: str, body: str) -> bool:

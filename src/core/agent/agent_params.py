@@ -12,4 +12,6 @@ AGENT_REQUIRED_PARAMS = {
     "image_generation_agent": [],
     "video_generation_agent": [],
     "web_search_agent": [],
+    "interactions_agent": [],
+    "my_ai_agent": [],
 }
