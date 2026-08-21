@@ -7,7 +7,7 @@ from core.auth.dependencies import validate_token, get_current_user, get_db
 from core.user.model.User import User
 from core.nlu.dto.reponse.nluresponse import NLUResponse
 from core.nlu.nlu import AutobusNLUSystem
-from core.nlu.dto.request.nlurequest import NLURequest
+from core.nlu.dto.request.nlurequest import NLURequest, NLUDetectRequest
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.subscription.service.subscription_service import SubscriptionService
@@ -74,6 +74,40 @@ async def process_message(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Error processing message",
+        )
+
+
+@nlu_routes.post("/detect")
+async def detect_intent(
+    request: NLUDetectRequest,
+    current_user: User = Depends(get_current_user),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Classify intent with the NLU engine without executing handlers or mutating chat state."""
+    try:
+        logger.info("Detecting intent for user %s", current_user.id)
+        history = []
+        for item in request.conversation or []:
+            role = (item.get("role") or "").strip() or "user"
+            content = (item.get("content") or item.get("text") or "").strip()
+            if content:
+                history.append({"role": role, "content": content})
+
+        intent, slots, missing_slots = nlu_system.intent_detector.detect_intent_and_slots(
+            request.message,
+            history,
+            request.current_intent,
+        )
+        return {
+            "intent": intent,
+            "slots": slots or {},
+            "missing_slots": missing_slots or [],
+        }
+    except Exception as e:
+        logger.error("Error detecting intent: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error detecting intent",
         )
 
 

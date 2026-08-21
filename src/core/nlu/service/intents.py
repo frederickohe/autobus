@@ -228,6 +228,14 @@ class IntentDetector:
         - If the user is clearly finished (bye, goodbye, that's all, nothing else), set intent to "goodbye".
         - If the user is only thanking the assistant or saying an answer helped (thanks, got it, that helps) without a new question, still prefer "goodbye" only when they also indicate they are done; otherwise keep the current conversational intent.
         
+        CONTENT GENERATION (image / video / text):
+        - If the user wants a picture, photo, poster, flyer, thumbnail, still, or visual artwork → generate_image
+        - If the user wants a video, reel, clip, animation, or motion content → generate_video
+        - If the user wants a caption, slogan, ad copy, hashtags, or written post text → generate_text
+        - Examples: "make a flyer for my bakery" → generate_image; "15 second promo reel" → generate_video; "write a weekend sale caption" → generate_text
+        - Follow-ups that refine the last output ("make it darker", "shorter", "add a logo", "more festive") KEEP the current generate_image / generate_video / generate_text intent
+        - Only switch among generate_image, generate_video, and generate_text when the user clearly asks for a different medium
+        
         CRITICAL RULES:
         - If user provides additional information for current intent: KEEP SAME INTENT
         - If user corrects or modifies previous information: KEEP SAME INTENT  

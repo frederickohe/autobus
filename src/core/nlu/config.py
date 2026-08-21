@@ -80,17 +80,24 @@ INTENTS = {
 
     #==== IMAGE GENERATION AGENT INTENTS =====
     "generate_image": {
-        "description": "Generate an image based on a text prompt",
+        "description": "Generate an image, photo, poster, flyer, or still based on a text prompt",
         "slots": ["prompt", "num_images"],
         "required_slots": ["prompt"],
         "category": "image_generation"
     },
     #==== VIDEO GENERATION AGENT INTENTS =====
     "generate_video": {
-        "description": "Generate a video based on a text prompt",
+        "description": "Generate a video, reel, clip, or animation based on a text prompt",
         "slots": ["prompt", "duration"],
         "required_slots": ["prompt"],
         "category": "video_generation"
+    },
+    #==== TEXT / COPY GENERATION AGENT INTENTS =====
+    "generate_text": {
+        "description": "Generate marketing copy, captions, slogans, or post text based on a brief",
+        "slots": ["prompt"],
+        "required_slots": ["prompt"],
+        "category": "text_generation"
     },
     #==== PRODUCT MANAGEMENT AGENT INTENTS =====
     "add_product": {
@@ -466,6 +473,7 @@ INTENT_CATEGORIES = {
     "email": ["send_email", "read_emails", "update_sender_email"],
     "image_generation": ["generate_image"],
     "video_generation": ["generate_video"],
+    "text_generation": ["generate_text"],
     "product_management": ["add_product", "update_product", "delete_product", "view_products", "view_product"],
     "order_management": ["create_order", "update_order", "send_order_invoice"],
     "financial_tips": ["financial_tips", "budgeting_advice", "savings_tips", "investment_advice", "debt_management"],
