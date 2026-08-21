@@ -138,14 +138,20 @@ echo "Starting Autobus application..."
 # Trust X-Forwarded-* from the edge proxy (Caddy) so redirects keep https://
 # instead of rewriting Location to http:// and breaking authenticated clients.
 # (Those are uvicorn settings — pass via ProxyHeadersUvicornWorker, not gunicorn CLI.)
+# Default 2 workers: the VPS is 8GB with TEI/Postiz/Chatwoot sharing RAM.
+# 4 workers ~doubled RSS and made OOM kills of gunicorn more likely.
+WORKERS="${GUNICORN_WORKERS:-2}"
+echo "  gunicorn workers=${WORKERS}"
 exec gunicorn \
 	--bind 0.0.0.0:8000 \
-	--workers 4 \
+	--workers "$WORKERS" \
 	--worker-class src.uvicorn_worker.ProxyHeadersUvicornWorker \
 	--name autobus \
 	--error-logfile - \
 	--access-logfile - \
 	--log-level info \
 	--timeout 120 \
+	--max-requests 1000 \
+	--max-requests-jitter 100 \
 	src.main:app
 

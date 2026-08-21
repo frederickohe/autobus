@@ -39,8 +39,6 @@ _CHANNEL_ALIASES = {
     "wa": "whatsapp",
     "fb": "facebook",
     "ig": "instagram",
-    "tw": "twitter",
-    "x": "twitter",
     "li": "linkedin",
     "tg": "telegram",
 }
@@ -50,7 +48,6 @@ _VALID_CHANNELS = frozenset(
         "whatsapp",
         "facebook",
         "instagram",
-        "twitter",
         "linkedin",
         "telegram",
         "line",
@@ -243,7 +240,7 @@ async def chatwoot_session(
         },
         message=(
             "Open login_page_url in a WebView or browser, sign in with chatwoot_login.body, "
-            "then navigate to authorization_url to add messaging inboxes (WhatsApp, Twitter, etc.)."
+            "then navigate to authorization_url to add messaging inboxes (WhatsApp, Instagram, etc.)."
         ),
     )
 

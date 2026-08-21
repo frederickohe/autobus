@@ -246,6 +246,12 @@ services:
       RAG_TENANT_MODE: ${RAG_TENANT_MODE:-company_then_user}
       RAG_USE_INTERNAL_USER_TENANT: ${RAG_USE_INTERNAL_USER_TENANT:-true}
 
+      # Keep gunicorn RSS bounded on the shared 8GB VPS (see startup.sh).
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+
+    # Cap the API so a leak cannot take down Postgres/Redis/Caddy.
+    mem_limit: 1536m
+
     ports:
       - "8000:8000"
     extra_hosts:

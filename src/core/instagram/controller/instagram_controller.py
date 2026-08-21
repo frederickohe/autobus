@@ -165,7 +165,10 @@ def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> In
 
     profile: dict = {}
     try:
-        profile = svc.fetch_profile(access_token)
+        profile = svc.fetch_profile(
+            access_token,
+            ig_user_id=str(user_id_from_token or "").strip() or None,
+        )
     except Exception as exc:
         logger.warning("[IG] profile fetch failed, using token user_id: %s", exc)
 

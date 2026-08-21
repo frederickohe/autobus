@@ -390,6 +390,26 @@ async def start_dialog(
         logger.info(f"Received webhook payload: {json.dumps(payload, indent=2)}")
     else:
         logger.info("Received webhook payload keys=%s", list(payload.keys()) if isinstance(payload, dict) else type(payload))
+        if isinstance(payload, dict):
+            entries = payload.get("entry") or []
+            logger.info(
+                "Webhook object=%s entries=%s",
+                payload.get("object"),
+                [
+                    {
+                        "id": e.get("id") if isinstance(e, dict) else None,
+                        "keys": list(e.keys()) if isinstance(e, dict) else type(e).__name__,
+                        "fields": [
+                            c.get("field")
+                            for c in (e.get("changes") or [])
+                            if isinstance(c, dict)
+                        ]
+                        if isinstance(e, dict)
+                        else [],
+                    }
+                    for e in entries[:5]
+                ],
+            )
 
     try:
         customer = _payload_str(payload, "customer_number", "customer_phone", "customer")
@@ -504,53 +524,130 @@ def _ig_message_text(message: Any) -> str:
     return ""
 
 
+def _ig_event_ids(event: dict, entry_id: str = "") -> Tuple[str, str]:
+    sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
+    recipient = event.get("recipient") if isinstance(event.get("recipient"), dict) else {}
+    from_id = event.get("from")
+    if isinstance(from_id, dict):
+        from_id = from_id.get("id")
+    to_id = event.get("to")
+    if isinstance(to_id, dict):
+        to_id = to_id.get("id")
+    metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
+    sender_id = str(sender.get("id") or from_id or "").strip()
+    recipient_id = str(
+        recipient.get("id")
+        or to_id
+        or metadata.get("phone_number_id")
+        or entry_id
+        or ""
+    ).strip()
+    return sender_id, recipient_id
+
+
 def handle_instagram_webhook(payload: dict, db: Session):
     """Handle Instagram Login messaging webhooks (inbox DMs)."""
     from core.instagram.model.InstagramAccount import InstagramAccount
     from core.instagram.service.instagram_oauth_service import InstagramOAuthService
 
+    entries = payload.get("entry") or []
+    logger.info(
+        "[IG webhook] object=%s entries=%s",
+        payload.get("object"),
+        [
+            {
+                "id": e.get("id") if isinstance(e, dict) else None,
+                "keys": list(e.keys()) if isinstance(e, dict) else type(e).__name__,
+                "messaging": len(e.get("messaging") or []) if isinstance(e, dict) else 0,
+                "fields": [
+                    c.get("field")
+                    for c in (e.get("changes") or [])
+                    if isinstance(c, dict)
+                ]
+                if isinstance(e, dict)
+                else [],
+            }
+            for e in entries
+        ],
+    )
+
     events = []
-    for entry in payload.get("entry") or []:
+    for entry in entries:
         if not isinstance(entry, dict):
             continue
+        entry_id = str(entry.get("id") or "").strip()
         for item in entry.get("messaging") or []:
             if isinstance(item, dict):
-                events.append(item)
+                events.append((item, entry_id))
         for change in entry.get("changes") or []:
             if not isinstance(change, dict):
                 continue
             field = str(change.get("field") or "")
             value = change.get("value") if isinstance(change.get("value"), dict) else {}
-            if field in {"messages", "messaging"}:
-                events.append(value)
+            if field not in {"messages", "messaging", "message"}:
+                continue
+            nested_messages = value.get("messages")
+            if isinstance(nested_messages, list):
+                for msg in nested_messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    metadata = value.get("metadata") if isinstance(value.get("metadata"), dict) else {}
+                    events.append(
+                        (
+                            {
+                                "sender": {"id": msg.get("from") or (msg.get("sender") or {}).get("id")},
+                                "recipient": {"id": metadata.get("phone_number_id") or entry_id},
+                                "message": msg,
+                            },
+                            entry_id,
+                        )
+                    )
+            else:
+                events.append((value, entry_id))
 
     if not events:
+        logger.info("[IG webhook] no messaging events in payload")
         return {"status": "ok", "message": "No Instagram messaging events"}
 
     svc = InstagramOAuthService()
     handled = 0
-    for event in events:
-        sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
-        recipient = event.get("recipient") if isinstance(event.get("recipient"), dict) else {}
-        sender_id = str(sender.get("id") or "").strip()
-        recipient_id = str(recipient.get("id") or "").strip()
+    for event, entry_id in events:
+        sender_id, recipient_id = _ig_event_ids(event, entry_id)
         if not sender_id or not recipient_id or sender_id == recipient_id:
+            logger.info(
+                "[IG webhook] skip event sender=%s recipient=%s keys=%s",
+                sender_id or "-",
+                recipient_id or "-",
+                list(event.keys()) if isinstance(event, dict) else type(event).__name__,
+            )
             continue
-        text = _ig_message_text(event.get("message") or {})
+        text = _ig_message_text(event.get("message") or event)
         if not text:
+            logger.info(
+                "[IG webhook] skip empty/echo sender=%s recipient=%s",
+                sender_id,
+                recipient_id,
+            )
             continue
 
+        lookup_ids = [recipient_id]
+        if entry_id and entry_id not in lookup_ids:
+            lookup_ids.append(entry_id)
         account = (
             db.query(InstagramAccount)
             .filter(
-                InstagramAccount.ig_user_id == recipient_id,
+                InstagramAccount.ig_user_id.in_(lookup_ids),
                 InstagramAccount.is_active.is_(True),
                 InstagramAccount.messaging_enabled.is_(True),
             )
             .first()
         )
         if not account:
-            logger.warning("[IG webhook] no linked account for ig_user_id=%s", recipient_id)
+            logger.warning(
+                "[IG webhook] no linked account for ig_user_id=%s entry_id=%s",
+                recipient_id,
+                entry_id or "-",
+            )
             continue
 
         nlu_user_id = f"{account.user_id}:ig:{sender_id}"

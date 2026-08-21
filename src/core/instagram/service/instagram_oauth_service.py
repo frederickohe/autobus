@@ -242,7 +242,7 @@ class InstagramOAuthService:
     def exchange_long_lived(self, short_token: str) -> Dict[str, Any]:
         """Exchange short-lived token for ~60-day long-lived token."""
         self.require_config()
-        url = f"{self.graph_base}/access_token"
+        url = f"{self._versioned_graph()}/access_token"
         params = {
             "grant_type": "ig_exchange_token",
             "client_secret": self.app_secret,
@@ -261,19 +261,36 @@ class InstagramOAuthService:
             return {"access_token": short_token}
         return data
 
-    def fetch_profile(self, access_token: str) -> Dict[str, Any]:
-        url = f"{self.graph_base}/me"
+    def fetch_profile(self, access_token: str, ig_user_id: Optional[str] = None) -> Dict[str, Any]:
+        """Load Instagram profile.
+
+        Prefer ``/{ig-user-id}`` over ``/me`` — Instagram Login often rejects
+        ``/me`` with IGApiException 100 ``Unsupported request - method type: get``.
+        """
         params = {
             # Meta returns `id` as the app-scoped user id; `user_id` is the
             # Instagram professional account id used in webhook recipient ids.
             "fields": "id,user_id,username,name,account_type,profile_picture_url",
             "access_token": access_token,
         }
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code >= 400:
-            logger.error("[IG] /me failed: %s %s", resp.status_code, resp.text[:400])
-            resp.raise_for_status()
-        return resp.json()
+        ig_id = (ig_user_id or "").strip()
+        urls = []
+        if ig_id:
+            urls.append(f"{self._versioned_graph()}/{ig_id}")
+        urls.append(f"{self._versioned_graph()}/me")
+        last_error: Optional[Exception] = None
+        for url in urls:
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code < 400:
+                return resp.json()
+            logger.error("[IG] profile fetch failed %s: %s %s", url, resp.status_code, resp.text[:400])
+            last_error = requests.HTTPError(
+                f"{resp.status_code} Client Error for url: {url}",
+                response=resp,
+            )
+        if last_error:
+            raise last_error
+        raise RuntimeError("Instagram profile fetch failed")
 
     def _versioned_graph(self) -> str:
         ver = (os.getenv("INSTAGRAM_GRAPH_VERSION") or "v21.0").strip().strip("/")
@@ -285,27 +302,32 @@ class InstagramOAuthService:
         token = (access_token or "").strip()
         if not ig_id or not token:
             return False
-        url = f"{self._versioned_graph()}/{ig_id}/subscribed_apps"
         fields = (
             os.getenv("INSTAGRAM_WEBHOOK_FIELDS")
             or "messages,messaging_seen,comments,live_comments,mentions"
         ).strip()
-        resp = requests.post(
-            url,
-            params={"subscribed_fields": fields, "access_token": token},
-            timeout=30,
-        )
-        if resp.status_code >= 400:
+        urls = [
+            f"{self._versioned_graph()}/{ig_id}/subscribed_apps",
+            f"{self._versioned_graph()}/me/subscribed_apps",
+        ]
+        for url in urls:
+            resp = requests.post(
+                url,
+                params={"subscribed_fields": fields, "access_token": token},
+                timeout=30,
+            )
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                ok = bool(data.get("success", True)) if isinstance(data, dict) else True
+                logger.info("[IG] subscribed_apps ig_user_id=%s success=%s", ig_id, ok)
+                return ok
             logger.warning(
-                "[IG] subscribed_apps failed (%s): %s",
+                "[IG] subscribed_apps failed (%s) %s: %s",
                 resp.status_code,
+                url,
                 resp.text[:400],
             )
-            return False
-        data = resp.json() if resp.content else {}
-        ok = bool(data.get("success", True)) if isinstance(data, dict) else True
-        logger.info("[IG] subscribed_apps ig_user_id=%s success=%s", ig_id, ok)
-        return ok
+        return False
 
     def send_text(self, access_token: str, recipient_igsid: str, text: str) -> bool:
         """Send an Instagram DM via Instagram API with Instagram Login."""
