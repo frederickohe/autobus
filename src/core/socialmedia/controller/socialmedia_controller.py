@@ -966,6 +966,7 @@ async def create_digital_marketing_asset(
         marketing_text=(body.marketing_text or "").strip(),
         content_links=list(body.content_links or []),
         conversation=body.conversation,
+        contents=body.contents,
     )
     return DigitalMarketingAssetDetailResponse.model_validate(row)
 

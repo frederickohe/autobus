@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -325,12 +325,40 @@ class DigitalMarketingAssetResponse(BaseModel):
 
 
 class DigitalMarketingAssetDetailResponse(DigitalMarketingAssetResponse):
-    """Same as list row plus Postiz API response snapshot."""
+    """Same as list row plus archived chat (conversation + media) when present."""
 
     postiz_response: Optional[Dict[str, Any]] = None
+    conversation: List[Dict[str, Any]] = Field(default_factory=list)
+    contents: List[Dict[str, Any]] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_chat_payload(cls, data: Any) -> Any:
+        payload = None
+        if isinstance(data, dict):
+            payload = data.get("postiz_response")
+            out = dict(data)
+        else:
+            payload = getattr(data, "postiz_response", None)
+            out = {
+                "id": getattr(data, "id", None),
+                "agent_name": getattr(data, "agent_name", None),
+                "marketing_text": getattr(data, "marketing_text", None),
+                "content_links": getattr(data, "content_links", None) or [],
+                "created_at": getattr(data, "created_at", None),
+                "postiz_response": payload,
+            }
+        chat = payload if isinstance(payload, dict) else {}
+        if "conversation" not in out or out.get("conversation") is None:
+            conv = chat.get("conversation")
+            out["conversation"] = conv if isinstance(conv, list) else []
+        if "contents" not in out or out.get("contents") is None:
+            contents = chat.get("contents")
+            out["contents"] = contents if isinstance(contents, list) else []
+        return out
 
 
 class DigitalMarketingAssetListResponse(BaseModel):
@@ -344,4 +372,5 @@ class DigitalMarketingAssetCreate(BaseModel):
     marketing_text: Optional[str] = None
     content_links: List[str] = Field(default_factory=list)
     conversation: Optional[List[Dict[str, Any]]] = None
+    contents: Optional[List[Dict[str, Any]]] = None
     agent_name: str = "digital_marketing"

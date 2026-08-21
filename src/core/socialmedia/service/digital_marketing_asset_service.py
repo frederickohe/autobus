@@ -20,10 +20,12 @@ class DigitalMarketingAssetService:
         marketing_text: str,
         content_links: List[str],
         conversation: Optional[List[Dict[str, Any]]] = None,
+        contents: Optional[List[Dict[str, Any]]] = None,
     ) -> DigitalMarketingPostAsset:
         payload: Dict[str, Any] = {
             "kind": "chat_campaign",
             "conversation": list(conversation or []),
+            "contents": list(contents or []),
         }
         return self.create_from_postiz(
             user_internal_id=user_internal_id,
