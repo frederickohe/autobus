@@ -12,6 +12,27 @@ class DigitalMarketingAssetService:
     def __init__(self, db: Session):
         self.db = db
 
+    def create_campaign(
+        self,
+        *,
+        user_internal_id: str,
+        agent_name: str,
+        marketing_text: str,
+        content_links: List[str],
+        conversation: Optional[List[Dict[str, Any]]] = None,
+    ) -> DigitalMarketingPostAsset:
+        payload: Dict[str, Any] = {
+            "kind": "chat_campaign",
+            "conversation": list(conversation or []),
+        }
+        return self.create_from_postiz(
+            user_internal_id=user_internal_id,
+            agent_name=agent_name,
+            marketing_text=marketing_text,
+            content_links=content_links,
+            postiz_response=payload,
+        )
+
     def create_from_postiz(
         self,
         *,

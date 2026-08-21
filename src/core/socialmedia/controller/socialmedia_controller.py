@@ -21,6 +21,7 @@ from core.socialmedia.dto.socialmedia_dto import (
     DigitalMarketingAssetListResponse,
     DigitalMarketingAssetResponse,
     DigitalMarketingAssetDetailResponse,
+    DigitalMarketingAssetCreate,
 )
 from core.socialmedia.service.socialmedia_service import SocialMediaService
 from core.socialmedia.service.post_publishing_service import PostPublishingService
@@ -942,6 +943,31 @@ async def postiz_create_post(
             )
 
     return result
+
+
+@social_routes.post(
+    "/digital-marketing/assets",
+    response_model=DigitalMarketingAssetDetailResponse,
+)
+async def create_digital_marketing_asset(
+    body: DigitalMarketingAssetCreate,
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Archive a chat campaign (text transcript + media URLs) as a recent campaign."""
+    user = _get_user_for_jwt_subject(db, jwt_subject)
+    canonical_agent = (
+        normalize_digital_marketing_agent_name(body.agent_name)
+        or "digital_marketing"
+    )
+    row = DigitalMarketingAssetService(db).create_campaign(
+        user_internal_id=str(user.id),
+        agent_name=canonical_agent,
+        marketing_text=(body.marketing_text or "").strip(),
+        content_links=list(body.content_links or []),
+        conversation=body.conversation,
+    )
+    return DigitalMarketingAssetDetailResponse.model_validate(row)
 
 
 @social_routes.get(

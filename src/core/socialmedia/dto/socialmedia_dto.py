@@ -336,3 +336,12 @@ class DigitalMarketingAssetDetailResponse(DigitalMarketingAssetResponse):
 class DigitalMarketingAssetListResponse(BaseModel):
     items: List[DigitalMarketingAssetResponse]
     total: int
+
+
+class DigitalMarketingAssetCreate(BaseModel):
+    """Archive a chat campaign (conversation + media) without posting to Postiz."""
+
+    marketing_text: Optional[str] = None
+    content_links: List[str] = Field(default_factory=list)
+    conversation: Optional[List[Dict[str, Any]]] = None
+    agent_name: str = "digital_marketing"
