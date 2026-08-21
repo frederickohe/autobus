@@ -1,6 +1,5 @@
 # core/nlu/service/intent_processor.py
 import json
-import re
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Any, Optional
 from core.customers.service.customer_service import CustomerService
@@ -20,6 +19,7 @@ from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMP
 from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
 from utilities.phone_utils import normalize_ghana_phone_number
+from utilities.plain_text import strip_markdown_formatting
 import logging
 from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
 
@@ -117,7 +117,9 @@ class IntentProcessor:
             temperature=temperature,
         )
         
-        return self._format_conversational_response(intent, response, slots)
+        return strip_markdown_formatting(
+            self._format_conversational_response(intent, response, slots)
+        )
     
     def process_financial_tips_intent(
         self,
@@ -145,7 +147,9 @@ class IntentProcessor:
             temperature=0.4
         )
         
-        return self._format_financial_tips_response(intent, response, slots)
+        return strip_markdown_formatting(
+            self._format_financial_tips_response(intent, response, slots)
+        )
 
     def process_expense_report_intent(
         self,
@@ -174,7 +178,7 @@ class IntentProcessor:
             temperature=0.4
         )
         
-        return self._clean_markdown_formatting(response)
+        return strip_markdown_formatting(response)
     
     def process_customers_intent(
     self,
@@ -433,32 +437,6 @@ class IntentProcessor:
             return template.format(response=response, **slots)
         
         return response
-
-    def _clean_markdown_formatting(self, response: str) -> str:
-        """
-        Remove markdown formatting from response.
-        Removes bold (**text**), italic (*text*), and other common markdown symbols
-        """
-        import re
-        
-        # Remove bold (**text** or __text__)
-        response = re.sub(r'\*\*(.+?)\*\*', r'\1', response)
-        response = re.sub(r'__(.+?)__', r'\1', response)
-        
-        # Remove italic (*text* or _text_) - be careful not to remove single asterisks
-        response = re.sub(r'\*([^*\n]+)\*', r'\1', response)
-        response = re.sub(r'_([^_\n]+)_', r'\1', response)
-        
-        # Remove markdown headings (# ## ### etc)
-        response = re.sub(r'^#+\s+', '', response, flags=re.MULTILINE)
-        
-        # Remove markdown code blocks (```code```)
-        response = re.sub(r'```.*?```', '', response, flags=re.DOTALL)
-        
-        # Remove inline code (`code`)
-        response = re.sub(r'`([^`]+)`', r'\1', response)
-        
-        return response.strip()
 
     # ===== EMAIL INTENT HANDLER =====
     def process_email_intent(

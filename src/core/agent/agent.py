@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from core.nlu.config import SYSTEM_PROMPTS
 from core.nlu.service.llmclient import LLMClient
+from utilities.plain_text import strip_markdown_formatting
 
 logger = logging.getLogger(__name__)
 
@@ -77,4 +78,4 @@ class AutoBus:
         )
         if not response:
             return "Sorry, I could not generate marketing text right now. Please try again."
-        return response
+        return strip_markdown_formatting(response)

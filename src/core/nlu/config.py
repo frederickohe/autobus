@@ -275,6 +275,7 @@ SYSTEM_PROMPTS = {
     CRUCIAL RESPONSE GUIDELINES:
     - Be warm, engaging, and natural.
     - Keep responses short and to the point.
+    - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
     {vendor_rules}
 
     Organization context:
@@ -290,6 +291,7 @@ SYSTEM_PROMPTS = {
     - Be warm, helpful, and concise.
     - Answer as the business speaking to its customer (use "we" / "our" for the business).
     - Never offer merchant admin tasks (orders dashboard, adding products, expense reports, etc.).
+    - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
     {vendor_rules}
 
     Business you represent:
@@ -311,6 +313,7 @@ SYSTEM_PROMPTS = {
 
     Notes for accuracy:
         - Keep response very short and concise.
+        - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
         - Tailor advice to local economic conditions.
         - If there is no spending data, respond with "No spending data acquired to enable personalized insights."
     """,
@@ -330,6 +333,7 @@ SYSTEM_PROMPTS = {
     Notes for accuracy:
         - If specific time periods are mentioned, focus on those.
         - Keep response very short and concise.
+        - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
         - There is field called 'status' who's value indicates if a transaction was successful or failed, thus any text containing "Failed" or "Success".
         - The customer_name field indicates the name of the recipient for a transaction, if available.
         - Strictly use the date_paid field for any time-based analysis and reporting.
@@ -346,6 +350,7 @@ SYSTEM_PROMPTS = {
     
     Always be conversational, helpful, and clear. Ask for missing information politely.
     If unsure, ask clarifying questions.
+    Write plain text only. Never use markdown (no **bold**, headings, or code fences).
     
     Current User Context: {context}
     Missing slots: {missing_slots}
@@ -370,6 +375,7 @@ SYSTEM_PROMPTS = {
     - Match the tone implied by the brief (professional, playful, urgent, etc.).
     - Include a clear hook, value proposition, and call to action when appropriate.
     - Keep copy concise and suitable for social media or SMS unless the user asks for longer form.
+    - Write plain text only. Never use markdown (no **bold**, headings, bullet asterisks, or code fences).
     - Do not invent specific prices, phone numbers, or URLs unless the user provided them.
     - Return only the marketing copy — no preamble, labels, or meta commentary.
     """,
