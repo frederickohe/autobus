@@ -375,9 +375,12 @@ def apply_facebook_login_config_id(
     slug: Optional[str] = None,
 ) -> str:
     """
-    Postiz's Facebook OAuth URL only sends `scope=`. Business-type Meta apps
-    (WhatsApp/Messenger) require Facebook Login for Business `config_id`,
-    otherwise Meta shows "this app isn't available" after login.
+    Rewrite Postiz's Facebook OAuth URL for Facebook Login for Business.
+
+    Postiz only sends ``scope=...``. Business-type Meta apps need ``config_id``
+    instead. Mixing leftover ``scope`` / ``auth_type`` with ``config_id``, or
+    omitting ``response_type=code`` + ``override_default_response_type=true``,
+    makes Meta show "Sorry, something went wrong" on the Continue-as screen.
     """
     url = (authorization_url or "").strip()
     if not url:
@@ -397,8 +400,12 @@ def apply_facebook_login_config_id(
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     query["config_id"] = cid
-    # Meta: Login for Business uses config_id instead of scope.
-    query.pop("scope", None)
+    # Login for Business: config_id replaces scope. Do not keep auth_type or
+    # WhatsApp Embedded Signup extras on a Page-publishing dialog.
+    for drop in ("scope", "auth_type", "extras"):
+        query.pop(drop, None)
+    query["response_type"] = "code"
+    query["override_default_response_type"] = "true"
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
     )

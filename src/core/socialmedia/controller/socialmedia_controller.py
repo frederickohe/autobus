@@ -281,6 +281,8 @@ async def _build_postiz_platform_connect(
         authorization_url,
         slug=used_slug,
     )
+    if used_slug.strip().lower() == "facebook":
+        logger.info("[SOCIAL] Facebook Login for Business URL ready (config_id applied)")
 
     provider_label = used_slug.replace("-", " ").title()
 
