@@ -257,6 +257,228 @@ class AutobusNLUSystem:
         )
         return any(t.startswith(p) for p in prefixes)
 
+    _CUSTOMER_GREETING_EXACT = {
+        "hello",
+        "hi",
+        "hey",
+        "hiya",
+        "yo",
+        "hola",
+        "howdy",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "good day",
+        "hey there",
+        "hi there",
+        "hello there",
+        "morning",
+        "evening",
+        "afternoon",
+        "how are you",
+        "how are you doing",
+        "how's it going",
+        "hows it going",
+        "what's up",
+        "whats up",
+        "sup",
+    }
+    _CUSTOMER_GREETING_STARTERS = {
+        "hi",
+        "hello",
+        "hey",
+        "hiya",
+        "yo",
+        "hola",
+        "howdy",
+    }
+    _CUSTOMER_GOODBYE_EXACT = {
+        "bye",
+        "goodbye",
+        "good bye",
+        "see you",
+        "see ya",
+        "later",
+        "that's all",
+        "thats all",
+        "that is all",
+        "nothing else",
+        "nothing more",
+        "i'm done",
+        "im done",
+        "we're done",
+        "were done",
+        "that's it",
+        "thats it",
+        "that is it",
+        "thanks bye",
+        "thank you bye",
+    }
+    _CUSTOMER_HANDOFF_EXACT = {
+        "human",
+        "agent",
+        "representative",
+        "support",
+        "customer service",
+        "customer support",
+    }
+    _CUSTOMER_HANDOFF_PHRASES = (
+        "talk to a human",
+        "talk to an agent",
+        "talk to a person",
+        "talk to someone",
+        "talk to a representative",
+        "talk to support",
+        "speak to a human",
+        "speak to an agent",
+        "speak to a person",
+        "speak to someone",
+        "speak to a representative",
+        "speak to support",
+        "human agent",
+        "human please",
+        "real person",
+        "real human",
+        "live agent",
+        "live person",
+        "customer service",
+        "customer support",
+        "i want a human",
+        "i need a human",
+        "connect me to a human",
+        "connect me to an agent",
+        "transfer me to a human",
+        "transfer me to an agent",
+        "can i speak to someone",
+        "can i talk to someone",
+    )
+    _DEFAULT_IMAGE_PLACEHOLDER = "i am providing you with an image"
+    _DEFAULT_AUDIO_PLACEHOLDER = "i'm sending you an audio message"
+
+    @classmethod
+    def _is_customer_greeting(cls, text: str) -> bool:
+        t = cls._normalize_chat_text(text)
+        if not t:
+            return False
+        if t in cls._CUSTOMER_GREETING_EXACT:
+            return True
+        if cls._looks_like_new_request(text):
+            return False
+        words = t.split()
+        if not words or words[0] not in cls._CUSTOMER_GREETING_STARTERS or len(words) > 3:
+            return False
+        rest = " ".join(words[1:])
+        if any(
+            token in rest
+            for token in (
+                "price",
+                "cost",
+                "order",
+                "buy",
+                "have",
+                "stock",
+                "open",
+                "hours",
+                "available",
+            )
+        ):
+            return False
+        return True
+
+    @classmethod
+    def _is_customer_goodbye(cls, text: str) -> bool:
+        t = cls._normalize_chat_text(text)
+        if not t or cls._looks_like_new_request(text):
+            return False
+        if t in cls._CUSTOMER_GOODBYE_EXACT:
+            return True
+        return t.startswith("bye ") or t.startswith("goodbye ")
+
+    @classmethod
+    def _is_customer_handoff(cls, text: str) -> bool:
+        t = cls._normalize_chat_text(text)
+        if not t:
+            return False
+        if t in cls._CUSTOMER_HANDOFF_EXACT:
+            return True
+        return any(phrase in t for phrase in cls._CUSTOMER_HANDOFF_PHRASES)
+
+    def _enrich_customer_channel_text(
+        self, user_message: str, media_context: Optional[Dict[str, Any]]
+    ) -> str:
+        """Fold audio transcription / image OCR into the customer message once."""
+        text = user_message or ""
+        if not media_context:
+            return text
+
+        llm = self.intent_processor.llm_client
+        if media_context.get("audio_bytes"):
+            try:
+                transcription = llm.transcribe_audio_from_bytes(
+                    media_context.get("audio_bytes"),
+                    filename=media_context.get("audio_filename") or "audio.mp3",
+                )
+                if transcription:
+                    if text and not self._normalize_chat_text(text).startswith(
+                        self._DEFAULT_AUDIO_PLACEHOLDER
+                    ):
+                        text = f"{text}\n{transcription}"
+                    else:
+                        text = transcription
+            except Exception as exc:
+                logger.warning("Customer-channel audio transcription failed: %s", exc)
+
+        if media_context.get("image_base64") or media_context.get("image_url"):
+            try:
+                from utilities.phone_utils import clean_ocr_text
+
+                extracted = llm.extract_text_from_image(
+                    image_base64=media_context.get("image_base64"),
+                    image_url=media_context.get("image_url"),
+                    image_media_type=media_context.get("image_mime_type") or "image/jpeg",
+                )
+                refusal_phrases = (
+                    "unable to process images",
+                    "cannot process images",
+                    "can't process images",
+                    "cannot access the image",
+                    "cannot view the image",
+                    "can't view images",
+                )
+                extracted_low = (extracted or "").lower()
+                if extracted and not any(p in extracted_low for p in refusal_phrases):
+                    clean_text = clean_ocr_text(extracted) or extracted
+                    if text and not self._normalize_chat_text(text).startswith(
+                        self._DEFAULT_IMAGE_PLACEHOLDER
+                    ):
+                        text = f"{text}\n{clean_text}"
+                    else:
+                        text = clean_text
+            except Exception as exc:
+                logger.warning("Customer-channel image OCR failed: %s", exc)
+
+        return text
+
+    def _classify_customer_channel_intent(
+        self, user_message: str, media_context: Optional[Dict[str, Any]] = None
+    ) -> tuple:
+        """Rule-based intent for WhatsApp/Instagram/web customer sessions. No LLM."""
+        if self._is_customer_handoff(user_message):
+            return "request_intervention", {}, []
+        if self._is_customer_goodbye(user_message):
+            return "goodbye", {}, []
+        if self._is_customer_greeting(user_message):
+            return "greeting", {}, []
+
+        media = media_context or {}
+        has_image = bool(media.get("image_base64") or media.get("image_url"))
+        normalized = self._normalize_chat_text(user_message)
+        if has_image and (
+            not normalized or normalized.startswith(self._DEFAULT_IMAGE_PLACEHOLDER)
+        ):
+            return "cannot_process_image", {}, []
+        return "business_conversation", {}, []
+
     def _goodbye_copy(self, user_id: str) -> str:
         user_data = self._get_user_data(user_id)
         if user_data and user_data.get("is_customer_session"):
@@ -486,19 +708,32 @@ class AutobusNLUSystem:
                 audio_media_id=audio_media_id,
                 audio_url=audio_url
             )
-        
-        # Detect intent and extract slots
-        logger.info("Detecting intent for user %s (current_intent=%s)", user_id, state.current_intent)
-        intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
-            user_message, state.conversation_history, state.current_intent, media_context
-        )
 
-        # Customer→business webhook sessions must not escalate on unclear/unknown admin intents.
-        # Remap to RAG business chat before intervention gates fire.
-        # Preserve explicit human handoff and image-refusal intents.
         from core.nlu.config import INTENTS
 
         merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        if merchant_id:
+            # Customer WhatsApp/Instagram/web threads always land on conversational
+            # intents. Skip the large intent-classification LLM and use cheap rules.
+            user_message = self._enrich_customer_channel_text(user_message, media_context)
+            intent, extracted_slots, missing_slots = self._classify_customer_channel_intent(
+                user_message, media_context
+            )
+            logger.info(
+                "Customer session %s: skipped intent LLM, intent=%s",
+                user_id,
+                intent,
+            )
+        else:
+            logger.info(
+                "Detecting intent for user %s (current_intent=%s)",
+                user_id,
+                state.current_intent,
+            )
+            intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
+                user_message, state.conversation_history, state.current_intent, media_context
+            )
+
         if merchant_id:
             conversational_only = set(INTENT_CATEGORIES.get("conversational", []))
             preserve_intents = {
@@ -606,8 +841,10 @@ class AutobusNLUSystem:
         #     self.conversation_manager.update_conversation_history(user_id, "assistant", response)
         #     return response
 
-        # Check if user wants to cancel during slot collection
-        if state.current_intent and user_message:
+        # Check if user wants to cancel during slot collection.
+        # Customer channel sessions never collect payment slots — skip this so
+        # words like "stop" / "cancel" are answered as normal business chat.
+        if not merchant_id and state.current_intent and user_message:
             user_msg_lower = user_message.lower().strip()
             cancellation_keywords = ["cancel", "stop", "abort", "never mind", "nevermind", "quit"]
 
@@ -1723,6 +1960,16 @@ class AutobusNLUSystem:
         user_data: Optional[Dict[str, Any]],
     ) -> str:
         """Answer conversational intents via Qdrant retrieval + tenant-scoped LLM."""
+        if intent in ("greeting", "goodbye"):
+            return self.intent_processor.process_conversational_intent(
+                intent,
+                user_message,
+                conversation_history,
+                slots,
+                user_id=self._resolve_internal_user_id(user_id, user_data),
+                user_data=user_data,
+            )
+
         internal_user_id = self._resolve_internal_user_id(user_id, user_data)
         tenant_id = resolve_effective_rag_tenant_id(
             user_data,

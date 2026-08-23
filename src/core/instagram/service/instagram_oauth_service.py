@@ -329,6 +329,42 @@ class InstagramOAuthService:
             )
         return False
 
+    def send_sender_action(
+        self, access_token: str, recipient_igsid: str, action: str
+    ) -> bool:
+        """
+        Show Instagram inbox activity (typing_on, typing_off, or mark_seen).
+
+        typing_on lasts about 20 seconds or until a text reply is sent.
+        Failures are logged and ignored so indicator issues do not block replies.
+        """
+        token = (access_token or "").strip()
+        to = (recipient_igsid or "").strip()
+        sender_action = (action or "").strip().lower()
+        if not token or not to or sender_action not in {"typing_on", "typing_off", "mark_seen"}:
+            return False
+        url = f"{self._versioned_graph()}/me/messages"
+        try:
+            resp = requests.post(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                json={"recipient": {"id": to}, "sender_action": sender_action},
+                timeout=5,
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[IG] sender_action=%s failed (%s): %s",
+                    sender_action,
+                    resp.status_code,
+                    resp.text[:400],
+                )
+                return False
+            logger.info("[IG] sender_action=%s sent to %s", sender_action, to)
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.warning("[IG] sender_action=%s request failed: %s", sender_action, e)
+            return False
+
     def send_text(self, access_token: str, recipient_igsid: str, text: str) -> bool:
         """Send an Instagram DM via Instagram API with Instagram Login."""
         token = (access_token or "").strip()

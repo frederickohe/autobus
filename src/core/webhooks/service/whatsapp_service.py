@@ -148,6 +148,43 @@ class WhatsAppService:
                 logger.error(f"Response content: {e.response.text}")
             return None
 
+    def send_typing_indicator(self, phone_id: str, message_id: str) -> bool:
+        """
+        Mark an inbound WhatsApp message as read and show a typing indicator.
+
+        Cloud API displays typing for up to 25 seconds, or until the next outbound
+        message, whichever comes first. Failures are logged and ignored so a Meta
+        hiccup does not block the actual reply.
+        """
+        wa_message_id = (message_id or "").strip()
+        resolved_phone_id = (phone_id or self.default_phone_id or "").strip()
+        if not self.api_key or not resolved_phone_id or not wa_message_id:
+            return False
+
+        url = f"{self.base_url}/{resolved_phone_id}/messages"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": wa_message_id,
+            "typing_indicator": {"type": "text"},
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=5)
+            response.raise_for_status()
+            logger.info(
+                "WhatsApp typing indicator sent for message_id=%s", wa_message_id[:48]
+            )
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.warning("Failed to send WhatsApp typing indicator: %s", e)
+            if hasattr(e, "response") and e.response is not None:
+                logger.warning("Typing indicator response: %s", e.response.text[:400])
+            return False
+
     def send_message(
         self,
         phone_id: str,

@@ -26,6 +26,17 @@ def _nlu_reply_text(response_message: Optional[str]) -> str:
     return (response_message or "").strip()
 
 
+def _whatsapp_show_typing(whatsapp_service: WhatsAppService, phone_id: str, message: dict) -> None:
+    """Mark the inbound WhatsApp message read and show typing while the AI runs."""
+    message_id = (message or {}).get("id") if isinstance(message, dict) else None
+    if not message_id:
+        return
+    try:
+        whatsapp_service.send_typing_indicator(phone_id, str(message_id))
+    except Exception as exc:
+        logger.warning("WhatsApp typing indicator failed: %s", exc)
+
+
 # Public routes: Meta uses verify_token / app secret; other helpers use X-Api-Key when configured.
 webhooks_routes = APIRouter()
 
@@ -651,13 +662,23 @@ def handle_instagram_webhook(payload: dict, db: Session):
             continue
 
         nlu_user_id = f"{account.user_id}:ig:{sender_id}"
+        try:
+            token = svc.decrypt_token(account.access_token_encrypted)
+        except Exception as exc:
+            logger.error("[IG webhook] token decrypt failed for %s: %s", sender_id, exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to send Instagram reply",
+            )
+        svc.send_sender_action(token, sender_id, "mark_seen")
+        svc.send_sender_action(token, sender_id, "typing_on")
         nlu_system = AutobusNLUSystem(db_session=db)
         reply = nlu_system.process_message(nlu_user_id, text)
         outbound = _nlu_reply_text(reply)
         if not outbound:
+            svc.send_sender_action(token, sender_id, "typing_off")
             handled += 1
             continue
-        token = svc.decrypt_token(account.access_token_encrypted)
         sent = svc.send_text(token, sender_id, outbound)
         if not sent:
             logger.error("[IG webhook] failed to send reply to %s", sender_id)
@@ -892,6 +913,7 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     logger.info(f"Extracted text message: {message_text}")
 
     whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
+    _whatsapp_show_typing(whatsapp_service, phone_id, message)
     nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
     logger.info("Processing message through NLU for %s", nlu_user_id)
 
@@ -1117,6 +1139,7 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
         logger.info(f"Received image message from {phone}, media_id: {media_id}")
 
         whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
+        _whatsapp_show_typing(whatsapp_service, phone_id, message)
         nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
         logger.info("Processing image through NLU for %s", nlu_user_id)
 
@@ -1178,6 +1201,7 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
         logger.info(f"Received audio message from {phone}, media_id: {media_id}")
 
         whatsapp_service = WhatsAppService.for_phone_id(phone_id, db)
+        _whatsapp_show_typing(whatsapp_service, phone_id, message)
         nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
         logger.info("Processing audio through NLU for %s", nlu_user_id)
 
