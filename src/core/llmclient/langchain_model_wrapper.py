@@ -1,7 +1,8 @@
 """LangChain Model Wrapper for AutoBus
 
-This module provides a LangChain-compatible wrapper around Groq's OpenAI-compatible API,
-integrating with the existing LLMClient while supporting LangChain's agent and tool framework.
+This module provides a LangChain-compatible wrapper around the OpenRouter
+OpenAI-compatible API, integrating with the existing LLMClient while supporting
+LangChain's agent and tool framework.
 """
 
 import logging
@@ -10,7 +11,13 @@ from langchain_openai import ChatOpenAI
 from langchain.schema import BaseMessage, HumanMessage, SystemMessage, AIMessage
 import os
 from dotenv import load_dotenv
-from core.nlu.config import GROQ_API_KEY, GROQ_BASE_URL, MODEL
+from core.nlu.config import (
+    LLM_API_KEY,
+    LLM_APP_TITLE,
+    LLM_BASE_URL,
+    LLM_HTTP_REFERER,
+    MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +28,9 @@ load_dotenv(env_path)
 
 class LangChainOpenAIWrapper:
     """
-    LangChain-compatible wrapper for Groq-hosted chat models.
-    
-    This wrapper provides a consistent interface for use with LangChain agents and tools
-    while maintaining compatibility with the existing LLMClient infrastructure.
+    LangChain-compatible wrapper for OpenRouter-hosted chat models.
     """
-    
+
     def __init__(
         self,
         model_name: str = MODEL,
@@ -35,36 +39,39 @@ class LangChainOpenAIWrapper:
         api_key: Optional[str] = None
     ):
         """
-        Initialize the LangChain Groq wrapper.
-        
         Args:
-            model_name: Groq model name
+            model_name: OpenRouter model slug (e.g. openai/gpt-oss-120b)
             temperature: Creativity level (0-1), default 0.5
             max_tokens: Maximum tokens for responses, default 2096
-            api_key: Groq API key (defaults to GROQ_API_KEY env var)
+            api_key: API key (defaults to OPENROUTER_API_KEY / LLM_API_KEY)
         """
         self.model_name = model_name
         self.temperature = temperature
         self.max_tokens = max_tokens
-        
-        # Use provided API key or get from environment
-        self.api_key = api_key or GROQ_API_KEY or os.getenv("GROQ_API_KEY")
-        
-        # Initialize LangChain via Groq's OpenAI-compatible endpoint
+
+        self.api_key = api_key or LLM_API_KEY or os.getenv("OPENROUTER_API_KEY")
+
+        headers = {}
+        if LLM_HTTP_REFERER:
+            headers["HTTP-Referer"] = LLM_HTTP_REFERER
+        if LLM_APP_TITLE:
+            headers["X-OpenRouter-Title"] = LLM_APP_TITLE
+
         self.llm = ChatOpenAI(
             model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
             api_key=self.api_key,
-            base_url=GROQ_BASE_URL,
+            base_url=LLM_BASE_URL,
+            default_headers=headers or None,
             request_timeout=120
         )
-        
-        logger.info(f"Initialized LangChain Groq wrapper with model: {model_name}")
+
+        logger.info("Initialized LangChain LLM wrapper with model: %s", model_name)
     
     def __call__(self, prompt: str, **kwargs) -> str:
         """
-        Process a prompt using Groq.
+        Process a prompt using the configured chat model.
         
         Args:
             prompt: The input prompt/message

@@ -1,13 +1,9 @@
-import openai
-import base64
 import logging
 from typing import Dict, List, Any, Optional
 from core.nlu.config import (
     AUDIO_TRANSCRIPTION_MODEL,
-    GROQ_API_KEY,
-    GROQ_BASE_URL,
     MODEL,
-    MODEL_CONFIG,
+    openai_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -17,7 +13,7 @@ class LLMClient:
     """Centralized LLM API client for handling all LLM conversations, including multimodal inputs"""
     
     def __init__(self, model: Optional[str] = None):
-        self.client = openai.OpenAI(api_key=GROQ_API_KEY, base_url=GROQ_BASE_URL)
+        self.client = openai_client()
         self.model = model or MODEL
     
     def chat_completion(
@@ -57,7 +53,7 @@ class LLMClient:
         )
 
         try:
-            logger.debug("Sending Groq chat completion request: model=%s", self.model)
+            logger.debug("Sending chat completion request: model=%s", self.model)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
@@ -82,7 +78,7 @@ class LLMClient:
         image_base64: Optional[str] = None,
         image_media_type: str = "image/jpeg"
     ) -> List[Dict]:
-        """Build messages for Groq's OpenAI-compatible chat completions API."""
+        """Build messages for the OpenAI-compatible chat completions API."""
         messages: List[Dict[str, Any]] = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -144,7 +140,7 @@ class LLMClient:
     
     def transcribe_audio(self, audio_file_path: str) -> Optional[str]:
         """
-        Transcribe audio file to text using Groq's transcription API
+        Transcribe audio file to text using the configured transcription model
         
         Args:
             audio_file_path: Path to the audio file or file object
@@ -172,7 +168,7 @@ class LLMClient:
     
     def transcribe_audio_from_bytes(self, audio_bytes: bytes, filename: str = "audio.mp3") -> Optional[str]:
         """
-        Transcribe audio from bytes using Groq's transcription API
+        Transcribe audio from bytes using the configured transcription model
         
         Args:
             audio_bytes: Audio file content as bytes

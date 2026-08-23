@@ -166,11 +166,18 @@ services:
       ADMIN_USER_IDS: ${ADMIN_USER_IDS:-}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
 
-      # Language Model Configuration
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      # Language Model Configuration (OpenRouter: https://openrouter.ai/docs/quickstart)
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_HTTP_REFERER: ${LLM_HTTP_REFERER:-https://useautobus.com}
+      LLM_APP_TITLE: ${LLM_APP_TITLE:-Autobus}
       LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
-      AUDIO_TRANSCRIPTION_MODEL: ${AUDIO_TRANSCRIPTION_MODEL:-whisper-large-v3}
+      AUDIO_TRANSCRIPTION_MODEL: ${AUDIO_TRANSCRIPTION_MODEL:-}
+      # Optional Groq fallback if OPENROUTER_API_KEY is unset.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-}
 
       # Google image (Nana Banana) + video (Veo) generation
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}

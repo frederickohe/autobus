@@ -5,14 +5,68 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-# API Configuration
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-if not GROQ_API_KEY:
-    raise ValueError("GROQ_API_KEY environment variable is not set")
+# API Configuration — OpenRouter (OpenAI-compatible). See https://openrouter.ai/docs/quickstart
+_OPENROUTER_KEY = (os.getenv("OPENROUTER_API_KEY") or "").strip()
+_LLM_KEY = (os.getenv("LLM_API_KEY") or "").strip()
+_GROQ_KEY = (os.getenv("GROQ_API_KEY") or "").strip()
 
-GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+LLM_API_KEY = _OPENROUTER_KEY or _LLM_KEY or _GROQ_KEY
+if not LLM_API_KEY:
+    raise ValueError(
+        "OPENROUTER_API_KEY (or LLM_API_KEY) environment variable is not set"
+    )
+
+_explicit_base = (
+    (os.getenv("LLM_BASE_URL") or "").strip()
+    or (os.getenv("OPENROUTER_BASE_URL") or "").strip()
+    or (os.getenv("GROQ_BASE_URL") or "").strip()
+)
+if _explicit_base:
+    LLM_BASE_URL = _explicit_base.rstrip("/")
+elif _OPENROUTER_KEY or _LLM_KEY:
+    LLM_BASE_URL = "https://openrouter.ai/api/v1"
+elif _GROQ_KEY:
+    LLM_BASE_URL = "https://api.groq.com/openai/v1"
+else:
+    LLM_BASE_URL = "https://openrouter.ai/api/v1"
+
+LLM_HTTP_REFERER = (
+    os.getenv("LLM_HTTP_REFERER")
+    or os.getenv("OPENROUTER_HTTP_REFERER")
+    or "https://useautobus.com"
+).strip()
+LLM_APP_TITLE = (
+    os.getenv("LLM_APP_TITLE") or os.getenv("OPENROUTER_APP_TITLE") or "Autobus"
+).strip()
+
 MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
-AUDIO_TRANSCRIPTION_MODEL = os.getenv("AUDIO_TRANSCRIPTION_MODEL", "whisper-large-v3")
+_transcription_override = (os.getenv("AUDIO_TRANSCRIPTION_MODEL") or "").strip()
+if _transcription_override:
+    AUDIO_TRANSCRIPTION_MODEL = _transcription_override
+elif "openrouter.ai" in LLM_BASE_URL:
+    AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3"
+else:
+    AUDIO_TRANSCRIPTION_MODEL = "whisper-large-v3"
+
+# Backward-compatible aliases (chat previously went through Groq).
+GROQ_API_KEY = LLM_API_KEY
+GROQ_BASE_URL = LLM_BASE_URL
+
+
+def openai_client():
+    """OpenAI SDK client pointed at OpenRouter (or an explicit LLM_BASE_URL)."""
+    import openai
+
+    headers = {}
+    if LLM_HTTP_REFERER:
+        headers["HTTP-Referer"] = LLM_HTTP_REFERER
+    if LLM_APP_TITLE:
+        headers["X-OpenRouter-Title"] = LLM_APP_TITLE
+    return openai.OpenAI(
+        api_key=LLM_API_KEY,
+        base_url=LLM_BASE_URL,
+        default_headers=headers or None,
+    )
 
 # Local Model Configuration
 MODEL_CONFIG = {

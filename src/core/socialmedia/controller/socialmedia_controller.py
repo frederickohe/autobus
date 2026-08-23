@@ -920,7 +920,15 @@ async def postiz_create_post(
         client = PostizClient(postiz_base_url)
         result = await client.create_post(api_key, payload)
     except PostizAPIError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        logger.warning("[SOCIAL] Postiz create post failed: %s", e)
+        # Postiz 400s are client/payload problems (wrong media type, settings, etc.).
+        # Keep 502 for upstream/auth/server failures.
+        status_code = (
+            e.status_code
+            if e.status_code in {400, 404, 409, 422, 429}
+            else status.HTTP_502_BAD_GATEWAY
+        )
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
 
     canonical_agent = normalize_digital_marketing_agent_name(agent_name)
     if canonical_agent:

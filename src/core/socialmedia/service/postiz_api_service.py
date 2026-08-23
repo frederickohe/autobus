@@ -1,3 +1,5 @@
+import json
+import logging
 import os
 import re
 import uuid
@@ -6,9 +8,38 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
+logger = logging.getLogger(__name__)
+
 
 class PostizAPIError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int = 0, body: str = ""):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
+def postiz_error_user_message(status_code: int, text: str) -> str:
+    """Turn a Postiz error body into a short message we can show or log."""
+    raw = (text or "").strip()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        msg = data.get("message") or data.get("msg") or data.get("error")
+        if isinstance(msg, list):
+            msg = "; ".join(str(x) for x in msg if x is not None)
+        name = data.get("name") or data.get("provider")
+        if msg:
+            label = str(name).strip() if name else ""
+            text_msg = str(msg).strip()
+            if label and text_msg:
+                return f"{label}: {text_msg}"
+            return text_msg or label
+    if raw:
+        snippet = raw if len(raw) <= 400 else raw[:400] + "…"
+        return f"Postiz create post failed ({status_code}): {snippet}"
+    return f"Postiz create post failed ({status_code})"
 
 
 def normalize_postiz_integrations_list(payload: Any) -> List[Dict[str, Any]]:
@@ -225,7 +256,16 @@ class PostizClient:
                 json=payload,
             )
             if res.status_code >= 400:
-                raise PostizAPIError(f"Postiz create post failed ({res.status_code}): {res.text}")
+                logger.error(
+                    "Postiz create post failed (%s): %s",
+                    res.status_code,
+                    res.text,
+                )
+                raise PostizAPIError(
+                    postiz_error_user_message(res.status_code, res.text),
+                    status_code=res.status_code,
+                    body=res.text or "",
+                )
             return res.json()
 
     async def list_integrations(
