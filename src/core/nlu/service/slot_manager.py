@@ -85,7 +85,7 @@ class SlotManager:
                 elif "account_number" in slot:
                     # Account numbers should not be validated - they can be in any format
                     validated_slots[slot] = str(value).strip()
-                elif "email" not in slot and ("phone" in slot or "recipient" in slot or "number" in slot):
+                elif self._is_phone_slot(slot):
                     validated_slots[slot] = self._validate_phone_number(value)
                 else:
                     validated_slots[slot] = str(value).strip()
@@ -96,6 +96,16 @@ class SlotManager:
                 validated_slots.pop("item_name", None)
 
         return validated_slots
+
+    @staticmethod
+    def _is_phone_slot(slot: str) -> bool:
+        """True for phone-like slots. Do not match quantity (it contains 'number')."""
+        s = (slot or "").strip().lower()
+        if not s or "email" in s or s in {"quantity", "account_number"}:
+            return False
+        if "phone" in s or s == "recipient":
+            return True
+        return s.endswith("_number")
     
     def _validate_amount(self, amount: str) -> Optional[str]:
         """Validate amount format"""

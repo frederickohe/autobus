@@ -196,9 +196,24 @@ _NAME_PREFIX_RE = re.compile(
     r"^(?:please\s+)?(?:do you (?:have|sell)|have you got|how much (?:is|are|for)|"
     r"what(?:'s|s| is) the price of|price of|cost of|"
     r"(?:is|are) there(?: any| some)?|"
-    r"i (?:want|need|would like|'d like|d like) to (?:order|buy|purchase|get)|"
+    r"i (?:want|need|would like|'d like|d like) to (?:order|buy|purchase|get)(?:\s+for)?|"
     r"can i (?:order|buy|get)|(?:order|buy|get) me|"
     r"i(?:'ll|ll| will) take)\s+",
+    re.IGNORECASE,
+)
+
+_LEADING_PREP_RE = re.compile(r"^(?:for|of)\s+", re.IGNORECASE)
+_LEADING_QTY_RE = re.compile(
+    r"^\d+\s*(?:x|pcs|pieces|units|of)?\s+",
+    re.IGNORECASE,
+)
+
+_THANKS_RE = re.compile(
+    r"^(?:(?:ok|okay|alright|all right|it's ok(?:ay)?|its ok(?:ay)?|"
+    r"it's fine|its fine)\s+)?"
+    r"(?:thanks|thank you|thx|ty)"
+    r"(?:\s+(?:ok|okay|so much|a lot|very much))?"
+    r"[\s.!]*$",
     re.IGNORECASE,
 )
 
@@ -337,6 +352,14 @@ def is_shop_cancel(text: str) -> bool:
         "cancel order",
         "cancel the order",
     }
+
+
+def is_shop_thanks(text: str) -> bool:
+    """True when the customer is only thanking / wrapping up, not naming a product."""
+    t = normalize_shop_text(text)
+    if not t or looks_like_order_request(text):
+        return False
+    return bool(_THANKS_RE.match(t))
 
 
 def looks_like_order_request(text: str) -> bool:
@@ -535,6 +558,9 @@ def extract_product_query_name(text: str) -> str:
     if not raw:
         return ""
     cleaned = _NAME_PREFIX_RE.sub("", raw).strip()
+    cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
+    cleaned = _LEADING_QTY_RE.sub("", cleaned).strip()
+    cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
     cleaned = re.sub(
         r"\b(?:please|thanks|thank you|now|today)\b",
         " ",
@@ -571,6 +597,9 @@ def classify_customer_shop_intent(
     collected = collected_slots or {}
     text = user_message or ""
     current = (current_intent or "").strip()
+
+    if is_shop_thanks(text):
+        return "goodbye", {}, []
 
     if (
         looks_like_faq(text)
@@ -624,9 +653,9 @@ def _order_slots_from_message(
     if qty:
         slots["quantity"] = str(qty)
 
+    leftover = extract_product_query_name(text)
     matches = match_catalog_in_text(text, catalog)
     if not matches:
-        leftover = extract_product_query_name(text)
         if leftover:
             matches = resolve_catalog_query(leftover, catalog)
 
@@ -638,6 +667,8 @@ def _order_slots_from_message(
         slots["product_id"] = item.product_id
     elif len(matches) > 1:
         slots["item_candidates"] = ", ".join(item.name for item in matches)
+    elif leftover and not leftover_is_generic_catalog_query(leftover) and not is_shop_thanks(text):
+        slots["item_name"] = leftover
     return slots
 
 

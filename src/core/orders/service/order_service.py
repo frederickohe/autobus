@@ -63,7 +63,15 @@ class OrderService:
             phone_candidates.add(normalized_phone)
 
         user = self.db.query(User).filter(User.phone.in_(list(phone_candidates))).first()
-        return user.id if user else None
+        if user:
+            return user.id
+
+        if ":" in user_identifier:
+            merchant_id, _, rest = user_identifier.partition(":")
+            merchant_id = merchant_id.strip()
+            if merchant_id and (rest or "").strip() and merchant_id != user_identifier:
+                return self._resolve_user_db_id(merchant_id)
+        return None
 
     @staticmethod
     def _generate_order_number() -> str:

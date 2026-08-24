@@ -61,7 +61,13 @@ class EventNotificationService:
             phone_candidates.add(normalized)
 
         user = self.db.query(User).filter(User.phone.in_(list(phone_candidates))).first()
-        return user.id if user else None
+        if user:
+            return user.id
+
+        merchant_id, _ = self._split_conversation_user_id(user_identifier)
+        if merchant_id and merchant_id != user_identifier:
+            return self._resolve_user_db_id(merchant_id)
+        return None
 
     @staticmethod
     def _normalize_phone_like(value: str) -> str:
@@ -249,8 +255,14 @@ class EventNotificationService:
 
         self._notify_admins(NotificationType.ALERT, data, skip_user_ids=notified)
 
+    def _resolve_order_owner_id(self, order: Order) -> Optional[str]:
+        """Resolve the merchant/business owner who should be notified about this order."""
+        if not getattr(order, "user_id", None):
+            return None
+        return self._resolve_user_db_id(order.user_id)
+
     def notify_order_created(self, order: Order) -> None:
-        """Notify admins (and the customer if registered) about a new order."""
+        """Notify the business owner by SMS and in-app that a new order was placed."""
         item_name = None
         quantity = None
         if order.order_items and isinstance(order.order_items, list) and order.order_items:
@@ -264,20 +276,22 @@ class EventNotificationService:
             and order.custom_metadata.get("requires_cs_followup")
         )
         cs_note = " Product not listed in catalog — customer service follow-up needed." if requires_cs else ""
+        customer = (order.customer_name or "a customer").strip()
+        qty = quantity or order.total_quantity
+        sms_body = (
+            f"AutoBus: New order {order.order_number} from {customer}. "
+            f"{item_name or 'Item'} x{qty} — "
+            f"{order.total_amount} {order.currency_code}. Open Orders to view."
+        )
 
-        admin_data = {
+        owner_data = {
             "event": "order_created",
             "title": "New order received",
             "content": (
-                f"Order {order.order_number} from {order.customer_name or 'a customer'} "
+                f"Order {order.order_number} from {customer} "
                 f"({order.customer_phone or 'no phone'}).{cs_note}"
             ),
-            "message": (
-                f"New order {order.order_number}: "
-                f"{item_name or 'Item'} x{quantity or order.total_quantity} — "
-                f"{order.total_amount} {order.currency_code}"
-                f"{cs_note}"
-            ),
+            "message": sms_body,
             "order_id": str(order.order_id),
             "order_number": order.order_number,
             "customer_name": order.customer_name,
@@ -290,11 +304,41 @@ class EventNotificationService:
             "product_listed": not requires_cs,
             "requires_cs_followup": requires_cs,
         }
-        self._notify_admins(NotificationType.TRANSACTIONAL, admin_data)
+
+        notified: Set[str] = set()
+        owner_id = self._resolve_order_owner_id(order)
+        if owner_id:
+            owner = self.db.query(User).filter(User.id == owner_id).first()
+            sms_phone = self._user_sms_phone(owner)
+            if not sms_phone:
+                logger.warning(
+                    "[EVENT_NOTIFICATION] Merchant %s has no phone for order SMS",
+                    owner_id,
+                )
+            self._notify_user_safe(
+                owner_id,
+                NotificationType.TRANSACTIONAL,
+                owner_data,
+                send_sms=bool(sms_phone),
+                sms_phone=sms_phone,
+            )
+            notified.add(owner_id)
+        else:
+            logger.warning(
+                "[EVENT_NOTIFICATION] Could not resolve merchant for order %s (user_id=%s)",
+                order.order_number,
+                getattr(order, "user_id", None),
+            )
+
+        self._notify_admins(
+            NotificationType.TRANSACTIONAL,
+            owner_data,
+            skip_user_ids=notified,
+        )
 
         if order.customer_phone:
             customer_user_id = self._resolve_user_db_id(order.customer_phone)
-            if customer_user_id:
+            if customer_user_id and customer_user_id not in notified:
                 customer_message = (
                     f"Order {order.order_number} confirmed. "
                     f"Total: {order.total_amount} {order.currency_code}"

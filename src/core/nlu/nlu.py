@@ -28,6 +28,7 @@ from core.nlu.service.customer_shop import (
     classify_customer_shop_intent,
     format_customer_catalog,
     is_shop_cancel,
+    is_shop_thanks,
     leftover_is_generic_catalog_query,
     looks_like_catalog_browse,
     looks_like_generic_stock_inquiry,
@@ -222,6 +223,8 @@ class AutobusNLUSystem:
         t = cls._normalize_chat_text(text)
         if not t or cls._is_bare_affirmative(text) or cls._looks_like_new_request(text):
             return False
+        if is_shop_thanks(text):
+            return True
         exact = {
             "thanks",
             "thank you",
@@ -550,7 +553,7 @@ class AutobusNLUSystem:
         """Rule-based intent for WhatsApp/Instagram/web customer sessions. No LLM."""
         if self._is_customer_handoff(user_message):
             return "request_intervention", {}, []
-        if self._is_customer_goodbye(user_message):
+        if self._is_customer_goodbye(user_message) or self._is_thanks_only(user_message):
             return "goodbye", {}, []
         if self._is_customer_greeting(user_message):
             return "greeting", {}, []
@@ -668,6 +671,10 @@ class AutobusNLUSystem:
         """
         if intent != "create_order":
             return
+        vs = validated_slots or {}
+        # A quantity-only reply must keep the product collected on earlier turns.
+        if vs.get("quantity") and not vs.get("item_name"):
+            return
         order_keys = (
             "item_name",
             "quantity",
@@ -682,7 +689,6 @@ class AutobusNLUSystem:
             "customer_phone",
         )
         prev = (previous_intent or "").strip()
-        vs = validated_slots or {}
         if prev != "create_order":
             for k in list(order_keys):
                 if k not in vs and k in collected_slots:
@@ -858,7 +864,7 @@ class AutobusNLUSystem:
                 state.conversation_lifecycle = "active"
                 state.awaiting_satisfaction = False
                 self.conversation_manager._save_conversation_state(state)
-            elif self._is_customer_goodbye(user_message):
+            elif self._is_customer_goodbye(user_message) or self._is_thanks_only(user_message):
                 return self._complete_with_goodbye(user_id)
             elif self._is_customer_conversation_ending(user_message, state):
                 return self._ask_ending_question(user_id)

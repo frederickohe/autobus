@@ -992,6 +992,12 @@ class IntentProcessor:
         seller_user_id = user_id
         if matched_product and getattr(matched_product, "user_id", None):
             seller_user_id = matched_product.user_id
+        elif user_data:
+            merchant = str(
+                user_data.get("merchant_id") or user_data.get("db_user_id") or ""
+            ).strip()
+            if merchant:
+                seller_user_id = merchant
 
         success, order, message = order_service.create_order(
             order_data, user_id=seller_user_id
