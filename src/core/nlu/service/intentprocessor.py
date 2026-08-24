@@ -19,6 +19,7 @@ from core.nlu.service.customer_shop import (
     catalog_items_from_products,
     format_customer_catalog,
     format_customer_product,
+    resolve_catalog_query,
 )
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
@@ -386,6 +387,22 @@ class IntentProcessor:
     @staticmethod
     def _is_customer_session(user_data: Optional[Dict[str, Any]]) -> bool:
         return bool((user_data or {}).get("is_customer_session"))
+
+    @staticmethod
+    def _catalog_owner_id(user_id: str, user_data: Optional[Dict[str, Any]] = None) -> str:
+        """Merchant users.id for catalog lookups (not the customer channel id)."""
+        merchant = str(
+            (user_data or {}).get("merchant_id")
+            or (user_data or {}).get("db_user_id")
+            or ""
+        ).strip()
+        if merchant:
+            return merchant
+        if user_id and ":" in user_id:
+            prefix = user_id.split(":", 1)[0].strip()
+            if prefix:
+                return prefix
+        return user_id
 
     @staticmethod
     def _business_display_name(user_data: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -760,7 +777,8 @@ class IntentProcessor:
         product_service = ProductService(db)
 
         category = slots.get("category")
-        products = product_service.get_products_by_user(user_id, category=category)
+        owner_id = self._catalog_owner_id(user_id, user_data)
+        products = product_service.get_products_by_user(owner_id, category=category)
         if self._is_customer_session(user_data):
             return format_customer_catalog(catalog_items_from_products(products))
         if not products:
@@ -796,10 +814,25 @@ class IntentProcessor:
         db = next(get_db())
         product_service = ProductService(db)
         is_customer = self._is_customer_session(user_data)
+        owner_id = self._catalog_owner_id(user_id, user_data)
 
-        product = self._find_product(product_service, slots, user_id=user_id)
+        product = self._find_product(product_service, slots, user_id=owner_id)
         if not product and product_name:
-            matches = product_service.find_products_for_user(str(product_name), user_id)
+            matches = product_service.find_products_for_user(str(product_name), owner_id)
+            if not matches:
+                catalog = catalog_items_from_products(
+                    product_service.get_products_by_user(owner_id, skip=0, limit=100)
+                )
+                resolved = resolve_catalog_query(str(product_name), catalog)
+                if resolved:
+                    ids = {item.product_id for item in resolved}
+                    matches = [
+                        item
+                        for item in product_service.get_products_by_user(
+                            owner_id, skip=0, limit=100
+                        )
+                        if str(item.product_id) in ids
+                    ]
             if len(matches) > 1:
                 heading = "I found a few matches. Which one did you mean?"
                 return format_customer_catalog(
@@ -819,7 +852,7 @@ class IntentProcessor:
             if is_customer:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
-                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
                     )
                 )
                 return (
@@ -917,12 +950,34 @@ class IntentProcessor:
         db = next(get_db())
         order_service = OrderService(db)
         product_service = ProductService(db)
+        owner_id = self._catalog_owner_id(user_id, user_data)
 
         line_quantity = self._to_int(quantity, default=0)
         if line_quantity <= 0:
             return "❌ Quantity must be greater than 0."
 
-        matches = product_service.find_products_for_user(str(item_name), user_id)
+        matches = []
+        product_id = slots.get("product_id")
+        if product_id:
+            by_id = product_service.get_product_by_id(str(product_id))
+            if by_id:
+                matches = [by_id]
+        if not matches:
+            matches = product_service.find_products_for_user(str(item_name), owner_id)
+        if not matches:
+            catalog = catalog_items_from_products(
+                product_service.get_products_by_user(owner_id, skip=0, limit=100)
+            )
+            resolved = resolve_catalog_query(str(item_name), catalog)
+            if resolved:
+                ids = {item.product_id for item in resolved}
+                matches = [
+                    item
+                    for item in product_service.get_products_by_user(
+                        owner_id, skip=0, limit=100
+                    )
+                    if str(item.product_id) in ids
+                ]
         matched_product = matches[0] if len(matches) == 1 else None
         if len(matches) > 1:
             heading = "Which product did you mean?"
@@ -938,7 +993,7 @@ class IntentProcessor:
             if not matched_product:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
-                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
                     )
                 )
                 return (
@@ -949,7 +1004,7 @@ class IntentProcessor:
             if stock is not None and int(stock) <= 0:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
-                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
                     )
                 )
                 return (

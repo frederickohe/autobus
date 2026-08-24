@@ -29,6 +29,7 @@ from core.nlu.service.customer_shop import (
     format_customer_catalog,
     is_shop_cancel,
     is_shop_thanks,
+    extract_product_query_name,
     leftover_is_generic_catalog_query,
     looks_like_catalog_browse,
     looks_like_generic_stock_inquiry,
@@ -1109,7 +1110,7 @@ class AutobusNLUSystem:
             if merchant_id and intent == "create_order" and "item_name" in (current_missing or []):
                 catalog_text = format_customer_catalog(customer_catalog)
                 candidates = state.collected_slots.get("item_candidates")
-                guessed = (user_message or "").strip()
+                guessed = extract_product_query_name(user_message) or (user_message or "").strip()
                 if candidates:
                     prompt = f"Which one did you mean: {candidates}?"
                 elif (

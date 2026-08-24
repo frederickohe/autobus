@@ -38,13 +38,21 @@ class ProductService:
         return cleaned
 
     def _resolve_user_db_id(self, user_identifier: str) -> Optional[str]:
-        """Resolve db id, email, or phone to users.id."""
+        """Resolve db id, email, phone, or merchant-scoped chat id to users.id."""
         if not user_identifier:
             return None
 
         user = self.db.query(User).filter(User.id == user_identifier).first()
         if user:
             return user.id
+
+        # Customer WhatsApp/Instagram/web threads use ``{merchant_users.id}:{channel_id}``.
+        if ":" in user_identifier:
+            merchant_id = user_identifier.split(":", 1)[0].strip()
+            if merchant_id:
+                user = self.db.query(User).filter(User.id == merchant_id).first()
+                if user:
+                    return user.id
 
         user = self.db.query(User).filter(User.email == user_identifier).first()
         if user:

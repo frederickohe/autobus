@@ -193,19 +193,70 @@ _PRODUCT_QUERY_PHRASES = (
 )
 
 _NAME_PREFIX_RE = re.compile(
-    r"^(?:please\s+)?(?:do you (?:have|sell)|have you got|how much (?:is|are|for)|"
+    r"^(?:please\s+)*(?:do you (?:have|sell)|have you got|how much (?:is|are|for)|"
     r"what(?:'s|s| is) the price of|price of|cost of|"
     r"(?:is|are) there(?: any| some)?|"
-    r"i (?:want|need|would like|'d like|d like) to (?:order|buy|purchase|get)(?:\s+for)?|"
+    r"i (?:want|need|wanna|would like|'d like|d like)"
+    r"(?: to (?:order|buy|purchase|get))?(?:\s+for)?|"
     r"can i (?:order|buy|get)|(?:order|buy|get) me|"
+    r"(?:give|send) me|"
     r"i(?:'ll|ll| will) take)\s+",
     re.IGNORECASE,
 )
 
 _LEADING_PREP_RE = re.compile(r"^(?:for|of)\s+", re.IGNORECASE)
+
+_QTY_UNITS = r"(?:pcs|pc|pieces|units?|bags?|bottles?|packs?|boxes?|cartons?)"
+_WORD_NUM_ALT = "|".join(sorted(_WORD_NUMBERS, key=len, reverse=True))
+_QTY_CORE = rf"(?:(?:qty|quantity)\s+)?(?:\d+|{_WORD_NUM_ALT})\s*{_QTY_UNITS}?"
+
 _LEADING_QTY_RE = re.compile(
-    r"^\d+\s*(?:x|pcs|pieces|units|of)?\s+",
+    rf"^(?:x\s*)?{_QTY_CORE}(?:\s*x)?(?:\s+of)?\s+",
     re.IGNORECASE,
+)
+_TRAILING_QTY_RE = re.compile(
+    rf"[\s,/]+(?:x\s*)?{_QTY_CORE}(?:\s*x)?\s*$",
+    re.IGNORECASE,
+)
+
+_MATCH_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "of",
+        "and",
+        "or",
+        "for",
+        "to",
+        "in",
+        "on",
+        "with",
+        "please",
+        "pcs",
+        "pc",
+        "pieces",
+        "units",
+        "unit",
+        "x",
+        "i",
+        "want",
+        "need",
+        "like",
+        "would",
+        "wanna",
+        "buy",
+        "order",
+        "get",
+        "me",
+        "my",
+        "some",
+        "any",
+        "give",
+        "send",
+        "take",
+        "can",
+    }
 )
 
 _THANKS_RE = re.compile(
@@ -373,6 +424,7 @@ def looks_like_order_request(text: str) -> bool:
     want_starters = (
         "i want",
         "i need",
+        "i wanna",
         "i'd like",
         "id like",
         "i would like",
@@ -440,6 +492,7 @@ def looks_like_buy_named_item(text: str, catalog: Sequence[CatalogItem]) -> bool
     starters = (
         "i want",
         "i need",
+        "i wanna",
         "i'd like",
         "id like",
         "i would like",
@@ -523,6 +576,68 @@ def match_catalog_in_text(
     return hits
 
 
+def _stem_token(tok: str) -> str:
+    if len(tok) > 3 and tok.endswith("s") and not tok.endswith(("ss", "us", "is")):
+        return tok[:-1]
+    return tok
+
+
+def _significant_tokens(text: str) -> List[str]:
+    t = re.sub(r"[^a-z0-9]+", " ", normalize_shop_text(text))
+    tokens: List[str] = []
+    seen = set()
+    for raw in t.split():
+        if raw.isdigit() or raw in _MATCH_STOPWORDS:
+            continue
+        stemmed = _stem_token(raw)
+        if stemmed in _MATCH_STOPWORDS or len(stemmed) < 2:
+            continue
+        if stemmed not in seen:
+            seen.add(stemmed)
+            tokens.append(stemmed)
+    return tokens
+
+
+def _tokens_compatible(query_tok: str, product_tok: str) -> bool:
+    if query_tok == product_tok:
+        return True
+    if len(query_tok) >= 4 and (query_tok in product_tok or product_tok in query_tok):
+        return True
+    return False
+
+
+def match_catalog_by_tokens(
+    query: str, catalog: Sequence[CatalogItem]
+) -> List[CatalogItem]:
+    """Match catalog items by significant-word overlap (order-independent)."""
+    q_tokens = _significant_tokens(query)
+    if not q_tokens or not catalog:
+        return []
+    scored: List[Tuple[int, CatalogItem]] = []
+    for item in catalog:
+        p_tokens = _significant_tokens(item.name)
+        if not p_tokens:
+            continue
+        q_set, p_set = set(q_tokens), set(p_tokens)
+        score = 0
+        if q_set == p_set:
+            score = 1000 + len(q_set)
+        elif q_set.issubset(p_set):
+            score = 500 + (len(q_set) * 10) - (len(p_set) - len(q_set))
+        elif p_set.issubset(q_set):
+            score = 300 + (len(p_set) * 10)
+        elif all(any(_tokens_compatible(qt, pt) for pt in p_set) for qt in q_tokens):
+            score = 200 + (len(q_tokens) * 10)
+        if score:
+            scored.append((score, item))
+    scored.sort(key=lambda pair: (-pair[0], -len(pair[1].name)))
+    if not scored:
+        return []
+    best = scored[0][0]
+    # Keep near-best hits so close catalog variants can be disambiguated.
+    return [item for score, item in scored if score >= best - 50]
+
+
 def resolve_catalog_query(
     query: str, catalog: Sequence[CatalogItem]
 ) -> List[CatalogItem]:
@@ -544,31 +659,37 @@ def resolve_catalog_query(
     ]
     if contained:
         return contained
-    # Query contains the product name (user typed extra words).
-    return [
+    inverted = [
         item
         for item in catalog
         if normalize_shop_text(item.name) and normalize_shop_text(item.name) in q_norm
     ]
+    if inverted:
+        return inverted
+    return match_catalog_by_tokens(q, catalog)
 
 
 def extract_product_query_name(text: str) -> str:
     """Best-effort leftover name after stripping order/query phrasing."""
-    raw = (text or "").strip()
-    if not raw:
+    cleaned = (text or "").strip()
+    if not cleaned:
         return ""
-    cleaned = _NAME_PREFIX_RE.sub("", raw).strip()
-    cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
-    cleaned = _LEADING_QTY_RE.sub("", cleaned).strip()
-    cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
-    cleaned = re.sub(
-        r"\b(?:please|thanks|thank you|now|today)\b",
-        " ",
-        cleaned,
-        flags=re.IGNORECASE,
-    )
-    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?!.,")
-    cleaned = _TRAILING_JUNK_RE.sub("", cleaned).strip()
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = _NAME_PREFIX_RE.sub("", cleaned).strip()
+        cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
+        cleaned = _LEADING_QTY_RE.sub("", cleaned).strip()
+        cleaned = _TRAILING_QTY_RE.sub("", cleaned).strip()
+        cleaned = _LEADING_PREP_RE.sub("", cleaned).strip()
+        cleaned = re.sub(
+            r"\b(?:please|thanks|thank you|now|today)\b",
+            " ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?!.,")
+        cleaned = _TRAILING_JUNK_RE.sub("", cleaned).strip()
     if _is_placeholder_item_name(cleaned):
         return ""
     if leftover_is_generic_catalog_query(cleaned):
@@ -576,6 +697,20 @@ def extract_product_query_name(text: str) -> str:
     if len(cleaned) < 2:
         return ""
     if extract_quantity(cleaned) and normalize_shop_text(cleaned).isdigit():
+        return ""
+    leftover_norm = normalize_shop_text(cleaned)
+    if leftover_norm.startswith(
+        (
+            "i want",
+            "i need",
+            "i wanna",
+            "i would like",
+            "i'd like",
+            "id like",
+            "can i ",
+            "do you ",
+        )
+    ):
         return ""
     return cleaned
 
@@ -655,9 +790,10 @@ def _order_slots_from_message(
 
     leftover = extract_product_query_name(text)
     matches = match_catalog_in_text(text, catalog)
-    if not matches:
-        if leftover:
-            matches = resolve_catalog_query(leftover, catalog)
+    if leftover:
+        leftover_matches = resolve_catalog_query(leftover, catalog)
+        if leftover_matches:
+            matches = leftover_matches
 
     if len(matches) == 1:
         item = matches[0]
@@ -675,23 +811,23 @@ def _order_slots_from_message(
 def _view_slots_from_message(
     text: str, catalog: Sequence[CatalogItem]
 ) -> Dict[str, Any]:
+    leftover = extract_product_query_name(text)
     matches = match_catalog_in_text(text, catalog)
+    if leftover:
+        leftover_matches = resolve_catalog_query(leftover, catalog)
+        if leftover_matches:
+            matches = leftover_matches
     if not matches:
-        leftover = extract_product_query_name(text)
         if leftover and not leftover_is_generic_catalog_query(leftover):
-            matches = resolve_catalog_query(leftover, catalog)
-            if not matches:
-                return {"product_name": leftover}
+            return {"product_name": leftover}
+        return {}
     if len(matches) == 1:
         item = matches[0]
         return {
             "product_name": item.name,
             "product_id": item.product_id,
         }
-    if len(matches) > 1:
-        leftover = extract_product_query_name(text) or matches[0].name
-        return {
-            "product_name": leftover,
-            "item_candidates": ", ".join(item.name for item in matches),
-        }
-    return {}
+    return {
+        "product_name": leftover or matches[0].name,
+        "item_candidates": ", ".join(item.name for item in matches),
+    }
