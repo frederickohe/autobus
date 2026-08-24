@@ -109,10 +109,19 @@ def _upsert_account(
         .first()
     )
     if existing and existing.user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This Instagram account is already linked to another Autobus account.",
+        if existing.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This Instagram account is already linked to another Autobus account.",
+            )
+        # Soft-unlinked leftovers still occupy uq_instagram_ig_user_id.
+        logger.info(
+            "[IG] reclaiming unlinked ig_user_id=%s from user=%s to user=%s",
+            ig_user_id,
+            existing.user_id,
+            user_id,
         )
+        existing.user_id = user_id
 
     token_enc = svc.encrypt_token(access_token)
     if existing:
@@ -344,7 +353,13 @@ async def disconnect_instagram_account(
     )
     if not row:
         raise HTTPException(status_code=404, detail="Instagram account not found")
-    row.is_active = False
+    try:
+        svc = InstagramOAuthService()
+        token = svc.decrypt_token(row.access_token_encrypted)
+        svc.unsubscribe_webhooks(token, row.ig_user_id)
+    except Exception as exc:
+        logger.warning("[IG] webhook unsubscribe on unlink failed: %s", exc)
+    db.delete(row)
     db.commit()
     return {"status": "ok", "message": "Instagram account disconnected"}
 

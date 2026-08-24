@@ -94,10 +94,18 @@ def _upsert_account(
         .first()
     )
     if existing and existing.user_id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This WhatsApp number is already linked to another Autobus account.",
+        if existing.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This WhatsApp number is already linked to another Autobus account.",
+            )
+        logger.info(
+            "[WA] reclaiming unlinked phone_number_id=%s from user=%s to user=%s",
+            phone_number_id,
+            existing.user_id,
+            user_id,
         )
+        existing.user_id = user_id
 
     token_enc = svc.encrypt_token(access_token)
     if existing:
@@ -263,8 +271,7 @@ def _embedded_signup_launch_html(
     config_id: str,
     state: str,
     extras_json: str,
-    callback_base: str,
-    oauth_url: str,
+    redirect_uri: str,
     graph_version: str = "v21.0",
 ) -> str:
     """Hosted Facebook JS SDK bridge — Meta's supported Embedded Signup launch path."""
@@ -273,8 +280,7 @@ def _embedded_signup_launch_html(
     config_id_js = json.dumps(config_id)
     state_js = json.dumps(state)
     extras_js = extras_json  # already JSON object text
-    callback_js = json.dumps(callback_base.rstrip("/"))
-    oauth_js = json.dumps(oauth_url)
+    redirect_js = json.dumps(redirect_uri)
     version_js = json.dumps(graph_version)
 
     return f"""<!DOCTYPE html>
@@ -309,9 +315,8 @@ def _embedded_signup_launch_html(
     const CONFIG_ID = {config_id_js};
     const STATE = {state_js};
     const EXTRAS = {extras_js};
-    const CALLBACK_BASE = {callback_js};
+    const REDIRECT_URI = {redirect_js};
     const GRAPH_VERSION = {version_js};
-    const OAUTH_URL = {oauth_js};
     const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     let session = {{ waba_id: null, phone_number_id: null, business_id: null }};
@@ -333,7 +338,7 @@ def _embedded_signup_launch_html(
         document.getElementById('btn').disabled = false;
         return;
       }}
-      const u = new URL(CALLBACK_BASE + '/api/social/callback');
+      const u = new URL(REDIRECT_URI);
       u.searchParams.set('code', code);
       u.searchParams.set('state', STATE);
       if (session.waba_id) u.searchParams.set('waba_id', session.waba_id);
@@ -360,24 +365,20 @@ def _embedded_signup_launch_html(
       }}
     }});
 
-    function launchViaRedirect() {{
-      setStatus('Opening Facebook…');
-      window.location.assign(OAUTH_URL);
-    }}
-
     function launchSignup() {{
       setErr('');
       document.getElementById('btn').disabled = true;
       setStatus('Opening Meta WhatsApp signup…');
-      // iOS Safari blocks FB.login popups (and often connect.facebook.net).
-      // Use a same-window Facebook Login for Business redirect instead.
-      if (IS_IOS || !window.FB) {{
-        launchViaRedirect();
+      if (!window.FB) {{
+        setErr('Facebook did not load. Disable content blockers for this page and try again.');
+        document.getElementById('btn').disabled = false;
+        setStatus('Ready when you are.');
         return;
       }}
-      const watchdog = setTimeout(launchViaRedirect, 2500);
+      // Embedded Signup must use FB.login + config_id. A Facebook OAuth
+      // dialog with redirect_uri is what triggers "not whitelisted in
+      // Client OAuth Settings" — do not fall back to that.
       FB.login(function (response) {{
-        clearTimeout(watchdog);
         const code = response && response.authResponse && response.authResponse.code;
         if (code) {{
           finishWithCode(code);
@@ -401,11 +402,10 @@ def _embedded_signup_launch_html(
         xfbml: true,
         version: GRAPH_VERSION
       }});
-      if (IS_IOS) return;
       setStatus('Ready — tap Continue with Meta.');
       document.getElementById('btn').disabled = false;
-      // Auto-launch on Android/desktop only. iOS blocks this and leaves the button disabled.
-      setTimeout(launchSignup, 400);
+      // Auto-launch on Android/desktop only. iOS needs a user tap.
+      if (!IS_IOS) setTimeout(launchSignup, 400);
     }};
 
     document.getElementById('btn').disabled = false;
@@ -430,8 +430,10 @@ async def whatsapp_connect(
     ),
     launch: str = Query(
         "sdk",
-        description="sdk = Facebook JS SDK bridge (Android/web embed). "
-        "redirect = server 302 to Facebook OAuth (iOS Safari; popups are blocked).",
+        description=(
+            "sdk = Facebook JS SDK on the Meta-whitelisted callback URL. "
+            "redirect is accepted for older app builds but uses the same SDK URL."
+        ),
     ),
     raw_meta: bool = Query(
         False,
@@ -447,10 +449,13 @@ async def whatsapp_connect(
         launch_mode = (launch or "sdk").strip().lower()
         if raw_meta:
             url = svc.build_onboard_url(state)
-        elif launch_mode in {"redirect", "oauth", "ios"}:
-            url = svc.build_redirect_launch_url(state)
         else:
+            # Always start on META_WHATSAPP_REDIRECT_URI. launch=redirect used to
+            # 302 into Facebook's OAuth dialog, which Meta rejects unless that
+            # URI is in Client OAuth Settings (Embedded Signup does not).
             url = svc.build_launch_bridge_url(state)
+        if launch_mode in {"redirect", "oauth", "ios"}:
+            logger.info("[WA] connect launch=%s coerced to JS SDK callback URL", launch_mode)
         return WhatsAppConnectResponse(
             authorization_url=url,
             state=state,
@@ -468,14 +473,23 @@ async def whatsapp_embedded_signup_launch(
     state: str = Query(..., min_length=8),
     go: bool = Query(
         False,
-        description="If true, 302 to Facebook OAuth instead of the JS SDK page.",
+        description="Ignored (kept so older app builds that pass go=1 still work).",
     ),
 ):
     """
-    Public HTML bridge that runs FB.login Embedded Signup.
-    `state` must come from a prior authenticated GET /whatsapp/connect.
-    Pass `go=1` for a server-side redirect (iOS).
+    Canonical Embedded Signup start is META_WHATSAPP_REDIRECT_URI (Client OAuth).
+    This path 302s there so Facebook never sees /embedded-signup/launch as redirect_uri.
     """
+    _ = go
+    svc = MetaWhatsAppService()
+    try:
+        svc.require_config()
+    except ValueError:
+        return _whatsapp_launch_page(state)
+    return RedirectResponse(url=svc.build_launch_bridge_url(state), status_code=302)
+
+
+def _whatsapp_launch_page(state: str) -> HTMLResponse:
     payload = MetaWhatsAppOAuthState.peek_payload(state)
     return_to = (payload or {}).get("return_to") or "web"
     if not payload:
@@ -487,29 +501,21 @@ async def whatsapp_embedded_signup_launch(
             ),
             status_code=400,
         )
-
     svc = MetaWhatsAppService()
     try:
         svc.require_config()
     except ValueError as exc:
         return HTMLResponse(_error_html(str(exc), return_to=return_to), status_code=500)
-
-    if go:
-        return RedirectResponse(
-            url=svc.build_oauth_dialog_url(state),
-            status_code=302,
+    return HTMLResponse(
+        _embedded_signup_launch_html(
+            app_id=svc.app_id,
+            config_id=svc.config_id,
+            state=state,
+            extras_json=json.dumps(svc.embedded_signup_extras()),
+            redirect_uri=svc.redirect_uri,
+            graph_version=svc.graph_version(),
         )
-
-    html = _embedded_signup_launch_html(
-        app_id=svc.app_id,
-        config_id=svc.config_id,
-        state=state,
-        extras_json=json.dumps(svc.embedded_signup_extras()),
-        callback_base=_frontend_base(),
-        oauth_url=svc.build_oauth_dialog_url(state),
-        graph_version=svc.graph_version(),
     )
-    return HTMLResponse(html)
 
 @whatsapp_routes.get("/accounts", response_model=List[WhatsAppAccountResponse])
 async def list_whatsapp_accounts(
@@ -539,7 +545,7 @@ async def disconnect_whatsapp_account(
     )
     if not row:
         raise HTTPException(status_code=404, detail="WhatsApp account not found")
-    row.is_active = False
+    db.delete(row)
     db.commit()
     return {"status": "ok", "message": "WhatsApp account disconnected"}
 
@@ -604,6 +610,10 @@ async def whatsapp_meta_callback(
         return HTMLResponse(_error_html(msg, return_to=early_return_to), status_code=400)
 
     if not code:
+        # Start Embedded Signup on this same URI so Facebook's redirect_uri
+        # matches Client OAuth Settings (META_WHATSAPP_REDIRECT_URI).
+        if state:
+            return _whatsapp_launch_page(state)
         return HTMLResponse(
             _error_html("Missing authorization code from Meta.", return_to=early_return_to),
             status_code=400,

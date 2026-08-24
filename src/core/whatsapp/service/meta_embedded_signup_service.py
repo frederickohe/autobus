@@ -256,12 +256,16 @@ class MetaWhatsAppService:
 
     def build_launch_bridge_url(self, state: str) -> str:
         """
-        Autobus-hosted page that loads the Facebook JS SDK and calls FB.login
-        with the Embedded Signup config_id (Meta's supported launch path).
-        Served on useautobus.com so it matches App Domains / JS SDK allowlist.
+        Start Embedded Signup on the Meta-whitelisted redirect URI.
+
+        FB.login (and any same-window fallback) uses the current page URL as
+        redirect_uri. Launching from /embedded-signup/launch made Facebook
+        reject the flow: that path is not in Client OAuth Settings.
+        ``META_WHATSAPP_REDIRECT_URI`` is the URI already configured with Meta.
         """
         self.require_config()
-        return f"{self._public_base()}/api/v1/whatsapp/embedded-signup/launch?state={quote(state, safe='')}"
+        sep = "&" if "?" in self.redirect_uri else "?"
+        return f"{self.redirect_uri}{sep}state={quote(state, safe='')}"
 
     def build_redirect_launch_url(self, state: str) -> str:
         """

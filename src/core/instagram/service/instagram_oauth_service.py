@@ -329,6 +329,31 @@ class InstagramOAuthService:
             )
         return False
 
+    def unsubscribe_webhooks(self, access_token: str, ig_user_id: str) -> bool:
+        """Stop Instagram webhook delivery for this professional account (best-effort)."""
+        ig_id = (ig_user_id or "").strip()
+        token = (access_token or "").strip()
+        if not ig_id or not token:
+            return False
+        urls = [
+            f"{self._versioned_graph()}/{ig_id}/subscribed_apps",
+            f"{self._versioned_graph()}/me/subscribed_apps",
+        ]
+        for url in urls:
+            resp = requests.delete(url, params={"access_token": token}, timeout=30)
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                ok = bool(data.get("success", True)) if isinstance(data, dict) else True
+                logger.info("[IG] unsubscribed_apps ig_user_id=%s success=%s", ig_id, ok)
+                return ok
+            logger.warning(
+                "[IG] unsubscribed_apps failed (%s) %s: %s",
+                resp.status_code,
+                url,
+                resp.text[:400],
+            )
+        return False
+
     def send_sender_action(
         self, access_token: str, recipient_igsid: str, action: str
     ) -> bool:
