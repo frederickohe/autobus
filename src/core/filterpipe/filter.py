@@ -72,12 +72,7 @@ class FilterPipeline:
         return {"ok": True}
 
     def process(self, userid: str, message: str, context: Optional[str]) -> Dict[str, Any]:
-        """Run full filter pipeline and, if successful, dispatch to the Autobus agent.
-
-        Previously the webhooks controller was responsible for instantiating
-        :class:`core.agent.agent.AutoBus` and invoking ``process_user_message``.
-        The pipeline now performs that step so callers simply ask for the
-        processed response in one go.
+        """Run filter checks, then dispatch to NLU (no AutoBus / agent loop).
 
         Returns a dict with a boolean ``proceed`` flag.  When ``proceed`` is
         ``False`` there will be a ``message`` key containing a user-facing
@@ -109,26 +104,16 @@ class FilterPipeline:
         # if not res.get("ok"):
         #     return {"proceed": False, "message": res.get("message")}
 
-        # All checks passed -> dispatch to AutoBus
+        # All checks passed -> dispatch to NLU (no AutoBus / agent loop)
         try:
-            from core.agent.agent import AutoBus
+            from core.nlu.nlu import get_nlu_system
         except ImportError:
-            # Should never happen as AutoBus is a core component
             return {
                 "proceed": False,
-                "message": "Agent initialization failed."
+                "message": "NLU initialization failed."
             }
 
-        agent = AutoBus(db_session=self.db)
-        # AutoBus.process_user_message currently only requires user id, message,
-        # and subscription status.  Additional agent-specific configuration is
-        # stored and validated earlier in the pipeline but not yet consumed by
-        # the core agent implementation.
-        response_message = agent.process_user_message(
-            userid,
-            message,
-            agent_name,
-        )
+        response_message = get_nlu_system().process_message(userid, message)
 
         return {
             "proceed": True,

@@ -180,8 +180,8 @@ INTENTS = {
     },
     "view_product": {
         "description": "View details of a specific product",
-        "slots": ["product_id"],
-        "required_slots": ["product_id"],
+        "slots": ["product_id", "product_name"],
+        "required_slots": ["product_name"],
         "category": "product_management"
     },
     #==== ORDER MANAGEMENT AGENT INTENTS =====
@@ -311,8 +311,8 @@ VENDOR_EXCLUSION_RULES = """
 - You represent the customer's organization (see Organization context), not the software platform or its vendor.
 - Never describe Autobus, Greenbrain, or any underlying platform unless that exact information appears in Retrieved memory for this tenant.
 - For questions about "your company", "we", or "our business", use only Organization context and Retrieved memory. If neither contains the answer, say you do not have that information yet and suggest adding business documents to the knowledge base.
-- For products, services, prices, hours, locations, and policies: only state facts that appear verbatim in Retrieved memory (or Product catalog when provided). Never invent, guess, or expand a product list.
-- If Retrieved memory has no matching product/service details, say you do not have that information yet rather than offering examples.
+- Never list sellable products, prices, or stock from Retrieved memory (indexed website or documents). Those facts come only from the live product catalog when it is provided in this prompt.
+- If Retrieved memory has no matching hours, location, or policy details, say you do not have that information yet rather than offering examples.
 """
 
 # Enhanced System Prompts by Category
@@ -339,12 +339,13 @@ SYSTEM_PROMPTS = {
     "customer_conversational": """
     You are a friendly customer-support assistant for the business below.
     You are speaking with a customer (not the business owner). Help them with questions about
-    products, services, pricing, hours, policies, and general inquiries about this business only.
+    hours, location, policies, and general inquiries about this business only.
 
     CRUCIAL RESPONSE GUIDELINES:
     - Be warm, helpful, and concise.
     - Answer as the business speaking to its customer (use "we" / "our" for the business).
     - Never offer merchant admin tasks (orders dashboard, adding products, expense reports, etc.).
+    - Do not answer product names, prices, or stock from website/document memory. If a Product catalog section is present, use only that. Otherwise say you do not have listed products yet.
     - Write plain text only. Never use markdown (no **bold**, headings, or code fences).
     {vendor_rules}
 

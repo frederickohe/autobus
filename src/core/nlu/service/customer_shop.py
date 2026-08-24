@@ -1,0 +1,575 @@
+"""Rule-based customer shop intents: catalog query and order placement.
+
+Customer WhatsApp/Instagram/web sessions skip the large intent-classification LLM.
+Product facts must come from the merchant Product table, never from intelligence RAG.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+import re
+
+# Keep in sync with core.nlu.service.slot_manager.is_placeholder_order_item_name
+_PLACEHOLDER_ORDER_ITEM_NAMES = frozenset(
+    {
+        "order",
+        "an order",
+        "a order",
+        "new order",
+        "the order",
+        "item",
+        "items",
+        "product",
+        "products",
+        "goods",
+        "something",
+        "purchase",
+        "merchandise",
+    }
+)
+
+
+def _is_placeholder_item_name(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if len(n) < 2:
+        return True
+    return n in _PLACEHOLDER_ORDER_ITEM_NAMES
+
+CUSTOMER_SHOP_INTENTS = frozenset({"view_products", "view_product", "create_order"})
+
+_WORD_NUMBERS = {
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+_ORDER_PHRASES = (
+    "place an order",
+    "place order",
+    "make an order",
+    "create an order",
+    "start an order",
+    "open an order",
+    "book an order",
+    "i want to order",
+    "i want an order",
+    "i'd like to order",
+    "id like to order",
+    "i would like to order",
+    "i want to buy",
+    "i'd like to buy",
+    "id like to buy",
+    "i would like to buy",
+    "i need to order",
+    "i need to buy",
+    "can i order",
+    "can i buy",
+    "i want to purchase",
+    "please order",
+    "order me",
+    "get me",
+    "i'll take",
+    "ill take",
+    "i will take",
+    "add to order",
+)
+
+_ORDER_WORD_RE = re.compile(
+    r"\b(?:order|orders|buy|buying|purchase|purchasing)\b",
+    re.IGNORECASE,
+)
+
+_CATALOG_BROWSE_PHRASES = (
+    "what products",
+    "which products",
+    "what do you sell",
+    "what do you have",
+    "what have you got",
+    "what's available",
+    "whats available",
+    "what is available",
+    "what's in stock",
+    "whats in stock",
+    "what is in stock",
+    "show me your products",
+    "show me the products",
+    "show products",
+    "list your products",
+    "list of products",
+    "your catalog",
+    "your catalogue",
+    "your menu",
+    "your prices",
+    "price list",
+    "anything in stock",
+    "available products",
+    "products available",
+    "what can i buy",
+    "what can i order",
+)
+
+_PRODUCT_QUERY_PHRASES = (
+    "do you have",
+    "do you sell",
+    "have you got",
+    "how much is",
+    "how much are",
+    "how much for",
+    "what's the price",
+    "whats the price",
+    "what is the price",
+    "price of",
+    "cost of",
+    "is there",
+    "are there",
+    "still have",
+    "in stock",
+    "available",
+)
+
+_NAME_PREFIX_RE = re.compile(
+    r"^(?:please\s+)?(?:do you (?:have|sell)|have you got|how much (?:is|are|for)|"
+    r"what(?:'s|s| is) the price of|price of|cost of|"
+    r"i (?:want|need|would like|'d like|d like) to (?:order|buy|purchase|get)|"
+    r"can i (?:order|buy|get)|(?:order|buy|get) me|"
+    r"i(?:'ll|ll| will) take)\s+",
+    re.IGNORECASE,
+)
+
+_TRAILING_JUNK_RE = re.compile(
+    r"[\s?!.]+$|^(?:the|a|an|some|any)\s+",
+    re.IGNORECASE,
+)
+
+_QTY_RE = re.compile(
+    r"(?:(?:qty|quantity|x)\s*)?(\d+)\s*(?:pcs|pieces|units|bags?|bottles?|packs?|boxes?|cartons?)?\b",
+    re.IGNORECASE,
+)
+
+_FAQ_PHRASES = (
+    "hours",
+    "open",
+    "close",
+    "closing",
+    "opening",
+    "location",
+    "address",
+    "where are you",
+    "directions",
+    "refund",
+    "policy",
+    "policies",
+    "delivery fee",
+    "shipping fee",
+)
+
+
+@dataclass(frozen=True)
+class CatalogItem:
+    product_id: str
+    name: str
+    price: Optional[str]
+    stock: Optional[int]
+    category: str = ""
+    description: str = ""
+
+    @property
+    def in_stock(self) -> bool:
+        return self.stock is None or self.stock > 0
+
+
+def catalog_items_from_products(products: Iterable[Any]) -> List[CatalogItem]:
+    items: List[CatalogItem] = []
+    for product in products or []:
+        name = (getattr(product, "name", None) or "").strip()
+        if not name:
+            continue
+        price = getattr(product, "price", None)
+        stock = getattr(product, "number_in_stock", None)
+        try:
+            stock_int = int(stock) if stock is not None else None
+        except (TypeError, ValueError):
+            stock_int = None
+        items.append(
+            CatalogItem(
+                product_id=str(getattr(product, "product_id", "") or ""),
+                name=name,
+                price=None if price is None else str(price),
+                stock=stock_int,
+                category=(getattr(product, "category", None) or "").strip(),
+                description=(getattr(product, "description", None) or "").strip(),
+            )
+        )
+    return items
+
+
+def format_customer_catalog(
+    catalog: Sequence[CatalogItem], *, heading: Optional[str] = None
+) -> str:
+    if not catalog:
+        return "We do not have products listed in our catalog yet."
+    ordered = sorted(catalog, key=lambda item: (not item.in_stock, item.name.lower()))
+    lines = [heading or "Here is what we currently have listed:"]
+    for index, item in enumerate(ordered[:30], 1):
+        bits = [f"{index}. {item.name}"]
+        if item.price is not None:
+            bits.append(f"GHS {item.price}")
+        bits.append(_stock_phrase(item.stock))
+        lines.append(" — ".join(bits))
+    if len(ordered) > 30:
+        lines.append(f"...and {len(ordered) - 30} more.")
+    return "\n".join(lines)
+
+
+def format_customer_product(item: CatalogItem) -> str:
+    bits = [item.name]
+    if item.price is not None:
+        bits.append(f"price GHS {item.price}")
+    bits.append(_stock_phrase(item.stock))
+    line = f"{bits[0]}: {', '.join(bits[1:])}."
+    extra = []
+    if item.category:
+        extra.append(item.category)
+    if item.description:
+        extra.append(item.description[:160])
+    if extra:
+        line = f"{line} {' '.join(extra)}"
+    if item.in_stock:
+        line += " Reply with the product name and quantity to place an order."
+    else:
+        line += " It is currently out of stock."
+    return line
+
+
+def _stock_phrase(stock: Optional[int]) -> str:
+    if stock is None:
+        return "stock not specified"
+    if stock <= 0:
+        return "out of stock"
+    return f"{stock} in stock"
+
+
+def normalize_shop_text(text: str) -> str:
+    t = (text or "").lower().strip()
+    t = t.replace("’", "'").replace("‘", "'")
+    t = re.sub(r"[.!]+$", "", t).strip()
+    t = re.sub(r"\s+", " ", t)
+    return t
+
+
+def is_shop_cancel(text: str) -> bool:
+    t = normalize_shop_text(text)
+    return t in {
+        "cancel",
+        "stop",
+        "abort",
+        "never mind",
+        "nevermind",
+        "forget it",
+        "forget about it",
+        "quit",
+        "cancel order",
+        "cancel the order",
+    }
+
+
+def looks_like_order_request(text: str) -> bool:
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    if any(phrase in t for phrase in _ORDER_PHRASES):
+        return True
+    if _ORDER_WORD_RE.search(t) and not looks_like_faq(text):
+        return True
+    want_starters = (
+        "i want",
+        "i need",
+        "i'd like",
+        "id like",
+        "i would like",
+        "give me",
+        "get me",
+        "i'll take",
+        "ill take",
+        "i will take",
+    )
+    if any(t.startswith(s) for s in want_starters) and not looks_like_faq(text):
+        return True
+    return False
+
+
+def looks_like_catalog_browse(text: str) -> bool:
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    return any(phrase in t for phrase in _CATALOG_BROWSE_PHRASES)
+
+
+def looks_like_product_query(text: str) -> bool:
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    if looks_like_catalog_browse(text) or looks_like_order_request(text):
+        return True
+    return any(phrase in t for phrase in _PRODUCT_QUERY_PHRASES)
+
+
+def looks_like_buy_named_item(text: str, catalog: Sequence[CatalogItem]) -> bool:
+    """True when the user is asking to take a listed product, even without the word order."""
+    if not match_catalog_in_text(text, catalog) and not extract_quantity(text, catalog):
+        return False
+    t = normalize_shop_text(text)
+    starters = (
+        "i want",
+        "i need",
+        "i'd like",
+        "id like",
+        "i would like",
+        "give me",
+        "get me",
+        "i'll take",
+        "ill take",
+        "i will take",
+        "please give",
+        "please send",
+    )
+    if any(t.startswith(s) for s in starters):
+        return True
+    return bool(extract_quantity(text, catalog) and match_catalog_in_text(text, catalog))
+
+
+def looks_like_faq(text: str) -> bool:
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    return any(phrase in t for phrase in _FAQ_PHRASES)
+
+
+def looks_like_product_or_order_utterance(text: str) -> bool:
+    return looks_like_product_query(text) or looks_like_order_request(text)
+
+
+def extract_quantity(text: str, catalog: Sequence[CatalogItem] = ()) -> Optional[int]:
+    """Parse a purchase quantity, ignoring numbers that belong to product names."""
+    stripped = text or ""
+    for item in sorted(catalog, key=lambda i: len(i.name), reverse=True):
+        if item.name and item.name.lower() in stripped.lower():
+            stripped = re.sub(re.escape(item.name), " ", stripped, flags=re.IGNORECASE)
+    t = normalize_shop_text(stripped)
+    if not t:
+        return None
+    if t.isdigit():
+        qty = int(t)
+        return qty if qty > 0 else None
+    for word, number in _WORD_NUMBERS.items():
+        if re.search(rf"\b{word}\b", t):
+            return number
+    match = _QTY_RE.search(t)
+    if not match:
+        return None
+    qty = int(match.group(1))
+    return qty if qty > 0 else None
+
+
+def _name_mentioned(text: str, name: str) -> bool:
+    if not name or not text:
+        return False
+    pattern = r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)"
+    return re.search(pattern, text.lower()) is not None
+
+
+def match_catalog_in_text(
+    text: str, catalog: Sequence[CatalogItem]
+) -> List[CatalogItem]:
+    """Return catalog items whose names appear in the user text (longest names first)."""
+    t = normalize_shop_text(text)
+    if not t or not catalog:
+        return []
+    ranked = sorted(catalog, key=lambda item: len(item.name), reverse=True)
+    hits: List[CatalogItem] = []
+    used_spans = []
+    for item in ranked:
+        name = item.name.strip()
+        if len(name) < 2:
+            continue
+        if not _name_mentioned(t, name):
+            continue
+        start = t.find(name.lower())
+        end = start + len(name.lower()) if start >= 0 else -1
+        if start >= 0 and any(start < u_end and end > u_start for u_start, u_end in used_spans):
+            # Shorter name fully inside an already-matched longer name.
+            continue
+        hits.append(item)
+        if start >= 0:
+            used_spans.append((start, end))
+    return hits
+
+
+def resolve_catalog_query(
+    query: str, catalog: Sequence[CatalogItem]
+) -> List[CatalogItem]:
+    """Resolve a typed product name against the catalog (exact, then contains)."""
+    q = (query or "").strip()
+    if not q or _is_placeholder_item_name(q):
+        return []
+    q_norm = normalize_shop_text(q)
+    exact = [item for item in catalog if normalize_shop_text(item.name) == q_norm]
+    if exact:
+        return exact
+    mentioned = match_catalog_in_text(q, catalog)
+    if mentioned:
+        return mentioned
+    contained = [
+        item
+        for item in catalog
+        if q_norm and q_norm in normalize_shop_text(item.name)
+    ]
+    if contained:
+        return contained
+    # Query contains the product name (user typed extra words).
+    return [
+        item
+        for item in catalog
+        if normalize_shop_text(item.name) and normalize_shop_text(item.name) in q_norm
+    ]
+
+
+def extract_product_query_name(text: str) -> str:
+    """Best-effort leftover name after stripping order/query phrasing."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    cleaned = _NAME_PREFIX_RE.sub("", raw).strip()
+    cleaned = re.sub(
+        r"\b(?:please|thanks|thank you|now|today)\b",
+        " ",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?!.,")
+    cleaned = _TRAILING_JUNK_RE.sub("", cleaned).strip()
+    if _is_placeholder_item_name(cleaned):
+        return ""
+    if len(cleaned) < 2:
+        return ""
+    if extract_quantity(cleaned) and normalize_shop_text(cleaned).isdigit():
+        return ""
+    return cleaned
+
+
+def classify_customer_shop_intent(
+    user_message: str,
+    *,
+    current_intent: str = "",
+    collected_slots: Optional[Dict[str, Any]] = None,
+    catalog: Optional[Sequence[CatalogItem]] = None,
+) -> Tuple[str, Dict[str, Any], List[str]]:
+    """
+    Cheap rule-based shop classifier for customer-channel sessions.
+
+    Returns (intent, extracted_slots, unused_missing_hint). Missing slots are
+    computed later by SlotManager so this can stay side-effect free.
+    """
+    catalog = list(catalog or [])
+    collected = collected_slots or {}
+    text = user_message or ""
+    current = (current_intent or "").strip()
+
+    if (
+        looks_like_faq(text)
+        and not match_catalog_in_text(text, catalog)
+        and not looks_like_order_request(text)
+        and not looks_like_catalog_browse(text)
+    ):
+        return "business_conversation", {}, []
+
+    if current == "create_order":
+        return "create_order", _order_slots_from_message(text, catalog, collected), []
+
+    if current == "view_product" and not looks_like_order_request(text):
+        if not collected.get("product_name") and not collected.get("product_id"):
+            view_slots = _view_slots_from_message(text, catalog)
+            if view_slots:
+                return "view_product", view_slots, []
+
+    mentioned = match_catalog_in_text(text, catalog)
+    if looks_like_catalog_browse(text) and not mentioned:
+        return "view_products", {}, []
+
+    if looks_like_order_request(text) or looks_like_buy_named_item(text, catalog):
+        return "create_order", _order_slots_from_message(text, catalog, collected), []
+
+    if mentioned or looks_like_product_query(text):
+        view_slots = _view_slots_from_message(text, catalog)
+        if not view_slots and looks_like_catalog_browse(text):
+            return "view_products", {}, []
+        if not view_slots and not mentioned:
+            guessed = extract_product_query_name(text)
+            if guessed:
+                return "view_product", {"product_name": guessed}, []
+            return "view_products", {}, []
+        return "view_product", view_slots, []
+
+    return "business_conversation", {}, []
+
+
+def _order_slots_from_message(
+    text: str,
+    catalog: Sequence[CatalogItem],
+    collected: Dict[str, Any],
+) -> Dict[str, Any]:
+    slots: Dict[str, Any] = {}
+    qty = extract_quantity(text, catalog)
+    if qty:
+        slots["quantity"] = str(qty)
+
+    matches = match_catalog_in_text(text, catalog)
+    if not matches:
+        leftover = extract_product_query_name(text)
+        if leftover:
+            matches = resolve_catalog_query(leftover, catalog)
+
+    if len(matches) == 1:
+        item = matches[0]
+        slots["item_name"] = item.name
+        if item.price is not None:
+            slots["unit_price"] = str(item.price)
+        slots["product_id"] = item.product_id
+    elif len(matches) > 1:
+        slots["item_candidates"] = ", ".join(item.name for item in matches)
+    return slots
+
+
+def _view_slots_from_message(
+    text: str, catalog: Sequence[CatalogItem]
+) -> Dict[str, Any]:
+    matches = match_catalog_in_text(text, catalog)
+    if not matches:
+        leftover = extract_product_query_name(text)
+        if leftover:
+            matches = resolve_catalog_query(leftover, catalog)
+            if not matches:
+                return {"product_name": leftover}
+    if len(matches) == 1:
+        item = matches[0]
+        return {
+            "product_name": item.name,
+            "product_id": item.product_id,
+        }
+    if len(matches) > 1:
+        leftover = extract_product_query_name(text) or matches[0].name
+        return {
+            "product_name": leftover,
+            "item_candidates": ", ".join(item.name for item in matches),
+        }
+    return {}

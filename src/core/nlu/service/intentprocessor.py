@@ -15,6 +15,11 @@ from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.nlu.service.llmclient import LLMClient
 from core.nlu.config import SYSTEM_PROMPTS, RESPONSE_TEMPLATES, VENDOR_EXCLUSION_RULES
 from core.nlu.service.slot_manager import is_placeholder_order_item_name
+from core.nlu.service.customer_shop import (
+    catalog_items_from_products,
+    format_customer_catalog,
+    format_customer_product,
+)
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
@@ -28,7 +33,7 @@ from core.agent.tools.agent_config.user_agent_config_service import AgentConfigS
 logger = logging.getLogger(__name__)
 
 class IntentProcessor:
-    """Processes intents using LLM and agent framework tools"""
+    """Processes intents with NLU handlers (no LangChain agent loop)."""
     
     def __init__(self, db_session=None):
         self.llm_client = LLMClient()
@@ -96,8 +101,9 @@ class IntentProcessor:
                 system_prompt
                 + "\n\n## Retrieved memory (same tenant — primary source for company/business facts)\n"
                 + rag_context.strip()
-                + "\n\nGrounding rules: Only use facts from Retrieved memory / Product catalog above. "
-                + "Do not invent products, prices, or services that are not listed there."
+                + "\n\nGrounding rules: Only use facts from Retrieved memory. "
+                + "If a Product catalog section is present, that is the only source for product names, prices, and stock. "
+                + "Never invent products, prices, or services, and never use website/document text as a product list."
             )
         else:
             system_prompt = (
@@ -105,7 +111,8 @@ class IntentProcessor:
                 + "\n\n## Retrieved memory\n"
                 + "No relevant indexed documents were retrieved for this question. "
                 + "Do not invent company or product facts. "
-                + "If the user asks about products or the business, say you need more information "
+                + "If the user asks about products, say you do not have listed products yet. "
+                + "If the user asks about the business, say you need more information "
                 + "in the knowledge base (or that a human agent can help)."
             )
 
@@ -578,9 +585,9 @@ class IntentProcessor:
             elif intent == "delete_product":
                 return self._handle_delete_product(user_id, slots)
             elif intent == "view_products":
-                return self._handle_view_products(user_id, slots)
+                return self._handle_view_products(user_id, slots, user_data=user_data)
             elif intent == "view_product":
-                return self._handle_view_product(user_id, slots)
+                return self._handle_view_product(user_id, slots, user_data=user_data)
             else:
                 return f"❌ Product management intent '{intent}' not supported"
         except Exception as e:
@@ -673,7 +680,7 @@ class IntentProcessor:
         db = next(get_db())
         product_service = ProductService(db)
 
-        product = self._find_product(product_service, slots)
+        product = self._find_product(product_service, slots, user_id=user_id)
         if not product:
             if product_id:
                 return f"❌ Product '{product_id}' not found"
@@ -730,7 +737,7 @@ class IntentProcessor:
         db = next(get_db())
         product_service = ProductService(db)
 
-        product = self._find_product(product_service, slots)
+        product = self._find_product(product_service, slots, user_id=user_id)
         if not product:
             if product_id:
                 return f"❌ Product '{product_id}' not found"
@@ -742,13 +749,20 @@ class IntentProcessor:
 
         return f"✅ {message} (Removed: {product.name} - {product.inventory_id})"
 
-    def _handle_view_products(self, user_id: str, slots: Dict[str, Any]) -> str:
+    def _handle_view_products(
+        self,
+        user_id: str,
+        slots: Dict[str, Any],
+        user_data: Optional[Dict] = None,
+    ) -> str:
         """Handle view_products intent"""
         db = next(get_db())
         product_service = ProductService(db)
 
         category = slots.get("category")
         products = product_service.get_products_by_user(user_id, category=category)
+        if self._is_customer_session(user_data):
+            return format_customer_catalog(catalog_items_from_products(products))
         if not products:
             return "📦 No products found in your inventory yet."
 
@@ -769,18 +783,55 @@ class IntentProcessor:
             lines.append(f"...and {len(products) - 20} more products.")
         return "\n".join(lines)
 
-    def _handle_view_product(self, user_id: str, slots: Dict[str, Any]) -> str:
+    def _handle_view_product(
+        self,
+        user_id: str,
+        slots: Dict[str, Any],
+        user_data: Optional[Dict] = None,
+    ) -> str:
         """Handle view_product intent"""
         product_id = slots.get("product_id")
+        product_name = slots.get("product_name")
 
         db = next(get_db())
         product_service = ProductService(db)
+        is_customer = self._is_customer_session(user_data)
 
-        product = self._find_product(product_service, slots)
+        product = self._find_product(product_service, slots, user_id=user_id)
+        if not product and product_name:
+            matches = product_service.find_products_for_user(str(product_name), user_id)
+            if len(matches) > 1:
+                heading = "I found a few matches. Which one did you mean?"
+                return format_customer_catalog(
+                    catalog_items_from_products(matches), heading=heading
+                ) if is_customer else (
+                    heading
+                    + "\n"
+                    + "\n".join(
+                        f"- {item.name} (ID: {item.product_id})" for item in matches
+                    )
+                )
+            if len(matches) == 1:
+                product = matches[0]
+
         if not product:
+            label = product_name or product_id or "that product"
+            if is_customer:
+                listing = format_customer_catalog(
+                    catalog_items_from_products(
+                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                    )
+                )
+                return (
+                    f'We do not currently have "{label}" in our listed products.\n\n{listing}'
+                )
             if product_id:
                 return f"❌ Product '{product_id}' not found"
             return "❌ Product ID, inventory ID, or product name is required"
+
+        if is_customer:
+            items = catalog_items_from_products([product])
+            return format_customer_product(items[0]) if items else format_customer_catalog([])
 
         photos_block = self._format_product_photos(product, product_service)
         photos_line = photos_block or f"Photo: {product.photo or 'N/A'}"
@@ -818,7 +869,7 @@ class IntentProcessor:
         """
         try:
             if intent == "create_order":
-                return self._handle_create_order(user_id, slots)
+                return self._handle_create_order(user_id, slots, user_data=user_data)
             elif intent == "update_order":
                 return self._handle_update_order(user_id, slots)
             elif intent == "send_order_invoice":
@@ -829,10 +880,16 @@ class IntentProcessor:
             logger.error(f"Error processing order management intent: {e}", exc_info=True)
             return f"❌ Error processing order: {str(e)[:100]}"
 
-    def _handle_create_order(self, user_id: str, slots: Dict[str, Any]) -> str:
+    def _handle_create_order(
+        self,
+        user_id: str,
+        slots: Dict[str, Any],
+        user_data: Optional[Dict] = None,
+    ) -> str:
         """Handle create_order intent"""
         item_name = slots.get("item_name")
         quantity = slots.get("quantity")
+        is_customer = self._is_customer_session(user_data)
 
         if (
             not item_name
@@ -846,7 +903,11 @@ class IntentProcessor:
                 missing.append("quantity")
             return f"❌ Missing required fields: {', '.join(missing)}"
 
-        raw_phone = (str(slots.get("customer_phone") or "").strip() or str(user_id or "").strip())
+        raw_phone = str(slots.get("customer_phone") or "").strip()
+        if not raw_phone and user_data:
+            raw_phone = str(user_data.get("customer_phone") or "").strip()
+        if not raw_phone and user_id and ":" not in str(user_id):
+            raw_phone = str(user_id).strip()
         customer_phone = normalize_ghana_phone_number(raw_phone) if raw_phone else "N/A"
 
         customer_name = (str(slots.get("customer_name") or "").strip())
@@ -861,8 +922,47 @@ class IntentProcessor:
         if line_quantity <= 0:
             return "❌ Quantity must be greater than 0."
 
+        matches = product_service.find_products_for_user(str(item_name), user_id)
+        matched_product = matches[0] if len(matches) == 1 else None
+        if len(matches) > 1:
+            heading = "Which product did you mean?"
+            if is_customer:
+                return format_customer_catalog(
+                    catalog_items_from_products(matches), heading=heading
+                )
+            return heading + "\n" + "\n".join(
+                f"- {item.name}" for item in matches
+            )
+
+        if is_customer:
+            if not matched_product:
+                listing = format_customer_catalog(
+                    catalog_items_from_products(
+                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                    )
+                )
+                return (
+                    f'We do not currently have "{item_name}" in our listed products.\n\n'
+                    f"{listing}"
+                )
+            stock = getattr(matched_product, "number_in_stock", None)
+            if stock is not None and int(stock) <= 0:
+                listing = format_customer_catalog(
+                    catalog_items_from_products(
+                        product_service.get_products_by_user(user_id, skip=0, limit=50)
+                    )
+                )
+                return (
+                    f"{matched_product.name} is currently out of stock.\n\n{listing}"
+                )
+            item_name = matched_product.name
+
         unit_price = self._to_decimal(slots.get("unit_price"), default=Decimal("0"))
-        subtotal = self._to_decimal(slots.get("subtotal_amount"), default=(unit_price * line_quantity))
+        if matched_product is not None and getattr(matched_product, "price", None) is not None:
+            unit_price = self._to_decimal(matched_product.price, default=unit_price)
+        subtotal = self._to_decimal(
+            slots.get("subtotal_amount"), default=(unit_price * line_quantity)
+        )
 
         try:
             order_data = OrderCreateDTO(
@@ -890,7 +990,6 @@ class IntentProcessor:
             return f"❌ Invalid order details: {str(e)}"
 
         seller_user_id = user_id
-        matched_product = product_service.find_product_for_user(item_name, user_id)
         if matched_product and getattr(matched_product, "user_id", None):
             seller_user_id = matched_product.user_id
 
@@ -901,6 +1000,16 @@ class IntentProcessor:
             return f"❌ {message}"
         if not order:
             return "❌ Order was created but could not be retrieved."
+
+        if is_customer:
+            price_bit = ""
+            if unit_price and unit_price > 0:
+                price_bit = f" at GHS {unit_price} each"
+            return (
+                f"✅ Order placed for {line_quantity} x {item_name}{price_bit}. "
+                f"Order number: {order.order_number}. "
+                f"Total: {order.total_amount} {order.currency_code}."
+            )
 
         response_lines = [
             f"✅ {message}",
@@ -1003,24 +1112,33 @@ class IntentProcessor:
             f"Status: {order.order_status} | Payment: {order.payment_status} | Fulfillment: {order.fulfillment_status}"
         )
 
-    def _find_product(self, product_service: ProductService, slots: Dict[str, Any]):
-        """Resolve a product from supported slot keys."""
+    def _find_product(self, product_service: ProductService, slots: Dict[str, Any], user_id: Optional[str] = None):
+        """Resolve a product from supported slot keys, scoped to the merchant when possible."""
         product_id = slots.get("product_id")
+        product = None
         if product_id:
             product = product_service.get_product_by_id(str(product_id))
-            if product:
-                return product
-            return product_service.get_product_by_inventory_id(str(product_id))
+            if not product:
+                product = product_service.get_product_by_inventory_id(str(product_id))
 
-        inventory_id = slots.get("inventory_id")
-        if inventory_id:
-            return product_service.get_product_by_inventory_id(str(inventory_id))
+        if product is None:
+            inventory_id = slots.get("inventory_id")
+            if inventory_id:
+                product = product_service.get_product_by_inventory_id(str(inventory_id))
 
-        product_name = slots.get("product_name")
-        if product_name:
-            products = product_service.get_product_by_name(str(product_name), limit=1)
-            return products[0] if products else None
-        return None
+        if product is None:
+            product_name = slots.get("product_name")
+            if product_name and user_id:
+                product = product_service.find_product_for_user(str(product_name), user_id)
+            elif product_name:
+                products = product_service.get_product_by_name(str(product_name), limit=1)
+                product = products[0] if products else None
+
+        if product and user_id:
+            resolved = product_service._resolve_user_db_id(user_id)
+            if resolved and product.user_id and product.user_id != resolved:
+                return None
+        return product
 
     def _to_int(self, value: Any, default: Optional[int] = None) -> Optional[int]:
         if value is None:

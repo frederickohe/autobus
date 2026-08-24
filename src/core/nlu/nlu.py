@@ -1,6 +1,7 @@
 
 import base64
 import os
+import threading
 from dataclasses import dataclass
 from decimal import Decimal
 import io
@@ -21,6 +22,17 @@ from core.chatwoot.service.chatwoot_api_service import ChatwootAccountClient
 from core.nlu.service.intentprocessor import IntentProcessor
 from core.nlu.service.intents import IntentDetector
 from core.nlu.service.slot_manager import SlotManager
+from core.nlu.service.customer_shop import (
+    CUSTOMER_SHOP_INTENTS,
+    catalog_items_from_products,
+    classify_customer_shop_intent,
+    format_customer_catalog,
+    is_shop_cancel,
+    looks_like_catalog_browse,
+    looks_like_order_request,
+    looks_like_product_or_order_utterance,
+    resolve_catalog_query,
+)
 from core.nlu.service.conversation_manager import ConversationManager
 from core.nlu.service.intent_handler_result import IntentHandlerResult
 from core.nlu.service.security import SecurityManager
@@ -47,6 +59,19 @@ from core.rag.tenant import resolve_effective_rag_tenant_id
 
 logger = logging.getLogger(__name__)
 
+_nlu_system_lock = threading.Lock()
+_nlu_system_instance = None
+
+
+def get_nlu_system(db_session=None):
+    """Process-wide NLU engine. Avoids rebuilding IntentDetector/LLM clients per request."""
+    global _nlu_system_instance
+    if _nlu_system_instance is None:
+        with _nlu_system_lock:
+            if _nlu_system_instance is None:
+                _nlu_system_instance = AutobusNLUSystem(db_session=db_session)
+    return _nlu_system_instance
+
 @dataclass
 class ReceiptData:
     transaction_id: str
@@ -66,7 +91,7 @@ class ReceiptData:
 
 class AutobusNLUSystem:
     def __init__(self, db_session=None):
-        self.intent_detector = IntentDetector()
+        self._intent_detector = None
         self.slot_manager = SlotManager()
         self.conversation_manager = ConversationManager()
         self.security_manager = SecurityManager()
@@ -75,6 +100,13 @@ class AutobusNLUSystem:
         self.date_selection_manager = DateSelectionManager()
         self.db_session = db_session
         self._conversation_rag = ConversationVectorClient()
+
+    @property
+    def intent_detector(self):
+        """Merchant admin intent classification only. Customer sessions skip this."""
+        if self._intent_detector is None:
+            self._intent_detector = IntentDetector()
+        return self._intent_detector
 
     FOLLOWUP_HELP_QUESTION = "Is there anything else I can help you with?"
     CONTINUE_HELP_PROMPT = "Sure — what else can I help you with?"
@@ -126,6 +158,18 @@ class AutobusNLUSystem:
             "thats all thanks",
             "no i'm fine",
             "no im fine",
+            "all set",
+            "i'm fine",
+            "im fine",
+            "i am fine",
+            "that's everything",
+            "thats everything",
+            "that will be all",
+            "that'll be all",
+            "thatll be all",
+            "no i don't",
+            "no i dont",
+            "no i do not",
         }
         if t in exact:
             return True
@@ -140,6 +184,9 @@ class AutobusNLUSystem:
             "no more help",
             "that's it",
             "thats it",
+            "that's everything",
+            "thats everything",
+            "all set",
         )
         if any(p in t for p in contained):
             return True
@@ -162,6 +209,48 @@ class AutobusNLUSystem:
             "yes thanks",
             "yea",
         }
+
+    @classmethod
+    def _is_thanks_only(cls, text: str) -> bool:
+        """True when the user is thanking / acknowledging with no new request.
+
+        Used after the wrap-up question so 'thanks' closes the thread. Does not
+        include bare affirmatives like 'ok' / 'sure' (those mean continue).
+        """
+        t = cls._normalize_chat_text(text)
+        if not t or cls._is_bare_affirmative(text) or cls._looks_like_new_request(text):
+            return False
+        exact = {
+            "thanks",
+            "thank you",
+            "thank you so much",
+            "thanks so much",
+            "thx",
+            "ty",
+            "got it",
+            "gotcha",
+            "appreciate it",
+            "much appreciated",
+            "that helps",
+            "that's helpful",
+            "thats helpful",
+            "that is helpful",
+        }
+        if t in exact:
+            return True
+        return t.startswith("thank") or t.startswith("thanks ")
+
+    @classmethod
+    def _is_unresolved_assistant_prompt(cls, message: str) -> bool:
+        """True when the assistant is still collecting a choice, not wrapping up."""
+        t = (message or "").lower()
+        needles = (
+            "which one did you mean",
+            "which product would you like",
+            "which product would you like to order",
+            "what would you like to order",
+        )
+        return any(n in t for n in needles)
 
     @classmethod
     def _looks_like_new_request(cls, text: str) -> bool:
@@ -460,7 +549,13 @@ class AutobusNLUSystem:
         return text
 
     def _classify_customer_channel_intent(
-        self, user_message: str, media_context: Optional[Dict[str, Any]] = None
+        self,
+        user_message: str,
+        media_context: Optional[Dict[str, Any]] = None,
+        *,
+        current_intent: str = "",
+        collected_slots: Optional[Dict[str, Any]] = None,
+        catalog: Optional[List] = None,
     ) -> tuple:
         """Rule-based intent for WhatsApp/Instagram/web customer sessions. No LLM."""
         if self._is_customer_handoff(user_message):
@@ -477,7 +572,35 @@ class AutobusNLUSystem:
             not normalized or normalized.startswith(self._DEFAULT_IMAGE_PLACEHOLDER)
         ):
             return "cannot_process_image", {}, []
-        return "business_conversation", {}, []
+        return classify_customer_shop_intent(
+            user_message,
+            current_intent=current_intent,
+            collected_slots=collected_slots or {},
+            catalog=catalog or [],
+        )
+
+    def _load_customer_catalog(self, user_id: str) -> List:
+        """Load the merchant's live Product rows as catalog items (session closed after copy)."""
+        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        owner_id = merchant_id or user_id
+        db = None
+        try:
+            from core.product.service.product_service import ProductService
+
+            db = SessionLocal()
+            products = ProductService(db).get_products_by_user(
+                str(owner_id), skip=0, limit=100
+            )
+            return catalog_items_from_products(products)
+        except Exception as e:
+            logger.warning("[SHOP] Failed to load customer catalog for %s: %s", user_id, e)
+            return []
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
 
     def _goodbye_copy(self, user_id: str) -> str:
         user_data = self._get_user_data(user_id)
@@ -493,11 +616,20 @@ class AutobusNLUSystem:
 
     def _ask_ending_question(self, user_id: str, lead: str = "") -> str:
         state = self.conversation_manager.get_conversation_state(user_id)
+        if getattr(state, "intervention_active", False):
+            text = (lead or "").strip()
+            if text:
+                self.conversation_manager.update_conversation_history(user_id, "assistant", text)
+            return text
         state.conversation_lifecycle = "awaiting_followup_help"
         state.awaiting_satisfaction = False
         self.conversation_manager._save_conversation_state(state)
         follow = self.FOLLOWUP_HELP_QUESTION
-        text = f"{lead.strip()}\n\n{follow}" if (lead or "").strip() else follow
+        body = (lead or "").strip()
+        if follow.lower() in body.lower():
+            text = body
+        else:
+            text = f"{body}\n\n{follow}" if body else follow
         self.conversation_manager.update_conversation_history(user_id, "assistant", text)
         return text
 
@@ -577,11 +709,16 @@ class AutobusNLUSystem:
     def _conversation_completion_tool(self, user_id: str, success_message: str) -> str:
         """After a fulfilled intent (HTTP 200): keep success text and prompt for more help."""
         state = self.conversation_manager.get_conversation_state(user_id)
+        if getattr(state, "intervention_active", False):
+            return success_message or ""
         state.conversation_lifecycle = "awaiting_followup_help"
         state.awaiting_satisfaction = False
         self.conversation_manager._save_conversation_state(state)
-        follow = f"\n\n{self.FOLLOWUP_HELP_QUESTION}"
-        return f"{(success_message or '').strip()}{follow}"
+        body = (success_message or "").strip()
+        follow = self.FOLLOWUP_HELP_QUESTION
+        if follow.lower() in body.lower():
+            return body
+        return f"{body}\n\n{follow}" if body else follow
 
     def _terminal_listener_apply(self, user_id: str, outcome: IntentHandlerResult) -> str:
         if outcome.http_status == 200:
@@ -676,7 +813,7 @@ class AutobusNLUSystem:
             return ""
 
         if state.conversation_lifecycle == "awaiting_followup_help":
-            if self._is_declining_more_help(user_message):
+            if self._is_declining_more_help(user_message) or self._is_thanks_only(user_message):
                 return self._complete_with_goodbye(user_id)
             if self._is_bare_affirmative(user_message):
                 state.conversation_lifecycle = "active"
@@ -712,17 +849,29 @@ class AutobusNLUSystem:
         from core.nlu.config import INTENTS
 
         merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        customer_catalog = []
         if merchant_id:
-            # Customer WhatsApp/Instagram/web threads always land on conversational
-            # intents. Skip the large intent-classification LLM and use cheap rules.
+            # Customer threads skip the large intent LLM. Shop questions use the
+            # live Product catalog; everything else stays on cheap conversational rules.
             user_message = self._enrich_customer_channel_text(user_message, media_context)
+            if is_shop_cancel(user_message) and (state.current_intent or "") in CUSTOMER_SHOP_INTENTS:
+                state.current_intent = ""
+                state.collected_slots = {}
+                self.conversation_manager._save_conversation_state(state)
+                return self._ask_ending_question(user_id, "No problem — I cancelled that.")
+            customer_catalog = self._load_customer_catalog(user_id)
             intent, extracted_slots, missing_slots = self._classify_customer_channel_intent(
-                user_message, media_context
+                user_message,
+                media_context,
+                current_intent=state.current_intent,
+                collected_slots=state.collected_slots,
+                catalog=customer_catalog,
             )
             logger.info(
-                "Customer session %s: skipped intent LLM, intent=%s",
+                "Customer session %s: skipped intent LLM, intent=%s slots=%s",
                 user_id,
                 intent,
+                extracted_slots,
             )
         else:
             logger.info(
@@ -739,6 +888,7 @@ class AutobusNLUSystem:
             preserve_intents = {
                 "request_intervention",
                 "cannot_process_image",
+                *CUSTOMER_SHOP_INTENTS,
             }
             if intent not in conversational_only and intent not in preserve_intents:
                 logger.info(
@@ -749,6 +899,13 @@ class AutobusNLUSystem:
                 intent = "business_conversation"
                 missing_slots = []
                 state.current_intent = ""
+                state.collected_slots = {}
+            elif (
+                (state.current_intent or "").strip() in CUSTOMER_SHOP_INTENTS
+                and intent not in CUSTOMER_SHOP_INTENTS
+                and intent in conversational_only
+            ):
+                # Left the shop flow for greeting/FAQ — drop leftover order slots.
                 state.collected_slots = {}
 
         if intent == "goodbye":
@@ -891,11 +1048,33 @@ class AutobusNLUSystem:
             elif target_slot and not state.collected_slots.get(target_slot):
                 current_missing = [target_slot]
 
+        handler_outcome = None
         if current_missing or (len(state.collected_slots) == 1 and 'amount' in state.collected_slots):
             prompt = self.slot_manager.generate_slot_prompt(intent, current_missing)
-            response = self.response_formatter.format_response(
-                intent, "missing_slots", prompt=prompt
-            )
+            if merchant_id and intent == "create_order" and "item_name" in (current_missing or []):
+                catalog_text = format_customer_catalog(customer_catalog)
+                candidates = state.collected_slots.get("item_candidates")
+                guessed = (user_message or "").strip()
+                if candidates:
+                    prompt = f"Which one did you mean: {candidates}?"
+                elif (
+                    guessed
+                    and not looks_like_order_request(user_message)
+                    and not looks_like_catalog_browse(user_message)
+                    and not resolve_catalog_query(guessed, customer_catalog)
+                ):
+                    prompt = (
+                        f'We do not currently have "{guessed}" in our listed products.\n\n'
+                        f"{catalog_text}\nWhich product would you like to order?"
+                    )
+                else:
+                    prompt = f"{prompt}\n\n{catalog_text}"
+            if merchant_id and intent in CUSTOMER_SHOP_INTENTS:
+                response = prompt
+            else:
+                response = self.response_formatter.format_response(
+                    intent, "missing_slots", prompt=prompt
+                )
 
         else:
             # All slots collected, execute action directly
@@ -910,7 +1089,22 @@ class AutobusNLUSystem:
 
         # Clear collected slots if action was executed
         if not current_missing:
-            self.conversation_manager.clear_collected_slots(user_id)
+            if (
+                intent == "create_order"
+                and handler_outcome is not None
+                and handler_outcome.http_status != 200
+            ):
+                state = self.conversation_manager.get_conversation_state(user_id)
+                state.collected_slots.pop("item_name", None)
+                state.collected_slots.pop("product_id", None)
+                state.collected_slots.pop("unit_price", None)
+                state.collected_slots.pop("item_candidates", None)
+                self.conversation_manager._save_conversation_state(state)
+            else:
+                self.conversation_manager.clear_collected_slots(user_id)
+                state = self.conversation_manager.get_conversation_state(user_id)
+                state.current_intent = ""
+                self.conversation_manager._save_conversation_state(state)
         
         return response
     
@@ -1749,8 +1943,9 @@ class AutobusNLUSystem:
         user_data = self._get_user_data(user_id)
 
         # Public-site customers chat as ``<merchant_id>:<phone>`` — never run merchant admin flows.
+        # Catalog query and order placement are the exception: they use ProductService / OrderService.
         if user_data and user_data.get("is_customer_session"):
-            if intent not in conversational_intents:
+            if intent not in conversational_intents and intent not in CUSTOMER_SHOP_INTENTS:
                 logger.info(
                     "Customer session %s: redirecting admin intent '%s' to business_conversation",
                     user_id,
@@ -1767,6 +1962,13 @@ class AutobusNLUSystem:
                 slots=slots,
                 user_data=user_data,
             )
+            state = self.conversation_manager.get_conversation_state(user_id)
+            if getattr(state, "intervention_active", False):
+                return IntentHandlerResult(msg, None)
+            is_customer = bool((user_data or {}).get("is_customer_session"))
+            if is_customer and intent not in ("greeting", "goodbye"):
+                # Inbox AI (no owner takeover): offer wrap-up after answering.
+                return IntentHandlerResult(msg, 200)
             if intent not in ("greeting", "goodbye"):
                 self._mark_awaiting_satisfaction(user_id)
             return IntentHandlerResult(msg, None)
@@ -1855,24 +2057,37 @@ class AutobusNLUSystem:
             http = 200 if m.startswith(("✅", "📧")) else None
             return IntentHandlerResult(msg, http)
         elif intent in product_management_intents:
-            # Route product management intents
+            owner_id = self._resolve_internal_user_id(user_id, user_data)
             msg = self.intent_processor.process_product_management_intent(
                 intent,
                 user_message,
                 conversation_history,
                 slots,
-                user_id=user_id,
+                user_id=owner_id,
                 user_data=user_data
             )
-            return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
+            http = 200 if (msg or "").strip().startswith("✅") else None
+            if (
+                user_data
+                and user_data.get("is_customer_session")
+                and intent in ("view_products", "view_product")
+                and (msg or "").strip()
+                and not self._is_unresolved_assistant_prompt(msg)
+            ):
+                http = 200
+            return IntentHandlerResult(msg, http)
         elif intent in order_management_intents:
-            # Route order management intents
+            owner_id = self._resolve_internal_user_id(user_id, user_data)
+            if user_data and user_data.get("is_customer_session"):
+                if user_data.get("customer_phone") and not slots.get("customer_phone"):
+                    slots["customer_phone"] = user_data["customer_phone"]
+                slots.setdefault("order_source", "chat")
             msg = self.intent_processor.process_order_management_intent(
                 intent,
                 user_message,
                 conversation_history,
                 slots,
-                user_id=user_id,
+                user_id=owner_id,
                 user_data=user_data,
             )
             return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
@@ -2012,7 +2227,14 @@ class AutobusNLUSystem:
         # Customer FAQ/business questions with no indexed knowledge → human intervention.
         # Only after a successful empty search (not on RAG auth/network failures).
         is_customer = bool((user_data or {}).get("is_customer_session"))
-        if (
+        if is_customer and looks_like_product_or_order_utterance(user_message):
+            # Product/price/stock questions must not be answered from intelligence docs.
+            catalog_context = self._format_merchant_product_catalog(user_data)
+            if catalog_context:
+                rag_context = catalog_context
+            else:
+                return "We do not have products listed in our catalog yet."
+        elif (
             is_customer
             and intent == "business_conversation"
             and self._conversation_rag.enabled()
@@ -2020,34 +2242,17 @@ class AutobusNLUSystem:
             and rag_search_ok
             and rag_hit_count == 0
         ):
-            # Prefer merchant product catalog when documents are missing but products exist in DB.
-            catalog_context = self._format_merchant_product_catalog(user_data)
-            if catalog_context:
-                rag_context = catalog_context
-                logger.info(
-                    "[RAG] No document hits for %s; using product catalog fallback",
-                    user_id,
-                )
-            else:
-                logger.info(
-                    "[RAG] No knowledge hits for customer session %s; activating intervention",
-                    user_id,
-                )
-                self._activate_intervention(
-                    user_id=user_id,
-                    trigger="insufficient_knowledge",
-                    reason=user_message or "no relevant knowledge base hits",
-                    metadata={"intent": intent, "tenant_id": tenant_id},
-                )
-                return self.response_formatter.format_response("", "intervention_created")
-        elif is_customer and intent == "business_conversation":
-            # Augment document RAG with live product catalog when available.
-            catalog_context = self._format_merchant_product_catalog(user_data)
-            if catalog_context:
-                rag_context = (
-                    (rag_context + "\n\n" if rag_context else "")
-                    + catalog_context
-                )
+            logger.info(
+                "[RAG] No knowledge hits for customer session %s; activating intervention",
+                user_id,
+            )
+            self._activate_intervention(
+                user_id=user_id,
+                trigger="insufficient_knowledge",
+                reason=user_message or "no relevant knowledge base hits",
+                metadata={"intent": intent, "tenant_id": tenant_id},
+            )
+            return self.response_formatter.format_response("", "intervention_created")
 
         msg = self.intent_processor.process_conversational_intent(
             intent,

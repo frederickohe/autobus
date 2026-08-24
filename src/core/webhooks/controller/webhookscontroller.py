@@ -12,7 +12,7 @@ from sqlalchemy import func, or_
 import logging
 import os
 from core.user.model.User import User
-from core.nlu.nlu import AutobusNLUSystem
+from core.nlu.nlu import get_nlu_system
 from core.webhooks.service.whatsapp_service import WhatsAppService
 from utilities.phone_utils import convert_to_local_ghana_format, normalize_ghana_phone_number
 from core.auth.service.authservice import AuthService
@@ -672,7 +672,7 @@ def handle_instagram_webhook(payload: dict, db: Session):
             )
         svc.send_sender_action(token, sender_id, "mark_seen")
         svc.send_sender_action(token, sender_id, "typing_on")
-        nlu_system = AutobusNLUSystem(db_session=db)
+        nlu_system = get_nlu_system()
         reply = nlu_system.process_message(nlu_user_id, text)
         outbound = _nlu_reply_text(reply)
         if not outbound:
@@ -727,7 +727,7 @@ async def handle_simple_chat(
             nlu_user_id = cust
             logger.info("Processing simple chat (legacy key) customer=%s", cust[:32])
 
-        nlu_system = AutobusNLUSystem(db_session=db)
+        nlu_system = get_nlu_system()
         response_message = nlu_system.process_message(nlu_user_id, msg)
 
         logger.info("Generated response: %s", (response_message or "")[:200])
@@ -917,7 +917,7 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
     nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
     logger.info("Processing message through NLU for %s", nlu_user_id)
 
-    nlu_system = AutobusNLUSystem(db_session=db)
+    nlu_system = get_nlu_system()
     response_message = nlu_system.process_message(nlu_user_id, message_text)
     outbound = _nlu_reply_text(response_message)
 
@@ -1143,7 +1143,7 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
         nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
         logger.info("Processing image through NLU for %s", nlu_user_id)
 
-        nlu_system = AutobusNLUSystem(db_session=db)
+        nlu_system = get_nlu_system()
 
         caption = image_data.get("caption", "").strip()
         if caption:
@@ -1205,7 +1205,7 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
         nlu_user_id = _whatsapp_nlu_user_id(phone_id, phone, db)
         logger.info("Processing audio through NLU for %s", nlu_user_id)
 
-        nlu_system = AutobusNLUSystem(db_session=db)
+        nlu_system = get_nlu_system()
 
         caption = audio_data.get("caption", "").strip()
         if caption:

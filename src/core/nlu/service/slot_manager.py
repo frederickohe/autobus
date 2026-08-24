@@ -54,6 +54,15 @@ class SlotManager:
         """Get list of missing required slots for an intent"""
         if intent not in self.intents:
             return []
+
+        if intent == "view_product":
+            if (
+                current_slots.get("product_id")
+                or current_slots.get("inventory_id")
+                or current_slots.get("product_name")
+            ):
+                return []
+            return ["product_name"]
         
         required_slots = self.intents[intent].get("required_slots", [])
         missing = []

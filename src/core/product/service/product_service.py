@@ -422,6 +422,40 @@ class ProductService:
             )
             return None
 
+    def find_products_for_user(
+        self, name: str, user_id: str, limit: int = 10
+    ) -> List[Product]:
+        """Find a merchant's listed products by name (exact first, then partial)."""
+        if not name or not user_id:
+            return []
+        try:
+            resolved_user_id = self._resolve_user_db_id(user_id)
+            if not resolved_user_id:
+                return []
+            matches = (
+                self.db.query(Product)
+                .filter(
+                    Product.user_id == resolved_user_id,
+                    Product.name.ilike(f"%{name}%"),
+                )
+                .order_by(desc(Product.created_at))
+                .limit(limit)
+                .all()
+            )
+            exact = [
+                product
+                for product in matches
+                if (product.name or "").strip().lower() == name.strip().lower()
+            ]
+            return exact or matches
+        except Exception as e:
+            logger.error(
+                "[PRODUCT_SERVICE] Error fetching products for user: %s",
+                str(e),
+                exc_info=True,
+            )
+            return []
+
     def get_all_products(self, skip: int = 0, limit: int = 100, category: Optional[str] = None) -> List[Product]:
         """Get all products with optional filtering."""
         try:
