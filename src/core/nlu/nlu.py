@@ -32,6 +32,7 @@ from core.nlu.service.customer_shop import (
     extract_product_query_name,
     leftover_is_generic_catalog_query,
     looks_like_catalog_browse,
+    looks_like_faq,
     looks_like_generic_stock_inquiry,
     looks_like_order_request,
     looks_like_product_or_order_utterance,
@@ -799,7 +800,79 @@ class AutobusNLUSystem:
                 db.close()
             except Exception:
                 pass
-    
+
+    def _handoff_because_ai_cannot_handle(
+        self,
+        *,
+        user_id: str,
+        trigger: str,
+        reason: str = "",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Pause the bot and bring in a human when automation cannot fulfill the request."""
+        self._activate_intervention(
+            user_id=user_id,
+            trigger=trigger,
+            reason=reason,
+            metadata=metadata or {},
+        )
+        return self.response_formatter.format_response("", "intervention_created")
+
+    @classmethod
+    def _assistant_admits_cannot_handle(cls, text: str) -> bool:
+        """True when a generated reply is an inability / no-knowledge admission."""
+        t = (text or "").lower()
+        if not t.strip():
+            return False
+        needles = (
+            "do not have that information",
+            "don't have that information",
+            "do not have this information",
+            "don't have this information",
+            "don't have that info",
+            "need more information in the knowledge",
+            "not in the knowledge base",
+            "don't have enough information",
+            "do not have enough information",
+            "i don't have enough information",
+            "a human agent can help",
+            "i'm not able to help",
+            "i am not able to help",
+            "i cannot help with that",
+            "i can't help with that",
+            "unable to answer",
+            "don't have listed products yet",
+            "do not have listed products yet",
+        )
+        return any(n in t for n in needles)
+
+    def _customer_needs_human_for_unknown(
+        self, user_message: str, *, intent: str
+    ) -> bool:
+        """Skip handoff on greetings, wrap-up, and short acknowledgements."""
+        if intent in ("greeting", "goodbye"):
+            return False
+        if self._is_bare_affirmative(user_message) or self._is_thanks_only(user_message):
+            return False
+        if self._is_content_with_rag(user_message) and not self._looks_like_new_request(
+            user_message
+        ):
+            return False
+        if looks_like_faq(user_message) or self._looks_like_new_request(user_message):
+            return True
+        return len((user_message or "").split()) >= 4
+
+    def _empty_catalog_cannot_fulfill(
+        self, assistant_message: str, user_message: str = ""
+    ) -> bool:
+        t = (assistant_message or "").strip().lower()
+        empty = "we do not have products listed in our catalog yet"
+        if empty not in t:
+            return False
+        # Browse/list with an empty catalog is still a valid AI answer.
+        # Ordering (or naming a missing item with no catalog) is not.
+        return "we do not currently have" in t or looks_like_order_request(user_message)
+
     def process_message(
         self, 
         user_id: str, 
@@ -981,10 +1054,22 @@ class AutobusNLUSystem:
             response = self.response_formatter.format_response("", "intervention_created")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
-        # If the model explicitly reported it cannot process the image, ask the user
+        # Customer images the model cannot read → human (the agent can view the photo).
+        # Merchant admin chats still ask for a caption.
         if intent == "cannot_process_image":
-            logger.info("Model cannot process image for user %s; asking for description", user_id)
-            response = self.response_formatter.format_response("", "ask_for_image_description")
+            if merchant_id:
+                logger.info(
+                    "Model cannot process image for customer %s; activating intervention",
+                    user_id,
+                )
+                response = self._handoff_because_ai_cannot_handle(
+                    user_id=user_id,
+                    trigger="cannot_process_image",
+                    reason=user_message or "unable to process customer image",
+                )
+            else:
+                logger.info("Model cannot process image for user %s; asking for description", user_id)
+                response = self.response_formatter.format_response("", "ask_for_image_description")
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
         
@@ -1108,6 +1193,16 @@ class AutobusNLUSystem:
         if current_missing or (len(state.collected_slots) == 1 and 'amount' in state.collected_slots):
             prompt = self.slot_manager.generate_slot_prompt(intent, current_missing)
             if merchant_id and intent == "create_order" and "item_name" in (current_missing or []):
+                if not customer_catalog:
+                    response = self._handoff_because_ai_cannot_handle(
+                        user_id=user_id,
+                        trigger="insufficient_catalog",
+                        reason=user_message or "no products listed to fulfill order",
+                    )
+                    self.conversation_manager.update_conversation_history(
+                        user_id, "assistant", response
+                    )
+                    return response
                 catalog_text = format_customer_catalog(customer_catalog)
                 candidates = state.collected_slots.get("item_candidates")
                 guessed = extract_product_query_name(user_message) or (user_message or "").strip()
@@ -2123,6 +2218,17 @@ class AutobusNLUSystem:
                 user_id=owner_id,
                 user_data=user_data
             )
+            if (
+                user_data
+                and user_data.get("is_customer_session")
+                and self._empty_catalog_cannot_fulfill(msg, user_message)
+            ):
+                msg = self._handoff_because_ai_cannot_handle(
+                    user_id=user_id,
+                    trigger="insufficient_catalog",
+                    reason=user_message or "no products listed",
+                    metadata={"intent": intent},
+                )
             http = 200 if (msg or "").strip().startswith("✅") else None
             return IntentHandlerResult(msg, http)
         elif intent in order_management_intents:
@@ -2139,6 +2245,17 @@ class AutobusNLUSystem:
                 user_id=owner_id,
                 user_data=user_data,
             )
+            if (
+                user_data
+                and user_data.get("is_customer_session")
+                and self._empty_catalog_cannot_fulfill(msg, user_message)
+            ):
+                msg = self._handoff_because_ai_cannot_handle(
+                    user_id=user_id,
+                    trigger="insufficient_catalog",
+                    reason=user_message or "no products listed to fulfill order",
+                    metadata={"intent": intent},
+                )
             return IntentHandlerResult(msg, 200 if (msg or "").strip().startswith("✅") else None)
         elif intent in user_management_intents:
             return self._process_user_management_intent(user_id, intent, slots)
@@ -2274,34 +2391,51 @@ class AutobusNLUSystem:
                 logger.warning(f"[RAG] search failed for {user_id}: {e}", exc_info=True)
 
         # Customer FAQ/business questions with no indexed knowledge → human intervention.
-        # Only after a successful empty search (not on RAG auth/network failures).
+        # Skip on RAG auth/network failures so a transient 401 does not page the owner.
         is_customer = bool((user_data or {}).get("is_customer_session"))
         if is_customer and looks_like_product_or_order_utterance(user_message):
             # Product/price/stock questions must not be answered from intelligence docs.
             catalog_context = self._format_merchant_product_catalog(user_data)
             if catalog_context:
                 rag_context = catalog_context
+            elif looks_like_order_request(user_message):
+                logger.info(
+                    "[SHOP] Empty catalog for customer order %s; activating intervention",
+                    user_id,
+                )
+                return self._handoff_because_ai_cannot_handle(
+                    user_id=user_id,
+                    trigger="insufficient_catalog",
+                    reason=user_message or "no products listed to fulfill order",
+                    metadata={"intent": intent},
+                )
             else:
                 return "We do not have products listed in our catalog yet."
-        elif (
-            is_customer
-            and intent == "business_conversation"
-            and self._conversation_rag.enabled()
-            and tenant_id
-            and rag_search_ok
-            and rag_hit_count == 0
+        elif is_customer and self._customer_needs_human_for_unknown(
+            user_message, intent=intent
         ):
-            logger.info(
-                "[RAG] No knowledge hits for customer session %s; activating intervention",
-                user_id,
-            )
-            self._activate_intervention(
-                user_id=user_id,
-                trigger="insufficient_knowledge",
-                reason=user_message or "no relevant knowledge base hits",
-                metadata={"intent": intent, "tenant_id": tenant_id},
-            )
-            return self.response_formatter.format_response("", "intervention_created")
+            no_knowledge_backend = not self._conversation_rag.enabled() or not tenant_id
+            empty_search = rag_search_ok and rag_hit_count == 0
+            if no_knowledge_backend or empty_search:
+                logger.info(
+                    "[RAG] No means to answer customer session %s (enabled=%s tenant=%s hits=%s ok=%s); activating intervention",
+                    user_id,
+                    self._conversation_rag.enabled(),
+                    tenant_id,
+                    rag_hit_count,
+                    rag_search_ok,
+                )
+                return self._handoff_because_ai_cannot_handle(
+                    user_id=user_id,
+                    trigger="insufficient_knowledge",
+                    reason=user_message or "no relevant knowledge base hits",
+                    metadata={
+                        "intent": intent,
+                        "tenant_id": tenant_id,
+                        "rag_enabled": self._conversation_rag.enabled(),
+                        "rag_hit_count": rag_hit_count,
+                    },
+                )
 
         msg = self.intent_processor.process_conversational_intent(
             intent,
@@ -2312,6 +2446,18 @@ class AutobusNLUSystem:
             user_data=user_data,
             rag_context=rag_context,
         )
+
+        if is_customer and self._assistant_admits_cannot_handle(msg):
+            logger.info(
+                "[RAG] Assistant admitted it cannot handle customer session %s; activating intervention",
+                user_id,
+            )
+            return self._handoff_because_ai_cannot_handle(
+                user_id=user_id,
+                trigger="assistant_cannot_handle",
+                reason=user_message or (msg or "")[:240],
+                metadata={"intent": intent, "tenant_id": tenant_id},
+            )
 
         # Do not write chat turns back into the knowledge index. Prior assistant
         # hallucinations were being retrieved as "facts" on later product questions.
