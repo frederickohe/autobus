@@ -28,7 +28,9 @@ from core.nlu.service.customer_shop import (
     classify_customer_shop_intent,
     format_customer_catalog,
     is_shop_cancel,
+    leftover_is_generic_catalog_query,
     looks_like_catalog_browse,
+    looks_like_generic_stock_inquiry,
     looks_like_order_request,
     looks_like_product_or_order_utterance,
     resolve_catalog_query,
@@ -388,18 +390,6 @@ class AutobusNLUSystem:
         "see you",
         "see ya",
         "later",
-        "that's all",
-        "thats all",
-        "that is all",
-        "nothing else",
-        "nothing more",
-        "i'm done",
-        "im done",
-        "we're done",
-        "were done",
-        "that's it",
-        "thats it",
-        "that is it",
         "thanks bye",
         "thank you bye",
     }
@@ -720,10 +710,46 @@ class AutobusNLUSystem:
             return body
         return f"{body}\n\n{follow}" if body else follow
 
+    def _previous_assistant_asked_wrapup(self, state) -> bool:
+        """True when the last assistant turn already asked the wrap-up question."""
+        history = list(getattr(state, "conversation_history", None) or [])
+        if history and str(history[-1].get("role") or "").lower() == "user":
+            history = history[:-1]
+        for entry in reversed(history):
+            role = str(entry.get("role") or "").lower()
+            if role == "assistant":
+                content = str(entry.get("content") or "")
+                return self.FOLLOWUP_HELP_QUESTION.lower() in content.lower()
+            if role in {"user", "human"}:
+                return False
+        return False
+
+    def _is_customer_inbox_user(self, user_id: str) -> bool:
+        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        return bool(merchant_id)
+
+    def _is_customer_conversation_ending(self, text: str, state) -> bool:
+        """True when the customer is wrapping up rather than starting or continuing a request."""
+        if self._looks_like_new_request(text):
+            return False
+        shop_open = (getattr(state, "current_intent", "") or "") in CUSTOMER_SHOP_INTENTS
+        declining = self._is_declining_more_help(text) or self._is_thanks_only(text)
+        if shop_open:
+            return declining
+        return declining or self._is_content_with_rag(text)
+
+    def _without_wrapup_question(self, text: str) -> str:
+        follow = self.FOLLOWUP_HELP_QUESTION
+        body = (text or "").replace(follow, "")
+        return re.sub(r"\n{3,}", "\n\n", body).strip()
+
     def _terminal_listener_apply(self, user_id: str, outcome: IntentHandlerResult) -> str:
+        message = outcome.message or ""
+        if self._is_customer_inbox_user(user_id):
+            return self._without_wrapup_question(message)
         if outcome.http_status == 200:
-            return self._conversation_completion_tool(user_id, outcome.message)
-        return outcome.message
+            return self._conversation_completion_tool(user_id, message)
+        return message
 
     def _activate_intervention(
         self,
@@ -812,7 +838,31 @@ class AutobusNLUSystem:
                 return "\n\n".join(pending_agent_replies)
             return ""
 
-        if state.conversation_lifecycle == "awaiting_followup_help":
+        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
+        if merchant_id:
+            asked_wrapup = (
+                state.conversation_lifecycle == "awaiting_followup_help"
+                or self._previous_assistant_asked_wrapup(state)
+            )
+            if asked_wrapup:
+                if self._is_declining_more_help(user_message) or self._is_thanks_only(user_message):
+                    return self._complete_with_goodbye(user_id)
+                if self._is_bare_affirmative(user_message):
+                    state.conversation_lifecycle = "active"
+                    state.awaiting_satisfaction = False
+                    self.conversation_manager._save_conversation_state(state)
+                    self.conversation_manager.update_conversation_history(
+                        user_id, "assistant", self.CONTINUE_HELP_PROMPT
+                    )
+                    return self.CONTINUE_HELP_PROMPT
+                state.conversation_lifecycle = "active"
+                state.awaiting_satisfaction = False
+                self.conversation_manager._save_conversation_state(state)
+            elif self._is_customer_goodbye(user_message):
+                return self._complete_with_goodbye(user_id)
+            elif self._is_customer_conversation_ending(user_message, state):
+                return self._ask_ending_question(user_id)
+        elif state.conversation_lifecycle == "awaiting_followup_help":
             if self._is_declining_more_help(user_message) or self._is_thanks_only(user_message):
                 return self._complete_with_goodbye(user_id)
             if self._is_bare_affirmative(user_message):
@@ -848,7 +898,6 @@ class AutobusNLUSystem:
 
         from core.nlu.config import INTENTS
 
-        merchant_id, _ = self._parse_merchant_scoped_user_id(user_id)
         customer_catalog = []
         if merchant_id:
             # Customer threads skip the large intent LLM. Shop questions use the
@@ -1061,6 +1110,8 @@ class AutobusNLUSystem:
                     guessed
                     and not looks_like_order_request(user_message)
                     and not looks_like_catalog_browse(user_message)
+                    and not looks_like_generic_stock_inquiry(user_message, customer_catalog)
+                    and not leftover_is_generic_catalog_query(guessed)
                     and not resolve_catalog_query(guessed, customer_catalog)
                 ):
                     prompt = (
@@ -1966,10 +2017,9 @@ class AutobusNLUSystem:
             if getattr(state, "intervention_active", False):
                 return IntentHandlerResult(msg, None)
             is_customer = bool((user_data or {}).get("is_customer_session"))
-            if is_customer and intent not in ("greeting", "goodbye"):
-                # Inbox AI (no owner takeover): offer wrap-up after answering.
-                return IntentHandlerResult(msg, 200)
-            if intent not in ("greeting", "goodbye"):
+            if is_customer:
+                msg = self._without_wrapup_question(msg)
+            elif intent not in ("greeting", "goodbye"):
                 self._mark_awaiting_satisfaction(user_id)
             return IntentHandlerResult(msg, None)
         elif intent in financial_tips_intents:
@@ -2067,14 +2117,6 @@ class AutobusNLUSystem:
                 user_data=user_data
             )
             http = 200 if (msg or "").strip().startswith("✅") else None
-            if (
-                user_data
-                and user_data.get("is_customer_session")
-                and intent in ("view_products", "view_product")
-                and (msg or "").strip()
-                and not self._is_unresolved_assistant_prompt(msg)
-            ):
-                http = 200
             return IntentHandlerResult(msg, http)
         elif intent in order_management_intents:
             owner_id = self._resolve_internal_user_id(user_id, user_data)

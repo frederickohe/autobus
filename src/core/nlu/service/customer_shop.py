@@ -116,6 +116,61 @@ _CATALOG_BROWSE_PHRASES = (
     "products available",
     "what can i buy",
     "what can i order",
+    "any product in stock",
+    "any products in stock",
+    "any item in stock",
+    "any items in stock",
+    "is there any product",
+    "is there any products",
+    "is there a product",
+    "are there any products",
+    "are there any product",
+    "are there products",
+    "do you have any products",
+    "do you have products",
+    "do you have any items",
+    "do you have items",
+    "have any products",
+    "got any products",
+    "products in stock",
+    "items in stock",
+    "anything available",
+    "what products do you have",
+    "what items do you have",
+)
+
+# Tokens that describe inventory in general, not a specific product name.
+_GENERIC_QUERY_TOKENS = frozenset(
+    {
+        "is",
+        "are",
+        "there",
+        "any",
+        "some",
+        "a",
+        "an",
+        "the",
+        "product",
+        "products",
+        "item",
+        "items",
+        "goods",
+        "stock",
+        "in",
+        "available",
+        "listed",
+        "you",
+        "your",
+        "have",
+        "got",
+        "do",
+        "what",
+        "which",
+        "currently",
+        "right",
+        "now",
+        "please",
+    }
 )
 
 _PRODUCT_QUERY_PHRASES = (
@@ -140,6 +195,7 @@ _PRODUCT_QUERY_PHRASES = (
 _NAME_PREFIX_RE = re.compile(
     r"^(?:please\s+)?(?:do you (?:have|sell)|have you got|how much (?:is|are|for)|"
     r"what(?:'s|s| is) the price of|price of|cost of|"
+    r"(?:is|are) there(?: any| some)?|"
     r"i (?:want|need|would like|'d like|d like) to (?:order|buy|purchase|get)|"
     r"can i (?:order|buy|get)|(?:order|buy|get) me|"
     r"i(?:'ll|ll| will) take)\s+",
@@ -315,6 +371,35 @@ def looks_like_catalog_browse(text: str) -> bool:
     return any(phrase in t for phrase in _CATALOG_BROWSE_PHRASES)
 
 
+def leftover_is_generic_catalog_query(text: str) -> bool:
+    """True when leftover text is only generic inventory words, not a product name."""
+    tokens = [tok for tok in normalize_shop_text(text).split() if tok]
+    if not tokens:
+        return True
+    return all(tok in _GENERIC_QUERY_TOKENS for tok in tokens)
+
+
+def looks_like_generic_stock_inquiry(
+    text: str, catalog: Sequence[CatalogItem] = ()
+) -> bool:
+    """True for 'is there any product in stock' style questions with no named product."""
+    if match_catalog_in_text(text, catalog):
+        return False
+    if looks_like_catalog_browse(text):
+        return True
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    patterns = (
+        r"\b(?:is|are) there (?:any |some )?(?:product|products|item|items|goods)\b",
+        r"\b(?:do you have|have you got) (?:any |some )?(?:product|products|item|items)\b",
+        r"\bany (?:product|products|item|items).*(?:stock|available)\b",
+        r"\b(?:product|products|items) (?:in stock|available)\b",
+        r"\banything (?:in stock|available)\b",
+    )
+    return any(re.search(pattern, t) for pattern in patterns)
+
+
 def looks_like_product_query(text: str) -> bool:
     t = normalize_shop_text(text)
     if not t:
@@ -460,6 +545,8 @@ def extract_product_query_name(text: str) -> str:
     cleaned = _TRAILING_JUNK_RE.sub("", cleaned).strip()
     if _is_placeholder_item_name(cleaned):
         return ""
+    if leftover_is_generic_catalog_query(cleaned):
+        return ""
     if len(cleaned) < 2:
         return ""
     if extract_quantity(cleaned) and normalize_shop_text(cleaned).isdigit():
@@ -503,6 +590,8 @@ def classify_customer_shop_intent(
                 return "view_product", view_slots, []
 
     mentioned = match_catalog_in_text(text, catalog)
+    if looks_like_generic_stock_inquiry(text, catalog) and not mentioned:
+        return "view_products", {}, []
     if looks_like_catalog_browse(text) and not mentioned:
         return "view_products", {}, []
 
@@ -511,11 +600,13 @@ def classify_customer_shop_intent(
 
     if mentioned or looks_like_product_query(text):
         view_slots = _view_slots_from_message(text, catalog)
-        if not view_slots and looks_like_catalog_browse(text):
+        if not view_slots and (
+            looks_like_catalog_browse(text) or looks_like_generic_stock_inquiry(text, catalog)
+        ):
             return "view_products", {}, []
         if not view_slots and not mentioned:
             guessed = extract_product_query_name(text)
-            if guessed:
+            if guessed and not leftover_is_generic_catalog_query(guessed):
                 return "view_product", {"product_name": guessed}, []
             return "view_products", {}, []
         return "view_product", view_slots, []
@@ -556,7 +647,7 @@ def _view_slots_from_message(
     matches = match_catalog_in_text(text, catalog)
     if not matches:
         leftover = extract_product_query_name(text)
-        if leftover:
+        if leftover and not leftover_is_generic_catalog_query(leftover):
             matches = resolve_catalog_query(leftover, catalog)
             if not matches:
                 return {"product_name": leftover}
