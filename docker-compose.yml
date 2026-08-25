@@ -220,7 +220,7 @@ services:
       CHATWOOT_PLATFORM_API_TOKEN: ${CHATWOOT_PLATFORM_API_TOKEN:-}
       # Browser-facing Chatwoot URL for login / inbox setup links (falls back to CHATWOOT_BASE_URL in code if unset).
       CHATWOOT_PUBLIC_URL: ${CHATWOOT_PUBLIC_URL:-https://chatwoot.useautobus.com}
-      # Optional: public origin of this API for Meta → Autobus webhook hints (WhatsApp channel-link response).
+      # Optional: public origin of this API for Meta crawlers (Instagram publish) and webhook hints.
       AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-https://api.useautobus.com}
 
       # Meta WhatsApp Cloud API (webhook verify + outbound send / media)

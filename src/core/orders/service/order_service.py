@@ -15,9 +15,12 @@ from core.orders.model.order import (
 from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
 from core.orders.dto.order_response_dto import OrderResponseDTO
+from core.customers.model.customer import Customer
+from core.customers.service.customer_service import CustomerService
 from core.notification.service.event_notification_service import EventNotificationService
 from core.product.service.product_service import ProductService
 from core.user.model.User import User
+from utilities.phone_utils import convert_to_local_ghana_format
 
 logger = logging.getLogger(__name__)
 
@@ -560,4 +563,111 @@ class OrderService:
             self.db.rollback()
             logger.error(f"[ORDER_SERVICE] Error deleting order: {str(e)}", exc_info=True)
             return False, f"Error deleting order: {str(e)}"
+
+    def _merchant_owns_order(self, order: Order, merchant_user_id: str) -> bool:
+        if not order.user_id:
+            return True
+        resolved = self._resolve_user_db_id(merchant_user_id)
+        if not resolved:
+            return False
+        return str(order.user_id) == str(resolved)
+
+    @staticmethod
+    def _usable_contact_value(value: Optional[str]) -> Optional[str]:
+        text = (value or "").strip()
+        if not text:
+            return None
+        if text.upper() in {"N/A", "NA", "NONE", "NULL", "-", "UNKNOWN"}:
+            return None
+        return text
+
+    def save_customer_from_order(
+        self, order_id: str, merchant_user_id: str
+    ) -> Tuple[bool, Optional[Customer], Optional[Order], bool, str]:
+        """
+        Copy contact fields from a received order into the merchant's customers list
+        and link the order via customer_id.
+
+        Returns (success, customer, order, created, message).
+        """
+        try:
+            order = self.get_order_by_id(order_id)
+            if not order:
+                return False, None, None, False, "Order not found"
+
+            if not self._merchant_owns_order(order, merchant_user_id):
+                return False, None, None, False, "You do not have permission to save a customer from this order."
+
+            resolved_user_id = self._resolve_user_db_id(merchant_user_id)
+            if not resolved_user_id:
+                return False, None, None, False, "User not found. Please log in again."
+
+            customer_service = CustomerService(self.db)
+            existing_linked = None
+            if order.customer_id:
+                try:
+                    existing_linked = customer_service.get_customer(int(order.customer_id), resolved_user_id)
+                except (TypeError, ValueError):
+                    existing_linked = None
+            if existing_linked:
+                return True, existing_linked, order, False, f"Customer '{existing_linked.name}' is already saved from this order."
+
+            phone_raw = self._usable_contact_value(order.customer_phone)
+            if not phone_raw:
+                return False, None, order, False, "This order has no customer phone number to save."
+
+            local_phone = convert_to_local_ghana_format(phone_raw) or phone_raw
+            name = self._usable_contact_value(order.customer_name) or "Customer"
+            email = self._usable_contact_value(order.customer_email)
+            if email and "@" not in email:
+                email = None
+
+            customer = customer_service.find_customer_by_phone(resolved_user_id, local_phone)
+            created = False
+            if customer:
+                if email and not customer.email:
+                    customer.email = email
+                    customer.updated_at = datetime.now()
+                    self.db.commit()
+                    self.db.refresh(customer)
+            else:
+                success, customer, message = customer_service.add_customer(
+                    user_id=resolved_user_id,
+                    name=name,
+                    customer_number=local_phone,
+                    email=email,
+                )
+                if not success:
+                    # Race / duplicate stored under a slightly different format.
+                    customer = customer_service.find_customer_by_phone(resolved_user_id, local_phone)
+                    if not customer:
+                        return False, None, order, False, message
+                else:
+                    created = True
+
+            if not customer:
+                return False, None, order, False, "Could not save this customer from the order."
+
+            order.customer_id = str(customer.id)
+            order.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(order)
+
+            if created:
+                message = f"Customer '{customer.name}' saved from this order."
+            else:
+                message = f"Customer '{customer.name}' was already in your list and is now linked to this order."
+
+            logger.info(
+                "[ORDER_SERVICE] Saved customer %s from order %s (created=%s)",
+                customer.id,
+                order.order_number,
+                created,
+            )
+            return True, customer, order, created, message
+
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"[ORDER_SERVICE] Error saving customer from order: {str(e)}", exc_info=True)
+            return False, None, None, False, f"Error saving customer: {str(e)}"
 

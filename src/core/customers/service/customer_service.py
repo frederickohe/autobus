@@ -1,11 +1,13 @@
-from typing import List, Optional, Tuple
+from typing import List, Optional, Set, Tuple
 from sqlalchemy.orm import Session
 from datetime import datetime
 import logging
+import re
 
 from core.customers.model.customer import Customer, AccountType as CustomerAccountType
 from core.customers.utility.network_detector import NetworkDetector, Network, AccountType
 from core.user.model.User import User
+from utilities.phone_utils import convert_to_local_ghana_format, normalize_ghana_phone_number
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,54 @@ class CustomerService:
         if user:
             return user.id
 
+        return None
+
+    def _phone_match_key(self, value: Optional[str]) -> str:
+        digits = re.sub(r"\D", "", value or "")
+        if digits.startswith("233") and len(digits) >= 12:
+            digits = digits[3:]
+        elif digits.startswith("0") and len(digits) >= 10:
+            digits = digits[1:]
+        return digits[-9:] if len(digits) >= 9 else digits
+
+    def _phone_candidates(self, value: Optional[str]) -> Set[str]:
+        raw = (value or "").strip()
+        candidates: Set[str] = set()
+        if raw:
+            candidates.add(raw)
+        local = convert_to_local_ghana_format(raw) if raw else ""
+        intl = normalize_ghana_phone_number(raw) if raw else ""
+        if local:
+            candidates.add(local)
+        if intl:
+            candidates.add(intl)
+            if intl.startswith("233") and len(intl) == 12:
+                candidates.add("0" + intl[3:])
+        return {c for c in candidates if c}
+
+    def find_customer_by_phone(self, user_id: str, phone: str) -> Optional[Customer]:
+        """Find an active customer for this merchant by phone (local or international)."""
+        resolved_user_id = self._resolve_user_db_id(user_id)
+        if not resolved_user_id:
+            return None
+
+        candidates = self._phone_candidates(phone)
+        if candidates:
+            match = self.db.query(Customer).filter(
+                Customer.user_id == resolved_user_id,
+                Customer.is_active == True,
+                Customer.customer_number.in_(list(candidates)),
+            ).first()
+            if match:
+                return match
+
+        key = self._phone_match_key(phone)
+        if not key:
+            return None
+
+        for customer in self.get_customers(resolved_user_id):
+            if self._phone_match_key(customer.customer_number) == key:
+                return customer
         return None
 
     def add_customer(

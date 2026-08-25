@@ -11,6 +11,11 @@ import requests
 
 from core.instagram.model.InstagramAccount import InstagramAccount
 from core.instagram.service.instagram_oauth_service import InstagramOAuthService
+from core.socialmedia.service.instagram_media_prepare import (
+    InstagramMediaPrepareError,
+    InstagramMediaPrepareService,
+    select_instagram_media_urls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +180,9 @@ class InstagramPublishService:
                 },
             )
             status = str(result.get("status_code") or "").upper()
+            if not status:
+                time.sleep(3)
+                continue
             if status in ("FINISHED", "PUBLISHED"):
                 return
             if status in ("ERROR", "EXPIRED"):
@@ -184,19 +192,49 @@ class InstagramPublishService:
             time.sleep(3)
         raise RuntimeError("Timed out waiting for Instagram to process media")
 
-    def _publish(self, *, ig_user_id: str, token: str, creation_id: str) -> str:
-        result = self._request(
-            "POST",
-            f"{self.graph_base}/{ig_user_id}/media_publish",
-            data={
-                "creation_id": creation_id,
-                "access_token": token,
-            },
+    @staticmethod
+    def _is_media_not_ready(message: str) -> bool:
+        text = (message or "").lower()
+        return any(
+            token in text
+            for token in (
+                "not available",
+                "not found",
+                "not ready",
+                "2207027",
+                "2207006",
+                "9007",
+            )
         )
-        post_id = str(result.get("id") or "").strip()
-        if not post_id:
-            raise RuntimeError(f"Instagram publish returned no post id: {result}")
-        return post_id
+
+    def _publish(self, *, ig_user_id: str, token: str, creation_id: str) -> str:
+        last_error: Optional[Exception] = None
+        for attempt in range(6):
+            try:
+                result = self._request(
+                    "POST",
+                    f"{self.graph_base}/{ig_user_id}/media_publish",
+                    data={
+                        "creation_id": creation_id,
+                        "access_token": token,
+                    },
+                )
+                post_id = str(result.get("id") or "").strip()
+                if not post_id:
+                    raise RuntimeError(f"Instagram publish returned no post id: {result}")
+                return post_id
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt < 5 and self._is_media_not_ready(str(exc)):
+                    logger.warning(
+                        "[IG publish] media not ready (attempt %s/6): %s",
+                        attempt + 1,
+                        exc,
+                    )
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+        raise last_error or RuntimeError("Instagram publish failed")
 
     def publish(
         self,
@@ -209,6 +247,16 @@ class InstagramPublishService:
             raise RuntimeError("Publishing is disabled for this Instagram account")
 
         urls = [u.strip() for u in media_urls if u and str(u).strip()]
+        if not urls:
+            raise RuntimeError(
+                "Instagram requires at least one public image or video URL to publish"
+            )
+
+        try:
+            prepared = InstagramMediaPrepareService().prepare_urls(urls, crop="feed")
+        except InstagramMediaPrepareError as exc:
+            raise RuntimeError(str(exc)) from exc
+        urls = select_instagram_media_urls(prepared, is_story=False)
         if not urls:
             raise RuntimeError(
                 "Instagram requires at least one public image or video URL to publish"
@@ -254,6 +302,7 @@ class InstagramPublishService:
                 image_url=images[0],
                 caption=caption_text or None,
             )
+            self._wait_for_container(creation_id, token, max_wait_s=90)
             post_id = self._publish(
                 ig_user_id=ig_user_id, token=token, creation_id=creation_id
             )

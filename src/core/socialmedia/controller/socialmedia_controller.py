@@ -3,14 +3,17 @@ Social Media Controller
 API routes for social media account management and posting
 """
 
+import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy.orm import Session
-from typing import Any, Dict, List, Optional
 import os
+import re
 import uuid
+from typing import Any, Dict, List, Optional
 
-from fastapi.responses import JSONResponse
+from botocore.exceptions import ClientError
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy.orm import Session
 
 from another_fastapi_jwt_auth import AuthJWT
 from core.socialmedia.dto.socialmedia_dto import (
@@ -41,7 +44,12 @@ from core.socialmedia.service.postiz_marketing_extract import (
 )
 from core.socialmedia.service.digital_marketing_asset_service import DigitalMarketingAssetService
 from core.socialmedia.service.postiz_org_service import PostizOrgService
+from core.socialmedia.service.instagram_media_prepare import (
+    InstagramMediaPrepareError,
+    InstagramMediaPrepareService,
+)
 from core.socialmedia.model.PostizOrganization import PostizOrganization
+from core.cloudstorage.service.storageservice import StorageFolder, StorageService
 from core.chatwoot.controller.chatwoot_controller import resolve_internal_user_id
 from core.user.model.User import User
 from utilities.crypto import encrypt_secret
@@ -885,6 +893,51 @@ async def postiz_auto_login(
     }
 
 
+_storage_service: Optional[StorageService] = None
+_PUBLIC_MEDIA_FILE = re.compile(r"^[0-9a-fA-F-]{36}\.(jpg|mp4)$")
+
+
+def _get_storage_service() -> StorageService:
+    global _storage_service
+    if _storage_service is None:
+        _storage_service = StorageService()
+    return _storage_service
+
+
+@social_routes.get("/media/public/{file_name}")
+async def public_instagram_media(file_name: str):
+    """
+    Unauthenticated JPEG/MP4 for Meta crawlers. Filenames are unguessable UUIDs
+    written only by InstagramMediaPrepareService (no query-string signatures).
+    """
+    safe_name = os.path.basename(file_name)
+    if not _PUBLIC_MEDIA_FILE.fullmatch(safe_name):
+        raise HTTPException(status_code=404, detail="Media not found")
+    storage = _get_storage_service()
+    try:
+        content_type, length, chunks = storage.iter_object_chunks(
+            safe_name,
+            folder=StorageFolder.instagram_publish,
+        )
+    except ClientError as exc:
+        code = str((exc.response or {}).get("Error", {}).get("Code") or "")
+        if code in {"404", "NoSuchKey", "NotFound"}:
+            raise HTTPException(status_code=404, detail="Media not found") from exc
+        logger.error("[SOCIAL] public media fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Media unavailable") from exc
+    except Exception as exc:
+        logger.error("[SOCIAL] public media fetch failed: %s", exc)
+        raise HTTPException(status_code=404, detail="Media not found") from exc
+
+    media_type = "image/jpeg" if safe_name.endswith(".jpg") else "video/mp4"
+    if content_type and content_type != "application/octet-stream":
+        media_type = content_type
+    headers = {"Cache-Control": "public, max-age=86400"}
+    if length is not None:
+        headers["Content-Length"] = str(length)
+    return StreamingResponse(chunks, media_type=media_type, headers=headers)
+
+
 @social_routes.post("/postiz/posts")
 async def postiz_create_post(
     payload: Dict[str, Any],
@@ -917,6 +970,22 @@ async def postiz_create_post(
             status_code=404,
             detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
         )
+
+    _, media_links = extract_marketing_text_and_links(payload)
+    if media_links:
+        try:
+            payload = await asyncio.to_thread(
+                InstagramMediaPrepareService().prepare_postiz_payload,
+                payload,
+            )
+        except InstagramMediaPrepareError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("[SOCIAL] Failed to prepare media for Postiz/Instagram")
+            raise HTTPException(
+                status_code=502,
+                detail="Could not prepare media for Instagram. Check that the image or video URL is publicly reachable.",
+            ) from exc
 
     try:
         client = PostizClient(postiz_base_url)

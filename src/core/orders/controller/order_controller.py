@@ -10,6 +10,8 @@ from core.user.service.user_service import UserService
 from core.orders.dto.order_response_dto import OrderResponseDTO
 from core.orders.dto.order_create_dto import OrderCreateDTO
 from core.orders.dto.order_update_dto import OrderUpdateDTO
+from core.orders.dto.save_customer_from_order_dto import SaveCustomerFromOrderResponse
+from core.customers.dto.customer_dto import CustomerResponse
 from core.user.controller.usercontroller import validate_token, get_db
 from another_fastapi_jwt_auth import AuthJWT
 
@@ -187,6 +189,43 @@ def send_order_invoice(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error sending invoice: {str(e)}",
+        )
+
+
+@order_routes.post("/{order_id}/save-customer", response_model=SaveCustomerFromOrderResponse)
+def save_customer_from_order(
+    order_id: str = Path(..., description="Order ID"),
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Save the order's customer contact as a customer in the merchant's list."""
+    try:
+        user = UserService(db).get_current_user(authjwt.get_jwt_subject())
+        order_service = OrderService(db)
+        success, customer, order, created, message = order_service.save_customer_from_order(
+            order_id=order_id,
+            merchant_user_id=user.id,
+        )
+        if not success or not customer or not order:
+            status_code = status.HTTP_404_NOT_FOUND if message == "Order not found" else status.HTTP_400_BAD_REQUEST
+            if "permission" in (message or "").lower():
+                status_code = status.HTTP_403_FORBIDDEN
+            raise HTTPException(status_code=status_code, detail=message)
+
+        return SaveCustomerFromOrderResponse(
+            created=created,
+            already_saved=not created,
+            message=message,
+            customer=CustomerResponse.from_customer(customer),
+            order=OrderResponseDTO.from_order(order),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ORDER_CONTROLLER] Error saving customer from order: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error saving customer from order: {str(e)}",
         )
 
 

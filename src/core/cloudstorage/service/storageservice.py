@@ -3,7 +3,7 @@ import io
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from enum import Enum
-from typing import Optional, Union
+from typing import Iterator, Optional, Tuple, Union
 import boto3
 from botocore.exceptions import ClientError
 
@@ -17,6 +17,7 @@ class StorageFolder(str, Enum):
     records_files = "records-files"
     generated_images = "generated-images"
     generated_videos = "generated-videos"
+    instagram_publish = "instagram-publish"
 
 
 class StorageService:
@@ -295,6 +296,41 @@ class StorageService:
                 break
 
         return results
+
+    def iter_object_chunks(
+        self,
+        file_name: str,
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+        chunk_size: int = 65536,
+    ) -> Tuple[str, Optional[int], Iterator[bytes]]:
+        """Stream an object from Contabo S3 without loading it all into memory."""
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
+        s3_key = f"{subfolder}{file_name}"
+        try:
+            obj = self.s3_client.get_object(Bucket=self.bucket, Key=s3_key)
+        except ClientError as e:
+            logger.error(f"Contabo S3 get_object error for {file_name}: {str(e)}")
+            raise
+        body = obj["Body"]
+        content_type = str(obj.get("ContentType") or "application/octet-stream")
+        length = obj.get("ContentLength")
+        content_length = int(length) if length is not None else None
+
+        def _chunks() -> Iterator[bytes]:
+            try:
+                while True:
+                    data = body.read(chunk_size)
+                    if not data:
+                        break
+                    yield data
+            finally:
+                try:
+                    body.close()
+                except Exception:
+                    pass
+
+        return content_type, content_length, _chunks()
 
     def delete_file(
         self,

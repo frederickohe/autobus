@@ -146,6 +146,7 @@ def default_rules() -> List[RateRule]:
         (re.compile(r"^/api/v1/agent/"), _env_int("RATE_LIMIT_AGENT", 30), win),
         (re.compile(r"^/api/v1/nlu/"), _env_int("RATE_LIMIT_NLU", 40), win),
         (re.compile(r"^/api/v1/intelligence/"), _env_int("RATE_LIMIT_INTELLIGENCE", 40), win),
+        (re.compile(r"^/api/v1/social/media/public/"), _env_int("RATE_LIMIT_PUBLIC_MEDIA", 600), win),
         (re.compile(r"^/api/v1/"), _env_int("RATE_LIMIT_GLOBAL", 180), win),
     ]
 
