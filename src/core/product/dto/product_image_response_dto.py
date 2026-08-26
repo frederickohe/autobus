@@ -1,7 +1,8 @@
 """Product image response DTO"""
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+
+from core.cloudstorage.service.storageservice import refresh_public_object_url
 
 
 class ProductImageResponseDTO(BaseModel):
@@ -20,7 +21,7 @@ class ProductImageResponseDTO(BaseModel):
         return cls(
             image_id=str(image.image_id),
             product_id=str(image.product_id),
-            url=image.url,
+            url=refresh_public_object_url(image.url),
             sort_order=image.sort_order,
             is_primary=image.is_primary,
             created_at=image.created_at,

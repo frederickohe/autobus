@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 
+from core.cloudstorage.service.storageservice import refresh_public_object_url
+
 
 class ProductResponseDTO(BaseModel):
     """Response model for product details."""
@@ -58,9 +60,9 @@ class ProductResponseDTO(BaseModel):
             getattr(product, "images", []) or [],
             key=lambda img: (not img.is_primary, img.sort_order, img.created_at),
         )
-        photo_urls = [img.url for img in gallery]
+        photo_urls = [refresh_public_object_url(img.url) for img in gallery]
         if not photo_urls and product.photo:
-            photo_urls = [product.photo]
+            photo_urls = [refresh_public_object_url(product.photo)]
 
         return cls(
             product_id=str(product.product_id),

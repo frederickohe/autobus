@@ -4,10 +4,68 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from enum import Enum
 from typing import Iterator, Optional, Tuple, Union
+from urllib.parse import unquote, urlparse
 import boto3
 from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
+
+_shared_storage: Optional["StorageService"] = None
+
+
+def object_key_from_url(url: str, bucket: Optional[str] = None) -> Optional[str]:
+    """Extract an S3 object key from a stored Contabo/S3 URL or raw key.
+
+    Product images persist the upload-time presigned URL. The path still identifies
+    the object after the query signature expires or is truncated.
+    """
+    raw = (url or "").strip()
+    if not raw:
+        return None
+
+    if not raw.startswith(("http://", "https://")):
+        if raw.startswith("operations/"):
+            return raw.split("?", 1)[0]
+        return None
+
+    parsed = urlparse(raw)
+    path = unquote(parsed.path or "").lstrip("/")
+    if not path:
+        return None
+
+    bucket_name = (bucket or "").strip()
+    first, sep, rest = path.partition("/")
+    if not sep:
+        return path if path.startswith("operations/") else None
+
+    if bucket_name and first == bucket_name:
+        return rest or None
+    if bucket_name and first.endswith(f":{bucket_name}"):
+        return rest or None
+    if ":" in first and rest.startswith("operations/"):
+        return rest
+    if path.startswith("operations/"):
+        return path
+    return None
+
+
+def get_storage_service() -> "StorageService":
+    global _shared_storage
+    if _shared_storage is None:
+        _shared_storage = StorageService()
+    return _shared_storage
+
+
+def refresh_public_object_url(stored_url: str) -> str:
+    """Return a fresh presigned GET URL when the stored value is a storage object."""
+    url = (stored_url or "").strip()
+    if not url:
+        return stored_url or ""
+    try:
+        return get_storage_service().refresh_object_url(url)
+    except Exception as e:
+        logger.warning("Could not refresh object URL: %s", e)
+        return url
 
 
 class StorageFolder(str, Enum):
@@ -66,6 +124,20 @@ class StorageService:
                     pass  # Bucket creation not permitted; continue.
             else:
                 pass  # Other errors; continue.
+
+    def refresh_object_url(self, stored_url: str, expires_in: int = 86400 * 7) -> str:
+        """Mint a new presigned GET URL from a stored upload URL or object key."""
+        url = (stored_url or "").strip()
+        if not url:
+            return stored_url or ""
+        key = object_key_from_url(url, bucket=self.bucket)
+        if not key:
+            return url
+        return self.s3_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket, "Key": key},
+            ExpiresIn=expires_in,
+        )
 
     @staticmethod
     def resolve_subfolder(
