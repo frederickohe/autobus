@@ -18,6 +18,13 @@ class PostizAPIError(RuntimeError):
         self.body = body
 
 
+def _timeout_error(action: str) -> PostizAPIError:
+    return PostizAPIError(
+        f"Postiz timed out while {action}. Try again in a moment.",
+        status_code=504,
+    )
+
+
 def postiz_error_user_message(status_code: int, text: str) -> str:
     """Turn a Postiz error body into a short message we can show or log."""
     raw = (text or "").strip()
@@ -271,18 +278,21 @@ class PostizClient:
     async def list_integrations(
         self,
         public_api_key: str,
-        timeout_s: float = 20.0,
+        timeout_s: float = 8.0,
     ) -> Dict[str, Any]:
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            res = await client.get(
-                self._url("/api/public/v1/integrations"),
-                headers={"Authorization": public_api_key},
-            )
-            if res.status_code >= 400:
-                raise PostizAPIError(
-                    f"Postiz list integrations failed ({res.status_code}): {res.text}"
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                res = await client.get(
+                    self._url("/api/public/v1/integrations"),
+                    headers={"Authorization": public_api_key},
                 )
-            return res.json()
+        except httpx.TimeoutException as exc:
+            raise _timeout_error("listing connected channels") from exc
+        if res.status_code >= 400:
+            raise PostizAPIError(
+                f"Postiz list integrations failed ({res.status_code}): {res.text}"
+            )
+        return res.json()
 
     async def get_social_connect_url(
         self,
@@ -290,7 +300,7 @@ class PostizClient:
         integration: str,
         *,
         refresh: Optional[str] = None,
-        timeout_s: float = 20.0,
+        timeout_s: float = 12.0,
     ) -> str:
         """
         OAuth URL for connecting a channel via Postiz Public API
@@ -304,26 +314,29 @@ class PostizClient:
         if refresh:
             params["refresh"] = refresh.strip()
 
-        async with httpx.AsyncClient(timeout=timeout_s) as client:
-            res = await client.get(
-                self._url(f"/api/public/v1/social/{slug}"),
-                headers={"Authorization": public_api_key},
-                params=params or None,
-            )
-            if res.status_code >= 400:
-                raise PostizAPIError(
-                    f"Postiz social connect failed ({res.status_code}): {res.text}"
+        try:
+            async with httpx.AsyncClient(timeout=timeout_s) as client:
+                res = await client.get(
+                    self._url(f"/api/public/v1/social/{slug}"),
+                    headers={"Authorization": public_api_key},
+                    params=params or None,
                 )
-            data = res.json() if res.text.strip() else {}
-            if isinstance(data, dict):
-                url = data.get("url") or data.get("authorization_url")
-                if url:
-                    return str(url).strip()
+        except httpx.TimeoutException as exc:
+            raise _timeout_error(f"starting {slug} connect") from exc
+        if res.status_code >= 400:
             raise PostizAPIError(
-                "Postiz social connect response missing url; "
-                "ensure the provider client id/secret are configured on Postiz "
-                f"(integration={slug})."
+                f"Postiz social connect failed ({res.status_code}): {res.text}"
             )
+        data = res.json() if res.text.strip() else {}
+        if isinstance(data, dict):
+            url = data.get("url") or data.get("authorization_url")
+            if url:
+                return str(url).strip()
+        raise PostizAPIError(
+            "Postiz social connect response missing url; "
+            "ensure the provider client id/secret are configured on Postiz "
+            f"(integration={slug})."
+        )
 
     async def delete_integration(
         self,
@@ -409,6 +422,84 @@ def apply_facebook_login_config_id(
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
     )
+
+
+# Postiz hardcodes this on the TikTok authorize URL. TikTok no longer offers it
+# as an addable scope, so the whole login fails with "correct the following: scope".
+_TIKTOK_DROPPED_SCOPES = frozenset({"video.list", "video.create"})
+
+
+def apply_tiktok_oauth_scopes(
+    authorization_url: str,
+    *,
+    slug: Optional[str] = None,
+) -> str:
+    """Drop deprecated TikTok scopes Postiz still puts on the authorize URL."""
+    url = (authorization_url or "").strip()
+    if not url:
+        return url
+    if slug and slug.strip().lower() != "tiktok":
+        return url
+
+    parts = urlsplit(url)
+    host = (parts.netloc or "").split("@")[-1].split(":")[0].lower()
+    if host.startswith("www."):
+        host = host[4:]
+    if host not in {"tiktok.com", "www.tiktok.com"}:
+        return url
+
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    raw_scope = query.get("scope") or ""
+    if not raw_scope:
+        return url
+
+    kept = [
+        item.strip()
+        for item in raw_scope.replace(" ", ",").split(",")
+        if item.strip() and item.strip() not in _TIKTOK_DROPPED_SCOPES
+    ]
+    if not kept:
+        return url
+    query["scope"] = ",".join(kept)
+    return urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
+    )
+
+
+def coerce_tiktok_privacy_for_unaudited_app(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Unaudited TikTok apps reject Direct Post with PUBLIC_TO_EVERYONE
+    (``unaudited_client_can_only_post_to_private_accounts``). Postiz still
+    returns 200 because publish runs later in Temporal.
+    Set TIKTOK_ALLOW_PUBLIC_POST=true after TikTok audits public posting.
+    """
+    if os.getenv("TIKTOK_ALLOW_PUBLIC_POST", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return payload
+    posts = payload.get("posts")
+    if not isinstance(posts, list):
+        return payload
+    for post in posts:
+        if not isinstance(post, dict):
+            continue
+        settings = post.get("settings")
+        if not isinstance(settings, dict):
+            continue
+        if str(settings.get("__type") or "").strip().lower() != "tiktok":
+            continue
+        privacy = str(settings.get("privacy_level") or "").strip()
+        if privacy in {"", "SELF_ONLY"}:
+            continue
+        logger.warning(
+            "[SOCIAL] TikTok privacy %s is not allowed until the app is "
+            "audited for public Direct Post; using SELF_ONLY",
+            privacy,
+        )
+        settings["privacy_level"] = "SELF_ONLY"
+    return payload
 
 
 def postiz_enabled() -> bool:

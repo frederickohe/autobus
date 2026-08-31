@@ -35,6 +35,8 @@ from core.socialmedia.service.postiz_api_service import (
     PostizClient,
     PostizAPIError,
     apply_facebook_login_config_id,
+    apply_tiktok_oauth_scopes,
+    coerce_tiktok_privacy_for_unaudited_app,
     derive_postiz_password,
     normalize_postiz_integrations_list,
 )
@@ -270,6 +272,18 @@ async def _build_postiz_platform_connect(
             f"https://postiz.useautobus.com/integrations/social/{slug}"
             for slug in slugs_to_try
         )
+        timeout_hint = (
+            last_oauth_error is not None
+            and "timed out" in str(last_oauth_error).lower()
+        )
+        if timeout_hint:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    f"{provider_label} connect is busy right now. "
+                    "Wait a few seconds and try again."
+                ),
+            ) from last_oauth_error
         cred_hint = (
             "Meta/Instagram"
             if used_slug.startswith("instagram") or postiz_slug.startswith("instagram")
@@ -289,6 +303,10 @@ async def _build_postiz_platform_connect(
         authorization_url,
         slug=used_slug,
     )
+    authorization_url = apply_tiktok_oauth_scopes(
+        authorization_url,
+        slug=used_slug,
+    )
     if used_slug.strip().lower() == "facebook":
         logger.info("[SOCIAL] Facebook Login for Business URL ready (config_id applied)")
 
@@ -304,6 +322,7 @@ async def _build_postiz_platform_connect(
             await PostizClient(base_url=postiz_base_url).login_local(
                 email=user.email,
                 password=postiz_password,
+                timeout_s=2.0,
             )
             postiz_login_ready = True
             postiz_login_payload = {
@@ -783,6 +802,12 @@ async def postiz_list_integrations(
         raw = await client.list_integrations(api_key)
         return normalize_postiz_integrations_list(raw)
     except PostizAPIError as e:
+        if e.status_code == 504:
+            logger.warning(
+                "[SOCIAL] Postiz list integrations timed out for user %s",
+                internal_user_id,
+            )
+            return []
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -986,6 +1011,8 @@ async def postiz_create_post(
                 status_code=502,
                 detail="Could not prepare media for Instagram. Check that the image or video URL is publicly reachable.",
             ) from exc
+
+    payload = coerce_tiktok_privacy_for_unaudited_app(payload)
 
     try:
         client = PostizClient(postiz_base_url)
