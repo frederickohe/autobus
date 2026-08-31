@@ -535,6 +535,58 @@ def _ig_message_text(message: Any) -> str:
     return ""
 
 
+def _remember_customer_identity(
+    nlu_user_id: str,
+    *,
+    username: Optional[str] = None,
+    phone: Optional[str] = None,
+    display_name: Optional[str] = None,
+) -> None:
+    """Attach username / phone to the conversation so owners can recognize the customer."""
+    if not nlu_user_id or not any((username, phone, display_name)):
+        return
+    try:
+        get_nlu_system().conversation_manager.remember_customer_identity(
+            nlu_user_id,
+            username=username,
+            phone=phone,
+            display_name=display_name,
+        )
+    except Exception as exc:
+        logger.warning("[identity] failed to store customer identity for %s: %s", nlu_user_id, exc)
+
+
+def _nested_str(obj: Any, *keys: str) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    for key in keys:
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _ig_event_profile(event: dict) -> Tuple[str, str]:
+    """Username / display name from an Instagram webhook event when Meta includes them."""
+    sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
+    from_obj = event.get("from")
+    if not isinstance(from_obj, dict):
+        from_obj = {}
+    message = event.get("message") if isinstance(event.get("message"), dict) else {}
+    msg_from = message.get("from") if isinstance(message.get("from"), dict) else {}
+    username = (
+        _nested_str(sender, "username", "user_name")
+        or _nested_str(from_obj, "username", "user_name")
+        or _nested_str(msg_from, "username", "user_name")
+    )
+    name = (
+        _nested_str(sender, "name")
+        or _nested_str(from_obj, "name")
+        or _nested_str(msg_from, "name")
+    )
+    return username, name
+
+
 def _ig_event_ids(event: dict, entry_id: str = "") -> Tuple[str, str]:
     sender = event.get("sender") if isinstance(event.get("sender"), dict) else {}
     recipient = event.get("recipient") if isinstance(event.get("recipient"), dict) else {}
@@ -674,6 +726,14 @@ def handle_instagram_webhook(payload: dict, db: Session):
         svc.send_sender_action(token, sender_id, "typing_on")
         nlu_system = get_nlu_system()
         reply = nlu_system.process_message(nlu_user_id, text)
+        username, display_name = _ig_event_profile(event)
+        if not username:
+            profile = svc.fetch_igsid_profile(token, sender_id)
+            username = str(profile.get("username") or "").strip()
+            display_name = display_name or str(profile.get("name") or "").strip()
+        _remember_customer_identity(
+            nlu_user_id, username=username, display_name=display_name
+        )
         outbound = _nlu_reply_text(reply)
         if not outbound:
             svc.send_sender_action(token, sender_id, "typing_off")
@@ -729,6 +789,12 @@ async def handle_simple_chat(
 
         nlu_system = get_nlu_system()
         response_message = nlu_system.process_message(nlu_user_id, msg)
+        from core.conversationmanager.service.customer_identity import looks_like_phone
+
+        if looks_like_phone(cust):
+            _remember_customer_identity(nlu_user_id, phone=cust)
+        else:
+            _remember_customer_identity(nlu_user_id, username=cust)
 
         logger.info("Generated response: %s", (response_message or "")[:200])
 
@@ -833,6 +899,10 @@ def handle_incoming_message(value: dict, db: Session):
             return {"status": "error", "message": "Missing wa_id"}
 
         logger.info(f"Extracted phone number: {phone}")
+        contact_profile = (
+            contacts[0].get("profile") if isinstance(contacts[0].get("profile"), dict) else {}
+        )
+        whatsapp_profile_name = str(contact_profile.get("name") or "").strip()
 
         # Get the message
         messages = value.get("messages", [])
@@ -849,7 +919,8 @@ def handle_incoming_message(value: dict, db: Session):
                 message=message,
                 phone=phone,
                 phone_id=phone_id,
-                db=db
+                db=db,
+                display_name=whatsapp_profile_name,
             )
 
         elif message_type == "interactive":
@@ -866,7 +937,8 @@ def handle_incoming_message(value: dict, db: Session):
                 message=message,
                 phone=phone,
                 phone_id=phone_id,
-                db=db
+                db=db,
+                display_name=whatsapp_profile_name,
             )
 
         elif message_type == "audio":
@@ -874,7 +946,8 @@ def handle_incoming_message(value: dict, db: Session):
                 message=message,
                 phone=phone,
                 phone_id=phone_id,
-                db=db
+                db=db,
+                display_name=whatsapp_profile_name,
             )
 
         elif message_type in ["video", "document"]:
@@ -902,7 +975,13 @@ def handle_incoming_message(value: dict, db: Session):
         raise
 
 
-def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
+def handle_text_message(
+    message: dict,
+    phone: str,
+    phone_id: str,
+    db: Session,
+    display_name: str = "",
+):
     """Handle regular text messages"""
     text_data = message.get("text")
     if not text_data or "body" not in text_data:
@@ -919,6 +998,7 @@ def handle_text_message(message: dict, phone: str, phone_id: str, db: Session):
 
     nlu_system = get_nlu_system()
     response_message = nlu_system.process_message(nlu_user_id, message_text)
+    _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
     outbound = _nlu_reply_text(response_message)
 
     logger.info("Generated response: %s", outbound[:200])
@@ -1123,7 +1203,13 @@ def handle_message_status(value: dict, db: Session):
         raise
 
 
-def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
+def handle_image_message(
+    message: dict,
+    phone: str,
+    phone_id: str,
+    db: Session,
+    display_name: str = "",
+):
     """
     Handle image messages from users.
     Images are processed by the LLM vision API for visual understanding.
@@ -1158,6 +1244,7 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
             user_message,
             image_media_id=media_id,
         )
+        _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
 
         logger.info("Generated response for image message: %s", outbound[:200])
@@ -1185,7 +1272,13 @@ def handle_image_message(message: dict, phone: str, phone_id: str, db: Session):
         raise
 
 
-def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
+def handle_audio_message(
+    message: dict,
+    phone: str,
+    phone_id: str,
+    db: Session,
+    display_name: str = "",
+):
     """
     Handle audio messages from users.
     Audio is transcribed through the configured Groq transcription model and processed as text.
@@ -1220,6 +1313,7 @@ def handle_audio_message(message: dict, phone: str, phone_id: str, db: Session):
             user_message,
             audio_media_id=media_id,
         )
+        _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
 
         logger.info("Generated response for audio message: %s", outbound[:200])

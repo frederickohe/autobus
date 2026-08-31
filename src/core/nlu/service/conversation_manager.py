@@ -34,6 +34,10 @@ class ConversationState:
     intervention_created_at: Optional[str] = None
     # Agent replies waiting to be shown to the customer (webchat poll / next inbound).
     pending_customer_messages: List[str] = None
+    # Owner-facing identity (channel unique IDs stay on user_id for routing).
+    customer_username: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_display_name: Optional[str] = None
 
     def __post_init__(self):
         if not self.conversation_id:
@@ -77,6 +81,9 @@ class ConversationState:
             "intervention_reason": self.intervention_reason,
             "intervention_created_at": self.intervention_created_at,
             "pending_customer_messages": self.pending_customer_messages or [],
+            "customer_username": self.customer_username,
+            "customer_phone": self.customer_phone,
+            "customer_display_name": self.customer_display_name,
         }
 
     @classmethod
@@ -208,6 +215,41 @@ class ConversationManager:
             raise e
 
         self.memory_cache[state.user_id] = state
+
+    def remember_customer_identity(
+        self,
+        user_id: str,
+        *,
+        username: Optional[str] = None,
+        phone: Optional[str] = None,
+        display_name: Optional[str] = None,
+    ) -> None:
+        """Persist username / phone on the active session so owners can recognize the customer."""
+        from core.conversationmanager.service.customer_identity import (
+            looks_like_phone,
+            normalize_username,
+        )
+
+        state = self.get_conversation_state(user_id)
+        changed = False
+
+        cleaned_username = normalize_username(username)
+        if cleaned_username and state.customer_username != cleaned_username:
+            state.customer_username = cleaned_username
+            changed = True
+
+        cleaned_phone = (phone or "").strip()
+        if cleaned_phone and looks_like_phone(cleaned_phone) and state.customer_phone != cleaned_phone:
+            state.customer_phone = cleaned_phone
+            changed = True
+
+        cleaned_name = (display_name or "").strip()
+        if cleaned_name and state.customer_display_name != cleaned_name:
+            state.customer_display_name = cleaned_name
+            changed = True
+
+        if changed:
+            self._save_conversation_state(state)
 
     def finalize_completed_session(self, user_id: str):
         """Mark the in-memory session completed, persist, and drop cache so the next turn starts fresh.

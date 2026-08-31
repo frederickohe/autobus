@@ -29,6 +29,7 @@ def index_extracted_text_for_user(
     extracted_text: str,
     on_index_progress: Optional[IndexProgressFn] = None,
     source_url: Optional[str] = None,
+    source: Optional[str] = None,
 ) -> Tuple[int, Optional[str]]:
     """
     Upsert document chunks for the resolved tenant (default: user:{db_user_id}).
@@ -57,7 +58,7 @@ def index_extracted_text_for_user(
     points: list[dict[str, Any]] = []
     for i, ch in enumerate(chunks):
         meta: dict[str, Any] = {
-            "source": "website" if source_url else "document",
+            "source": source or ("website" if source_url else "document"),
             "file_name": file_name,
             "object_key": object_key,
             "chunk_index": i,

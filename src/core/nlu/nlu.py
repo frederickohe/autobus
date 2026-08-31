@@ -59,7 +59,11 @@ from decimal import Decimal
 from core.customers.utility.network_detector import NetworkDetector
 from utilities.crypto import decrypt_secret
 from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.sources import KNOWLEDGE_SOURCES
 from core.rag.tenant import resolve_effective_rag_tenant_id
+from core.intelligence.service.onboarding_index_service import (
+    format_onboarding_as_rag_context,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -1203,7 +1207,12 @@ class AutobusNLUSystem:
                         user_id, "assistant", response
                     )
                     return response
-                catalog_text = format_customer_catalog(customer_catalog)
+                from core.user.currency import currency_from_user_data
+
+                catalog_text = format_customer_catalog(
+                    customer_catalog,
+                    currency=currency_from_user_data(self._get_user_data(user_id)),
+                )
                 candidates = state.collected_slots.get("item_candidates")
                 guessed = extract_product_query_name(user_message) or (user_message or "").strip()
                 if candidates:
@@ -2302,7 +2311,13 @@ class AutobusNLUSystem:
             )
             if not products:
                 return None
-            lines = ["## Product catalog (live inventory — authoritative for product names/prices)"]
+            from core.user.currency import currency_from_user_data, currency_prompt_rule, format_money
+
+            currency = currency_from_user_data(user_data)
+            lines = [
+                "## Product catalog (live inventory — authoritative for product names/prices)",
+                currency_prompt_rule(currency),
+            ]
             for p in products:
                 price = getattr(p, "price", None)
                 stock = getattr(p, "number_in_stock", None)
@@ -2310,7 +2325,7 @@ class AutobusNLUSystem:
                 desc = (getattr(p, "description", None) or "").strip()
                 bits = [f"- {p.name}"]
                 if price is not None:
-                    bits.append(f"price={price}")
+                    bits.append(f"price={format_money(price, currency)}")
                 if category:
                     bits.append(f"category={category}")
                 if stock is not None:
@@ -2360,9 +2375,9 @@ class AutobusNLUSystem:
         rag_context = None
         rag_hit_count = 0
         rag_search_ok = False
-        # Knowledge answers must come from indexed documents/websites — not prior chat turns.
+        # Knowledge answers come from indexed docs/websites plus signup onboarding.
         # Chat-turn upserts previously polluted retrieval and caused invented product catalogs.
-        knowledge_sources = ["document", "website"]
+        knowledge_sources = list(KNOWLEDGE_SOURCES)
         if not self._conversation_rag.enabled():
             logger.warning(
                 "[RAG] RAG_SERVICE_URL not configured; conversational reply will lack indexed context"
@@ -2390,6 +2405,19 @@ class AutobusNLUSystem:
             except Exception as e:
                 logger.warning(f"[RAG] search failed for {user_id}: {e}", exc_info=True)
 
+        onboarding_block = format_onboarding_as_rag_context(
+            (user_data or {}).get("onboarding_profile"),
+            company=str((user_data or {}).get("company") or ""),
+        )
+        if onboarding_block:
+            rag_context = (
+                onboarding_block
+                if not rag_context
+                else f"{onboarding_block}\n{rag_context}"
+            )
+            rag_hit_count = max(rag_hit_count, 1)
+            rag_search_ok = True
+
         # Customer FAQ/business questions with no indexed knowledge → human intervention.
         # Skip on RAG auth/network failures so a transient 401 does not page the owner.
         is_customer = bool((user_data or {}).get("is_customer_session"))
@@ -2416,7 +2444,7 @@ class AutobusNLUSystem:
         ):
             no_knowledge_backend = not self._conversation_rag.enabled() or not tenant_id
             empty_search = rag_search_ok and rag_hit_count == 0
-            if no_knowledge_backend or empty_search:
+            if (no_knowledge_backend or empty_search) and not onboarding_block:
                 logger.info(
                     "[RAG] No means to answer customer session %s (enabled=%s tenant=%s hits=%s ok=%s); activating intervention",
                     user_id,
@@ -2781,10 +2809,21 @@ class AutobusNLUSystem:
                 merchant = db.query(User).filter(User.id == merchant_id).first()
                 if not merchant:
                     return None
+                from core.conversationmanager.service.customer_identity import (
+                    looks_like_phone,
+                    parse_conversation_user_id,
+                )
+
+                _, channel, customer_key = parse_conversation_user_id(user_id)
+                customer_phone = (
+                    customer_key
+                    if channel != "ig" and looks_like_phone(customer_key)
+                    else None
+                )
                 return {
                     # End-user identifier (phone / external id) for slots, RAG metadata, etc.
-                    "user_id": channel_user_id,
-                    "customer_phone": channel_user_id,
+                    "user_id": customer_key or channel_user_id,
+                    "customer_phone": customer_phone,
                     # Merchant account used for FKs, RAG tenant, products, orders.
                     "db_user_id": merchant.id,
                     "merchant_id": merchant.id,
@@ -2793,9 +2832,13 @@ class AutobusNLUSystem:
                     "fullname": merchant.fullname,
                     "company": merchant.company,
                     "organization_workplace": merchant.organization_workplace,
+                    "onboarding_profile": merchant.onboarding_profile
+                    if isinstance(merchant.onboarding_profile, dict)
+                    else {},
                     "created_at": merchant.created_at.isoformat()
                     if merchant.created_at
                     else None,
+                    "currency_code": (getattr(merchant, "currency_code", None) or "GHS").upper(),
                 }
 
             user = user_service.get_user_by_phone(channel_user_id)
@@ -2809,7 +2852,11 @@ class AutobusNLUSystem:
                     "fullname": user.fullname,
                     "company": user.company,
                     "organization_workplace": user.organization_workplace,
+                    "onboarding_profile": user.onboarding_profile
+                    if isinstance(user.onboarding_profile, dict)
+                    else {},
                     "created_at": user.created_at.isoformat() if user.created_at else None,
+                    "currency_code": (getattr(user, "currency_code", None) or "GHS").upper(),
                 }
             return None
 

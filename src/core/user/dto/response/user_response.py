@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Any, Dict, Optional, List
 
 
 class UserResponse(BaseModel):
@@ -35,6 +35,11 @@ class UserResponse(BaseModel):
     in_app_notification: Optional[bool] = None
     sms_notification: Optional[bool] = None
     
+    # Signup onboarding questionnaire
+    onboarding_completed: bool = True
+    onboarding_profile: Optional[Dict[str, Any]] = None
+    currency_code: str = "GHS"
+
     # Status and Timestamps
     status: str
     enabled: bool

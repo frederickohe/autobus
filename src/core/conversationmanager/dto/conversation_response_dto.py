@@ -17,6 +17,8 @@ class ConversationSummaryDTO(BaseModel):
     current_intent: Optional[str] = None
     last_message: Optional[str] = None
     customer_phone: Optional[str] = None
+    customer_username: Optional[str] = None
+    customer_display_name: Optional[str] = None
     message_count: int = 0
     created_at: datetime
     updated_at: datetime
@@ -42,5 +44,8 @@ class ConversationDetailDTO(BaseModel):
     current_intent: Optional[str] = None
     conversation_history: List[dict] = []
     collected_slots: Optional[dict] = None
+    customer_phone: Optional[str] = None
+    customer_username: Optional[str] = None
+    customer_display_name: Optional[str] = None
     created_at: datetime
     updated_at: datetime

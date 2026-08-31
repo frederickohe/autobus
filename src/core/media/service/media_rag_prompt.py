@@ -9,13 +9,18 @@ from typing import Any, List, Optional
 from sqlalchemy.orm import Session
 
 from core.product.service.product_service import ProductService
+from core.intelligence.service.onboarding_index_service import (
+    format_onboarding_document,
+    stored_profile,
+)
 from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.sources import KNOWLEDGE_SOURCES
 from core.rag.tenant import resolve_effective_rag_tenant_id
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
 
-_KNOWLEDGE_SOURCES = ["document", "website"]
+_KNOWLEDGE_SOURCES = list(KNOWLEDGE_SOURCES)
 _RAG_HIT_LIMIT = 12
 _RAG_SCORE_THRESHOLD = 0.35
 _RAG_CHAR_BUDGET = 2800
@@ -121,6 +126,11 @@ def _format_business_profile(user: User) -> Optional[str]:
         ("Nationality / market", user.nationality),
     ]
     lines = [f"- {label}: {_clean_text(value)}" for label, value in fields if _clean_text(value)]
+    onboarding = stored_profile(user)
+    if onboarding:
+        extra = format_onboarding_document(onboarding, company=_clean_text(user.company))
+        if extra:
+            lines.append(extra)
     if not lines:
         return None
     return "\n".join(lines)

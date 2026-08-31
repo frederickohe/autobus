@@ -362,6 +362,11 @@ class IntentProcessor:
             format_kwargs["vendor_rules"] = VENDOR_EXCLUSION_RULES.strip()
 
         enhanced_prompt = base_prompt.format(**format_kwargs)
+        from core.user.currency import currency_from_user_data, currency_prompt_rule
+
+        enhanced_prompt = (
+            f"{enhanced_prompt.rstrip()}\n\n{currency_prompt_rule(currency_from_user_data(user_data))}"
+        )
 
         return enhanced_prompt
 
@@ -380,6 +385,10 @@ class IntentProcessor:
             lines.append(f"Account holder: {fullname}")
         if email:
             lines.append(f"Contact email: {email}")
+        from core.user.currency import currency_from_user_data, currency_label
+
+        currency = currency_from_user_data(user_data)
+        lines.append(f"Pricing currency: {currency_label(currency)}")
         if not lines:
             return "No organization profile on file."
         return "\n".join(lines)
@@ -387,6 +396,12 @@ class IntentProcessor:
     @staticmethod
     def _is_customer_session(user_data: Optional[Dict[str, Any]]) -> bool:
         return bool((user_data or {}).get("is_customer_session"))
+
+    @staticmethod
+    def _catalog_currency(user_data: Optional[Dict[str, Any]] = None) -> str:
+        from core.user.currency import currency_from_user_data
+
+        return currency_from_user_data(user_data)
 
     @staticmethod
     def _catalog_owner_id(user_id: str, user_data: Optional[Dict[str, Any]] = None) -> str:
@@ -780,7 +795,10 @@ class IntentProcessor:
         owner_id = self._catalog_owner_id(user_id, user_data)
         products = product_service.get_products_by_user(owner_id, category=category)
         if self._is_customer_session(user_data):
-            return format_customer_catalog(catalog_items_from_products(products))
+            return format_customer_catalog(
+                catalog_items_from_products(products),
+                currency=self._catalog_currency(user_data),
+            )
         if not products:
             return "📦 No products found in your inventory yet."
 
@@ -792,7 +810,8 @@ class IntentProcessor:
             photo_suffix = f" | Photos: {image_count}" if image_count else ""
             lines.append(
                 f"{index}. {product.name} | ID: {product.product_id} | "
-                f"Inventory: {product.inventory_id} | Price: {product.price} | "
+                f"Inventory: {product.inventory_id} | "
+                f"Price: {self._catalog_currency(user_data)} {product.price} | "
                 f"Stock: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}"
                 f"{photo_suffix}"
             )
@@ -836,7 +855,9 @@ class IntentProcessor:
             if len(matches) > 1:
                 heading = "I found a few matches. Which one did you mean?"
                 return format_customer_catalog(
-                    catalog_items_from_products(matches), heading=heading
+                    catalog_items_from_products(matches),
+                    heading=heading,
+                    currency=self._catalog_currency(user_data),
                 ) if is_customer else (
                     heading
                     + "\n"
@@ -853,7 +874,8 @@ class IntentProcessor:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
                         product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    )
+                    ),
+                    currency=self._catalog_currency(user_data),
                 )
                 return (
                     f'We do not currently have "{label}" in our listed products.\n\n{listing}'
@@ -864,7 +886,12 @@ class IntentProcessor:
 
         if is_customer:
             items = catalog_items_from_products([product])
-            return format_customer_product(items[0]) if items else format_customer_catalog([])
+            currency = self._catalog_currency(user_data)
+            return (
+                format_customer_product(items[0], currency=currency)
+                if items
+                else format_customer_catalog([], currency=currency)
+            )
 
         photos_block = self._format_product_photos(product, product_service)
         photos_line = photos_block or f"Photo: {product.photo or 'N/A'}"
@@ -873,7 +900,7 @@ class IntentProcessor:
             f"ID: {product.product_id}\n"
             f"Inventory ID: {product.inventory_id}\n"
             f"Name: {product.name}\n"
-            f"Price: {product.price}\n"
+            f"Price: {self._catalog_currency(user_data)} {product.price}\n"
             f"Quantity: {product.number_in_stock if product.number_in_stock is not None else 'N/A'}\n"
             f"Category: {product.category or 'N/A'}\n"
             f"Condition: {product.condition}\n"
@@ -983,7 +1010,9 @@ class IntentProcessor:
             heading = "Which product did you mean?"
             if is_customer:
                 return format_customer_catalog(
-                    catalog_items_from_products(matches), heading=heading
+                    catalog_items_from_products(matches),
+                    heading=heading,
+                    currency=self._catalog_currency(user_data),
                 )
             return heading + "\n" + "\n".join(
                 f"- {item.name}" for item in matches
@@ -994,7 +1023,8 @@ class IntentProcessor:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
                         product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    )
+                    ),
+                    currency=self._catalog_currency(user_data),
                 )
                 return (
                     f'We do not currently have "{item_name}" in our listed products.\n\n'
@@ -1005,7 +1035,8 @@ class IntentProcessor:
                 listing = format_customer_catalog(
                     catalog_items_from_products(
                         product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    )
+                    ),
+                    currency=self._catalog_currency(user_data),
                 )
                 return (
                     f"{matched_product.name} is currently out of stock.\n\n{listing}"
@@ -1033,7 +1064,9 @@ class IntentProcessor:
                 discount_amount=self._to_decimal(slots.get("discount_amount"), default=Decimal("0")),
                 tax_amount=self._to_decimal(slots.get("tax_amount"), default=Decimal("0")),
                 shipping_amount=self._to_decimal(slots.get("shipping_amount"), default=Decimal("0")),
-                currency_code=(slots.get("currency_code") or "GHS").upper(),
+                currency_code=(
+                    slots.get("currency_code") or self._catalog_currency(user_data)
+                ).upper(),
                 payment_method=slots.get("payment_method"),
                 payment_reference=slots.get("payment_reference"),
                 payment_details=slots.get("payment_details"),
@@ -1065,7 +1098,7 @@ class IntentProcessor:
         if is_customer:
             price_bit = ""
             if unit_price and unit_price > 0:
-                price_bit = f" at GHS {unit_price} each"
+                price_bit = f" at {self._catalog_currency(user_data)} {unit_price} each"
             return (
                 f"✅ Order placed for {line_quantity} x {item_name}{price_bit}. "
                 f"Order number: {order.order_number}. "

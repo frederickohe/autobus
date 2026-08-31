@@ -336,8 +336,13 @@ def catalog_items_from_products(products: Iterable[Any]) -> List[CatalogItem]:
 
 
 def format_customer_catalog(
-    catalog: Sequence[CatalogItem], *, heading: Optional[str] = None
+    catalog: Sequence[CatalogItem],
+    *,
+    heading: Optional[str] = None,
+    currency: Optional[str] = None,
 ) -> str:
+    from core.user.currency import format_money
+
     if not catalog:
         return "We do not have products listed in our catalog yet."
     ordered = sorted(catalog, key=lambda item: (not item.in_stock, item.name.lower()))
@@ -345,7 +350,7 @@ def format_customer_catalog(
     for index, item in enumerate(ordered[:30], 1):
         bits = [f"{index}. {item.name}"]
         if item.price is not None:
-            bits.append(f"GHS {item.price}")
+            bits.append(format_money(item.price, currency))
         bits.append(_stock_phrase(item.stock))
         lines.append(" — ".join(bits))
     if len(ordered) > 30:
@@ -353,10 +358,12 @@ def format_customer_catalog(
     return "\n".join(lines)
 
 
-def format_customer_product(item: CatalogItem) -> str:
+def format_customer_product(item: CatalogItem, *, currency: Optional[str] = None) -> str:
+    from core.user.currency import format_money
+
     bits = [item.name]
     if item.price is not None:
-        bits.append(f"price GHS {item.price}")
+        bits.append(f"price {format_money(item.price, currency)}")
     bits.append(_stock_phrase(item.stock))
     line = f"{bits[0]}: {', '.join(bits[1:])}."
     extra = []

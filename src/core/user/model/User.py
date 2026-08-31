@@ -95,6 +95,21 @@ class User(Base):
         server_default='{}'  # For database-level default
     )
 
+    # Signup questionnaire answers, also indexed into Qdrant intelligence.
+    onboarding_profile: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB,
+        default=None,
+        nullable=True,
+    )
+    # Existing accounts default to completed so they are not forced through the wizard.
+    onboarding_completed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    # Catalog / AI pricing currency. Ghana-first default.
+    currency_code: Mapped[str] = mapped_column(
+        String(3), nullable=False, default="GHS", server_default="GHS"
+    )
+
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     

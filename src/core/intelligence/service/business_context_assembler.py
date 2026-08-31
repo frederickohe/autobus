@@ -12,13 +12,18 @@ from sqlalchemy.orm import Session
 from core.conversationmanager.service.conversation_list_service import ConversationListService
 from core.orders.service.order_service import OrderService
 from core.product.service.product_service import ProductService
+from core.intelligence.service.onboarding_index_service import (
+    format_onboarding_document,
+    stored_profile,
+)
 from core.rag.conversation_vector_client import ConversationVectorClient
+from core.rag.sources import KNOWLEDGE_SOURCES
 from core.rag.tenant import resolve_effective_rag_tenant_id
 from core.user.model.User import User
 
 logger = logging.getLogger(__name__)
 
-_KNOWLEDGE_SOURCES = ["document", "website"]
+_KNOWLEDGE_SOURCES = list(KNOWLEDGE_SOURCES)
 _RAG_HIT_LIMIT = 12
 _RAG_SCORE_THRESHOLD = 0.35
 _RAG_CHAR_BUDGET = 3200
@@ -140,7 +145,7 @@ class BusinessContext:
             sections.extend(
                 [
                     "",
-                    "## Indexed knowledge (uploaded files and websites)",
+                    "## Indexed knowledge (onboarding, uploaded files, and websites)",
                     self.knowledge,
                 ]
             )
@@ -168,7 +173,7 @@ class BusinessContextAssembler:
         if ctx.profile:
             ctx.sources.append("profile")
 
-        products, product_count = self._format_products(user.id, q)
+        products, product_count = self._format_products(user.id, q, user=user)
         ctx.products = products
         if ctx.products:
             ctx.sources.append("products")
@@ -202,7 +207,9 @@ class BusinessContextAssembler:
         }
         return ctx
 
-    def _format_products(self, user_id: str, query: str) -> tuple[Optional[str], int]:
+    def _format_products(
+        self, user_id: str, query: str, user: Optional[User] = None
+    ) -> tuple[Optional[str], int]:
         try:
             products = ProductService(self.db).get_products_by_user(
                 str(user_id), skip=0, limit=_PRODUCT_LIMIT
@@ -233,7 +240,9 @@ class BusinessContextAssembler:
             bits = [f"- {name}"]
             price = getattr(product, "price", None)
             if price is not None:
-                bits.append(f"price={price}")
+                from core.user.currency import currency_from_user, format_money
+
+                bits.append(f"price={format_money(price, currency_from_user(user))}")
             category = _clean(getattr(product, "category", None))
             if category:
                 bits.append(f"category={category}")
@@ -420,6 +429,7 @@ def _format_business_profile(user: User) -> Optional[str]:
         ("Location", user.location or user.address),
         ("Branch", user.current_branch),
         ("Market", user.nationality),
+        ("Pricing currency", (getattr(user, "currency_code", None) or "GHS").upper()),
     ]
     lines = [f"- {label}: {_clean(value)}" for label, value in fields if _clean(value)]
     social = []
@@ -433,6 +443,16 @@ def _format_business_profile(user: User) -> Optional[str]:
         social.append(f"linkedin={_clean(user.linkedin_url)}")
     if social:
         lines.append("- Social: " + "; ".join(social))
+    onboarding = stored_profile(user)
+    if onboarding:
+        onboarding_text = format_onboarding_document(
+            onboarding, company=_clean(user.company)
+        )
+        if onboarding_text:
+            lines.append("- Onboarding profile:")
+            for extra in onboarding_text.splitlines():
+                if extra.strip() and not extra.startswith("#"):
+                    lines.append(f"  {extra}")
     if not lines:
         return None
     return "\n".join(lines)

@@ -10,6 +10,12 @@ from core.conversationmanager.dto.conversation_response_dto import (
     ConversationDetailDTO,
     ConversationSummaryDTO,
 )
+from core.conversationmanager.service.customer_identity import (
+    customer_channel_key,
+    is_instagram_conversation,
+    looks_like_phone,
+    parse_conversation_user_id,
+)
 from core.interventions.model.Intervention import Intervention
 from core.orders.model.order import Order
 from core.nlu.model.Conversation import DailyConversation
@@ -98,10 +104,15 @@ class ConversationListService:
             row.user_id for row in intervention_rows
         }
         user_names, user_phones = self._load_user_display_fields(user_keys)
+        saved_names = self._load_saved_customer_names(user_keys)
 
-        completed = [self._to_summary(row, user_names, user_phones) for row in completed_rows]
+        completed = [
+            self._to_summary(row, user_names, user_phones, saved_names)
+            for row in completed_rows
+        ]
         intervention_active = [
-            self._to_summary(row, user_names, user_phones) for row in intervention_rows
+            self._to_summary(row, user_names, user_phones, saved_names)
+            for row in intervention_rows
         ]
         return completed, intervention_active
 
@@ -188,21 +199,107 @@ class ConversationListService:
         names, _ = self._load_user_display_fields(user_ids)
         return names
 
+    def _load_saved_customer_names(self, conversation_user_ids: set) -> Dict[str, str]:
+        """Map normalized phone -> saved customer name for the conversation merchants."""
+        if not conversation_user_ids:
+            return {}
+        from core.customers.model.customer import Customer
+
+        merchant_ids = set()
+        phones: set = set()
+        for uid in conversation_user_ids:
+            merchant_id, _, customer_key = parse_conversation_user_id(uid)
+            if merchant_id:
+                merchant_ids.add(merchant_id)
+            if looks_like_phone(customer_key):
+                phones.add(customer_key)
+                normalized = self._normalize_phone_like(customer_key)
+                if normalized:
+                    phones.add(normalized)
+        if not merchant_ids or not phones:
+            return {}
+
+        rows = (
+            self.db.query(Customer)
+            .filter(
+                Customer.user_id.in_(list(merchant_ids)),
+                Customer.is_active.is_(True),
+                Customer.customer_number.in_(list(phones)),
+            )
+            .all()
+        )
+        names: Dict[str, str] = {}
+        for row in rows:
+            number = (row.customer_number or "").strip()
+            name = (row.name or "").strip()
+            if not number or not name:
+                continue
+            names[number] = name
+            normalized = self._normalize_phone_like(number)
+            if normalized:
+                names[normalized] = name
+        return names
+
+    def _identity_from_row(
+        self,
+        row: DailyConversation,
+        user_names: Dict[str, str],
+        user_phones: Optional[Dict[str, str]] = None,
+        saved_names: Optional[Dict[str, str]] = None,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        """Return (username, phone, display_name) for owner-facing chat labels."""
+        state = row.conversation_state or {}
+        username = (state.get("customer_username") or "").strip() or None
+        stored_phone = (state.get("customer_phone") or "").strip() or None
+        display_name = (state.get("customer_display_name") or "").strip() or None
+
+        channel_key = customer_channel_key(row.user_id)
+        resolved_phone = stored_phone if stored_phone and looks_like_phone(stored_phone) else None
+        if not resolved_phone:
+            resolved_phone = self._resolve_customer_phone(row.user_id, user_phones or {})
+
+        if not display_name:
+            display_name = (
+                user_names.get(channel_key)
+                or user_names.get(row.user_id)
+                or None
+            )
+        if resolved_phone and saved_names:
+            saved = saved_names.get(resolved_phone) or saved_names.get(
+                self._normalize_phone_like(resolved_phone)
+            )
+            if saved:
+                display_name = display_name or saved
+
+        if not username and not resolved_phone and not display_name:
+            if is_instagram_conversation(row.user_id):
+                display_name = "Instagram"
+            elif looks_like_phone(channel_key):
+                resolved_phone = channel_key
+
+        return username, resolved_phone, display_name
+
     def _to_summary(
         self,
         row: DailyConversation,
         user_names: Dict[str, str],
         user_phones: Dict[str, str],
+        saved_names: Optional[Dict[str, str]] = None,
     ) -> ConversationSummaryDTO:
         state = row.conversation_state or {}
         history = state.get("conversation_history") or []
         last_message = self._last_customer_message(history)
+        username, phone, display_name = self._identity_from_row(
+            row, user_names, user_phones, saved_names
+        )
+        channel_key = customer_channel_key(row.user_id)
 
         return ConversationSummaryDTO(
             id=row.id,
             conversation_id=state.get("conversation_id"),
             user_id=row.user_id,
-            user_fullname=user_names.get(self._customer_channel_id(row.user_id))
+            user_fullname=display_name
+            or user_names.get(channel_key)
             or user_names.get(row.user_id),
             conversation_date=row.conversation_date,
             conversation_lifecycle=state.get("conversation_lifecycle", "active"),
@@ -211,7 +308,9 @@ class ConversationListService:
             intervention_reason=state.get("intervention_reason"),
             current_intent=state.get("current_intent") or None,
             last_message=last_message,
-            customer_phone=self._resolve_customer_phone(row.user_id, user_phones),
+            customer_phone=phone,
+            customer_username=username,
+            customer_display_name=display_name,
             message_count=len(history),
             created_at=row.created_at or datetime.utcnow(),
             updated_at=row.updated_at or datetime.utcnow(),
@@ -219,15 +318,14 @@ class ConversationListService:
 
     @staticmethod
     def _customer_channel_id(conversation_user_id: Optional[str]) -> str:
-        uid = (conversation_user_id or "").strip()
-        if ":" in uid:
-            return uid.split(":", 1)[-1].strip()
-        return uid
+        return customer_channel_key(conversation_user_id)
 
     def _resolve_customer_phone(
         self, conversation_user_id: Optional[str], user_phones: Dict[str, str]
     ) -> Optional[str]:
-        uid = self._customer_channel_id(conversation_user_id)
+        if is_instagram_conversation(conversation_user_id):
+            return None
+        uid = customer_channel_key(conversation_user_id)
         if not uid:
             return None
         candidates = {uid}
@@ -237,8 +335,7 @@ class ConversationListService:
         for key in candidates:
             if key in user_phones:
                 return user_phones[key]
-        digits = "".join(ch for ch in uid if ch.isdigit())
-        if len(digits) >= 9:
+        if looks_like_phone(uid):
             return uid
         return None
 
@@ -279,8 +376,10 @@ class ConversationListService:
         row = self._session_owned_by_user(session_id, user_identifier)
         if not row:
             return None
+        self._backfill_instagram_identity(row)
         user_names = self._load_user_fullnames({row.user_id})
-        return self._to_detail(row, user_names)
+        saved_names = self._load_saved_customer_names({row.user_id})
+        return self._to_detail(row, user_names, saved_names)
 
     def get_conversation_for_order(
         self, merchant_user_id: str, order_id: str
@@ -314,18 +413,27 @@ class ConversationListService:
         if not row:
             return None
         user_names = self._load_user_fullnames({row.user_id})
-        return self._to_detail(row, user_names)
+        saved_names = self._load_saved_customer_names({row.user_id})
+        return self._to_detail(row, user_names, saved_names)
 
     def _to_detail(
-        self, row: DailyConversation, user_names: Dict[str, str]
+        self,
+        row: DailyConversation,
+        user_names: Dict[str, str],
+        saved_names: Optional[Dict[str, str]] = None,
     ) -> ConversationDetailDTO:
         state = row.conversation_state or {}
         history = state.get("conversation_history") or []
+        username, phone, display_name = self._identity_from_row(
+            row, user_names, saved_names=saved_names
+        )
+        channel_key = customer_channel_key(row.user_id)
         return ConversationDetailDTO(
             id=row.id,
             conversation_id=state.get("conversation_id"),
             user_id=row.user_id,
-            user_fullname=user_names.get(self._customer_channel_id(row.user_id))
+            user_fullname=display_name
+            or user_names.get(channel_key)
             or user_names.get(row.user_id),
             conversation_date=row.conversation_date,
             conversation_lifecycle=state.get("conversation_lifecycle", "active"),
@@ -335,9 +443,65 @@ class ConversationListService:
             current_intent=state.get("current_intent") or None,
             conversation_history=history,
             collected_slots=state.get("collected_slots"),
+            customer_phone=phone,
+            customer_username=username,
+            customer_display_name=display_name,
             created_at=row.created_at or datetime.utcnow(),
             updated_at=row.updated_at or datetime.utcnow(),
         )
+
+    def _backfill_instagram_identity(self, row: DailyConversation) -> None:
+        """Resolve and persist an Instagram username when an older session only has an IGSID."""
+        if not is_instagram_conversation(row.user_id):
+            return
+        state = dict(row.conversation_state or {})
+        if (state.get("customer_username") or "").strip():
+            return
+        merchant_id, _, igsid = parse_conversation_user_id(row.user_id)
+        if not merchant_id or not igsid:
+            return
+        try:
+            from core.instagram.model.InstagramAccount import InstagramAccount
+            from core.instagram.service.instagram_oauth_service import InstagramOAuthService
+
+            account = (
+                self.db.query(InstagramAccount)
+                .filter(
+                    InstagramAccount.user_id == merchant_id,
+                    InstagramAccount.is_active.is_(True),
+                    InstagramAccount.messaging_enabled.is_(True),
+                )
+                .first()
+            )
+            if not account:
+                return
+            svc = InstagramOAuthService()
+            token = svc.decrypt_token(account.access_token_encrypted)
+            profile = svc.fetch_igsid_profile(token, igsid)
+            username = str(profile.get("username") or "").strip()
+            display_name = str(profile.get("name") or "").strip()
+            if not username and not display_name:
+                return
+            if username:
+                state["customer_username"] = username
+            if display_name and not (state.get("customer_display_name") or "").strip():
+                state["customer_display_name"] = display_name
+            from sqlalchemy.orm.attributes import flag_modified
+
+            row.conversation_state = state
+            flag_modified(row, "conversation_state")
+            self.db.commit()
+            self.db.refresh(row)
+        except Exception as exc:
+            logger.warning(
+                "[CONVERSATION] Instagram identity backfill failed for %s: %s",
+                row.user_id,
+                exc,
+            )
+            try:
+                self.db.rollback()
+            except Exception:
+                pass
 
     def _deliver_agent_reply_to_customer_channel(
         self, conversation_user_id: str, message: str

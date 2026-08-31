@@ -94,6 +94,8 @@ class AuthService:
             
             in_app_notification=request.in_app_notification,
             sms_notification=request.sms_notification,
+            onboarding_completed=False,
+            onboarding_profile=None,
             
             created_at=datetime.now(timezone.utc),
         )

@@ -108,6 +108,31 @@ async def lifespan(app: FastAPI):
                         )
                     logger.info(f"[APP_STARTUP] Added user_subscriptions.{col_name} column")
 
+        if "users" in insp.get_table_names():
+            user_cols = {c["name"] for c in insp.get_columns("users")}
+            if "onboarding_profile" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN onboarding_profile JSONB"))
+                logger.info("[APP_STARTUP] Added users.onboarding_profile column")
+            if "onboarding_completed" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD COLUMN onboarding_completed "
+                            "BOOLEAN NOT NULL DEFAULT TRUE"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.onboarding_completed column")
+            if "currency_code" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD COLUMN currency_code "
+                            "VARCHAR(3) NOT NULL DEFAULT 'GHS'"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.currency_code column")
+
         if "otps" in insp.get_table_names():
             try:
                 with engine.begin() as conn:

@@ -292,6 +292,33 @@ class InstagramOAuthService:
             raise last_error
         raise RuntimeError("Instagram profile fetch failed")
 
+    def fetch_igsid_profile(self, access_token: str, igsid: str) -> Dict[str, Any]:
+        """Load a messaging customer's Instagram profile (username / name) from their IGSID."""
+        token = (access_token or "").strip()
+        user_id = (igsid or "").strip()
+        if not token or not user_id:
+            return {}
+        url = f"{self._versioned_graph()}/{user_id}"
+        try:
+            resp = requests.get(
+                url,
+                params={"fields": "name,username,profile_pic", "access_token": token},
+                timeout=8,
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[IG] igsid profile fetch failed (%s) %s: %s",
+                    resp.status_code,
+                    user_id,
+                    resp.text[:300],
+                )
+                return {}
+            data = resp.json() if resp.content else {}
+            return data if isinstance(data, dict) else {}
+        except requests.exceptions.RequestException as exc:
+            logger.warning("[IG] igsid profile request failed for %s: %s", user_id, exc)
+            return {}
+
     def _versioned_graph(self) -> str:
         ver = (os.getenv("INSTAGRAM_GRAPH_VERSION") or "v21.0").strip().strip("/")
         return f"{self.graph_base}/{ver}"
