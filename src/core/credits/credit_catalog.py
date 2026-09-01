@@ -3,8 +3,9 @@
 1 Autobus credit = $0.20 USD list value so video generation is 4 credits
 at the $0.80 customer charge. Feature costs follow the internal rate card.
 
-iOS sells these packs as App Store consumables. Android sells the same
-packs as Google Play consumables. Web sells them via Paystack.
+iOS sells these packs as App Store consumables. Android and web sell them via
+Paystack. Catalog prices are USD so both platforms quote the same dollar
+amount; Paystack charges the live GHS equivalent at checkout.
 """
 
 from __future__ import annotations
@@ -36,8 +37,7 @@ CREDIT_PACKS: List[Dict[str, Any]] = [
         "name": "Starter",
         "credits": 20.0,
         "price_usd": 4.99,
-        "paystack_amount": 80.0,  # GHS major units (Paystack pesewas = * 100)
-        "apple_product_id": "autobus.credits.20",
+        "apple_product_id": "autobus.credits.20.v4",
         "google_play_product_id": "autobus.credits.20",
         "description": "20 credits",
         "details": "Add 20 credits to your wallet. That's about 5 videos or 16 images, plus AI chats, email and SMS. Credits stay until you use them.",
@@ -47,8 +47,7 @@ CREDIT_PACKS: List[Dict[str, Any]] = [
         "name": "Plus",
         "credits": 50.0,
         "price_usd": 12.99,
-        "paystack_amount": 200.0,
-        "apple_product_id": "autobus.credits.50",
+        "apple_product_id": "autobus.credits.50.v4",
         "google_play_product_id": "autobus.credits.50",
         "description": "50 credits",
         "details": "Add 50 credits for weekly marketing. Roughly 12 videos or 40 images, with plenty left for customer chats and messages.",
@@ -58,8 +57,7 @@ CREDIT_PACKS: List[Dict[str, Any]] = [
         "name": "Pro",
         "credits": 150.0,
         "price_usd": 34.99,
-        "paystack_amount": 550.0,
-        "apple_product_id": "autobus.credits.150",
+        "apple_product_id": "autobus.credits.150.v5",
         "google_play_product_id": "autobus.credits.150",
         "description": "150 credits",
         "details": "Add 150 credits for campaigns and a busy inbox. About 37 videos or 120 images, or a mix of generation, chats and messaging.",
@@ -69,8 +67,7 @@ CREDIT_PACKS: List[Dict[str, Any]] = [
         "name": "Business",
         "credits": 400.0,
         "price_usd": 79.99,
-        "paystack_amount": 1300.0,
-        "apple_product_id": "autobus.credits.400",
+        "apple_product_id": "autobus.credits.400.v4",
         "google_play_product_id": "autobus.credits.400",
         "description": "400 credits",
         "details": "Add 400 credits at the best rate per credit. Built for daily use: videos, product photos, AI chats, email and SMS.",
@@ -126,7 +123,7 @@ def packs_public() -> List[Dict[str, Any]]:
             "name": p["name"],
             "credits": p["credits"],
             "price_usd": p["price_usd"],
-            "paystack_amount": p["paystack_amount"],
+            "paystack_amount": 0,
             "apple_product_id": p["apple_product_id"],
             "google_play_product_id": p.get("google_play_product_id") or p["apple_product_id"],
             "description": p["description"],

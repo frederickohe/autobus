@@ -25,7 +25,7 @@ class CreditPackItem(BaseModel):
     name: str
     credits: float
     price_usd: float
-    paystack_amount: float
+    paystack_amount: float = 0
     apple_product_id: str
     google_play_product_id: str = ""
     description: str

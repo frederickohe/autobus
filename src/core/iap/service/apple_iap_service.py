@@ -77,7 +77,7 @@ class AppleIapService:
                 "success": False,
                 "message": (
                     f"No Autobus credit pack is mapped to App Store product '{product_id}'. "
-                    "Create consumable products autobus.credits.20 / .50 / .150 / .400 "
+                    "Create consumable products autobus.credits.20.v4 / .50.v4 / .150.v5 / .400.v4 "
                     "in App Store Connect."
                 ),
                 "product_id": product_id,

@@ -9,6 +9,7 @@ from core.exceptions import *
 from utilities.dbconfig import SessionLocal
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.attributes import flag_modified
 from core.user.model.User import User
 import logging
 
@@ -22,6 +23,12 @@ from core.user.dto.response.user_response import UserResponse
 from core.user.dto.request.user_update_request import UserUpdateRequest
 
 # Service Class
+def _sender_email_of(user: User) -> Optional[str]:
+    from core.email.sender_email import sender_email_from_user
+
+    return sender_email_from_user(user)
+
+
 class UserService:
     def __init__(self, db: Session):
         self.db = db
@@ -56,6 +63,7 @@ class UserService:
             if isinstance(getattr(user, "onboarding_profile", None), dict)
             else None,
             currency_code=(getattr(user, "currency_code", None) or "GHS").upper(),
+            sender_email=_sender_email_of(user),
             enabled=user.enabled,
             status=user.status,
             created_at=user.created_at,
@@ -183,6 +191,28 @@ class UserService:
 
     def update_current_user(self, email: str, payload: UserUpdateRequest) -> UserResponse:
         return self._apply_profile_update(self._resolve_identifier(email), payload)
+
+    def update_current_user_sender_email(self, identifier: str, sender_email: str) -> UserResponse:
+        from core.email.sender_email import SenderEmailInvalid, normalize_sender_email
+
+        user = self._resolve_identifier(identifier)
+        try:
+            normalized = normalize_sender_email(sender_email)
+        except SenderEmailInvalid as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        current = user.get_agent("email_agent") or {}
+        params = dict(current.get("params") or {})
+        params["sender_email"] = normalized
+        current["params"] = params
+        current.setdefault("status", "active")
+        user.set_agent("email_agent", current)
+        flag_modified(user, "agents")
+        user.updated_at = datetime.utcnow()
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return self._to_response(user)
 
     def update_current_user_notification_settings(
         self,

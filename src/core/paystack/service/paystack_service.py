@@ -67,6 +67,8 @@ class PaystackService:
             payload["callback_url"] = request.callback_url
         if request.channels:
             payload["channels"] = request.channels
+        if request.currency:
+            payload["currency"] = request.currency
         
         try:
             async with httpx.AsyncClient() as client:

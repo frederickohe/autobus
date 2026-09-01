@@ -89,6 +89,7 @@ class Settings(BaseSettings):
         or ""
     ).strip()
     ZEPTOMAIL_FROM_EMAIL: str = os.environ.get("ZEPTOMAIL_FROM_EMAIL", "").strip()
+    ZEPTOMAIL_SENDER_DOMAIN: str = os.environ.get("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
 
     @model_validator(mode="after")
     def _zeptomail_password_fallback(self):
@@ -152,6 +153,8 @@ class Settings(BaseSettings):
     # Paystack (standalone billing checkout)
     PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()
     PAYSTACK_BILLING_CALLBACK_URL: str = os.environ.get("PAYSTACK_BILLING_CALLBACK_URL", "").strip()
+    # Optional lock for USD→GHS. Leave 0 to use a live FX rate at credit checkout.
+    USD_GHS_RATE: float = float(os.environ.get("USD_GHS_RATE", "0") or 0)
 
     # Apple In-App Purchase (StoreKit 2)
     APPLE_BUNDLE_ID: str = os.environ.get("APPLE_BUNDLE_ID", "").strip()

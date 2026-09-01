@@ -568,8 +568,12 @@ class IntentProcessor:
         if not sender_email:
             return "❌ Please provide the sender email address to use."
 
-        if "@" not in sender_email or "." not in sender_email.split("@")[-1]:
-            return "❌ That does not look like a valid email address. Please try again."
+        from core.email.sender_email import SenderEmailInvalid, normalize_sender_email
+
+        try:
+            sender_email = normalize_sender_email(sender_email)
+        except SenderEmailInvalid as exc:
+            return f"❌ {exc}"
 
         db = next(get_db())
         try:

@@ -8,3 +8,4 @@ class PaystackInitializeRequest(BaseModel):
     callback_url: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     channels: Optional[list] = None
+    currency: Optional[str] = None

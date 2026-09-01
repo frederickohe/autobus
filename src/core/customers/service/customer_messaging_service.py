@@ -5,6 +5,7 @@ import smtplib
 import ssl
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.utils import formataddr
 from typing import Any, Dict, List, Optional
 
 import redis
@@ -17,6 +18,8 @@ from core.customers.dto.customer_dto import (
 )
 from core.customers.service.customer_service import CustomerService
 from core.customers.utility.network_detector import Network
+from core.email.sender_email import SenderEmailNotConfigured, sender_email_from_user
+from core.user.model.User import User
 from core.wirepick.service.wirepickservice import WirepickSMSService, WirepickSMSException
 
 logger = logging.getLogger(__name__)
@@ -128,8 +131,19 @@ class CustomerMessagingService:
         if not settings.ZEPTOMAIL_SMTP_PASSWORD:
             raise ValueError("Email service is not configured")
 
-        sender_domain = os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
-        from_email = settings.ZEPTOMAIL_FROM_EMAIL or f"no-reply@{sender_domain}"
+        user = self._resolve_user(user_id)
+        from_email = sender_email_from_user(user)
+        if not from_email:
+            domain = os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
+            raise SenderEmailNotConfigured(
+                f"Add a from email in Messaging before sending. Example: noreply@{domain}"
+            )
+
+        display_name = ""
+        if user is not None:
+            display_name = ((user.company or user.fullname or "") or "").strip()
+        from_header = formataddr((display_name, from_email)) if display_name else from_email
+        reply_to = (user.email or "").strip() if user is not None else ""
 
         customers_by_id = {
             c.id: c for c in self.customer_service.get_customers_by_ids(customer_ids, user_id)
@@ -162,8 +176,19 @@ class CustomerMessagingService:
 
             to_email = customer.email.strip()
             try:
-                sent = self._send_email(from_email, to_email, subject, body)
+                sent = self._send_email(
+                    from_header,
+                    to_email,
+                    subject,
+                    body,
+                    reply_to=reply_to if reply_to and reply_to.lower() != from_email.lower() else None,
+                )
                 if sent:
+                    self._record_sent_email(
+                        user,
+                        to_email=to_email,
+                        subject=subject,
+                    )
                     results.append(
                         CustomerMessageRecipientResult(
                             customer_id=customer.id,
@@ -212,6 +237,44 @@ class CustomerMessagingService:
 
     def _history_user_id(self, user_id: str) -> Optional[str]:
         return self.customer_service._resolve_user_db_id(user_id) or (user_id or "").strip() or None
+
+    def _resolve_user(self, user_id: str) -> Optional[User]:
+        db_id = self.customer_service._resolve_user_db_id(user_id)
+        if not db_id:
+            return None
+        return self.db.query(User).filter(User.id == db_id).first()
+
+    def _record_sent_email(
+        self,
+        user: Optional[User],
+        *,
+        to_email: str,
+        subject: str,
+    ) -> None:
+        """Append outbound email metadata so Sent Emails history can show it."""
+        keys: List[str] = []
+        if user is not None:
+            phone = (user.phone or "").strip()
+            if phone:
+                keys.append(f"email:sent:{phone}")
+            if user.id:
+                keys.append(f"email:sent:{user.id}")
+        if not keys:
+            return
+        try:
+            payload = json.dumps(
+                {
+                    "to": to_email,
+                    "subject": subject,
+                    "sent_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            client = self._redis()
+            for key in keys:
+                client.lpush(key, payload)
+                client.ltrim(key, 0, 99)
+        except Exception as e:
+            logger.warning("Could not record sent email: %s", e)
 
     def _record_sent_sms(
         self,
@@ -267,11 +330,19 @@ class CustomerMessagingService:
         return out
 
     @staticmethod
-    def _send_email(from_email: str, to_email: str, subject: str, body: str) -> bool:
+    def _send_email(
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        reply_to: Optional[str] = None,
+    ) -> bool:
         msg = EmailMessage()
         msg["Subject"] = subject
         msg["From"] = from_email
         msg["To"] = to_email
+        if reply_to:
+            msg["Reply-To"] = reply_to
         msg.set_content(body)
 
         smtp_host = settings.ZEPTOMAIL_SMTP_HOST

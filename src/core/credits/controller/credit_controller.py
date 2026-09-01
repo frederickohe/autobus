@@ -3,6 +3,7 @@ from another_fastapi_jwt_auth import AuthJWT
 from sqlalchemy.orm import Session
 
 from core.credits.credit_catalog import get_pack, packs_public
+from core.credits.usd_ghs import usd_to_ghs
 from core.credits.dto.credit_response import (
     CreditBalanceItem,
     CreditCheckoutRequest,
@@ -65,7 +66,15 @@ async def checkout_credit_pack(
     if not email:
         raise HTTPException(status_code=400, detail="Email is required to buy credits")
 
-    amount_subunit = int(round(float(pack["paystack_amount"]) * 100))
+    try:
+        amount_ghs, usd_ghs_rate = await usd_to_ghs(float(pack["price_usd"]))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Could not convert the dollar price to cedis. Try again shortly.",
+        ) from exc
+
+    amount_subunit = int(round(amount_ghs * 100))
     paystack = PaystackService(db)
     init = await paystack.initialize_transaction(
         user_id=user.id,
@@ -73,10 +82,14 @@ async def checkout_credit_pack(
             email=email,
             amount=amount_subunit,
             callback_url=request.callback_url,
+            currency="GHS",
             metadata={
                 "purpose": "credits",
                 "pack_id": pack["id"],
                 "credits": pack["credits"],
+                "price_usd": pack["price_usd"],
+                "usd_ghs_rate": usd_ghs_rate,
+                "amount_ghs": amount_ghs,
             },
         ),
     )
@@ -85,5 +98,8 @@ async def checkout_credit_pack(
         "authorization_url": init.authorization_url,
         "access_code": init.access_code,
         "reference": init.reference,
-        "amount": pack["paystack_amount"],
+        "amount": amount_ghs,
+        "price_usd": pack["price_usd"],
+        "currency": "GHS",
+        "usd_ghs_rate": usd_ghs_rate,
     }

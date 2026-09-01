@@ -12,6 +12,7 @@ from core.customers.dto.customer_dto import (
     CustomerMessageResponse,
 )
 from core.customers.service.customer_messaging_service import CustomerMessagingService
+from core.email.sender_email import SenderEmailNotConfigured
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.user.controller.usercontroller import validate_token, get_db
@@ -241,6 +242,8 @@ def send_customer_email(
         )
     except HTTPException:
         raise
+    except SenderEmailNotConfigured as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
     except Exception as e:

@@ -40,6 +40,9 @@ class UserResponse(BaseModel):
     onboarding_profile: Optional[Dict[str, Any]] = None
     currency_code: str = "GHS"
 
+    # Outbound From address for customer / agent email (Zeptomail)
+    sender_email: Optional[str] = None
+
     # Status and Timestamps
     status: str
     enabled: bool

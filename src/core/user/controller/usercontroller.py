@@ -38,6 +38,7 @@ from core.user.dto.request.notification_settings_update_request import (
     NotificationSettingsUpdateRequest,
 )
 from core.user.dto.request.profile_image_update_request import ProfileImageUpdateRequest
+from core.user.dto.request.sender_email_update_request import SenderEmailUpdateRequest
 from core.notification.service.notification_service import NotificationService
 from core.notification.dto.response.paged_notifications import PagedNotificationResponse
 from core.notification.model.Notification import NotificationStatus, NotificationType
@@ -255,6 +256,20 @@ def update_current_user_endpoint(payload: UserUpdateRequest, authjwt: AuthJWT = 
     current_user_email = authjwt.get_jwt_subject()
     user_service = UserService(db)
     return user_service.update_current_user(current_user_email, payload)
+
+
+@user_routes.put("/me/sender-email", response_model=UserResponse)
+def update_my_sender_email(
+    payload: SenderEmailUpdateRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Set the From address used when Autobus sends email on the user's behalf."""
+    current_user_email = authjwt.get_jwt_subject()
+    user_service = UserService(db)
+    return user_service.update_current_user_sender_email(
+        current_user_email, sender_email=payload.sender_email
+    )
 
 
 @user_routes.patch("/me", response_model=UserResponse)
