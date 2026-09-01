@@ -39,7 +39,7 @@ async def process_message(
             raise HTTPException(
                 status_code=402,
                 detail={
-                    "message": "Insufficient LLM Chats credits. Please upgrade your plan.",
+                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
                     "credit_type": CreditType.LLM.value,
                 },
             )

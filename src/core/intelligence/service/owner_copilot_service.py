@@ -98,7 +98,7 @@ class OwnerCopilotService:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail={
-                    "message": "Insufficient LLM Chats credits. Please upgrade your plan.",
+                    "message": "Insufficient credits for LLM Chats. Buy more credits to continue.",
                     "credit_type": CreditType.LLM.value,
                 },
             )

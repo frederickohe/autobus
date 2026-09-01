@@ -27,7 +27,6 @@ from core.chatwoot.service.chatwoot_api_service import (
 )
 from core.chatwoot.service.chatwoot_org_service import ChatwootOrgService
 from core.chatwoot.service.chatwoot_provision_service import ensure_chatwoot_provisioned
-from core.subscription.service.subscription_service import SubscriptionService
 from core.user.model.User import User
 from utilities.dbconfig import get_db
 
@@ -118,12 +117,7 @@ def _normalize_channel(raw: str) -> str:
 
 
 def _require_subscription(db: Session, internal_user_id: str) -> None:
-    sub = SubscriptionService(db).get_user_active_subscription(internal_user_id)
-    if not sub:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="An active subscription is required to use Chatwoot features.",
-        )
+    return
 
 
 def _require_chatwoot_env() -> None:
@@ -177,9 +171,9 @@ async def chatwoot_status(
     db: Session = Depends(get_db),
 ):
     internal_id = resolve_internal_user_id(db, jwt_subject)
-    sub_active = bool(SubscriptionService(db).get_user_active_subscription(internal_id))
+    sub_active = True
     configured = chatwoot_enabled()
-    if sub_active and configured:
+    if configured:
         await ensure_chatwoot_provisioned(db, internal_id)
     mapping = ChatwootOrgService(db).get_for_user(internal_id)
     provisioned = mapping is not None

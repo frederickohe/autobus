@@ -129,6 +129,12 @@ class AuthService:
         self.db.add_all(seed_notifications)
         self.db.commit()
         self.db.refresh(db_user)
+        try:
+            from core.credits.service.credit_service import CreditService
+
+            CreditService(self.db).grant_starter_credits(db_user.id)
+        except Exception as e:
+            logger.warning("Starter credits not granted for %s: %s", db_user.id, e)
 
         otp_send_result = None
         try:

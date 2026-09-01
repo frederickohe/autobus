@@ -1,9 +1,18 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from another_fastapi_jwt_auth import AuthJWT
 from sqlalchemy.orm import Session
 
-from core.credits.dto.credit_response import CreditBalanceItem, UserCreditsResponse
+from core.credits.credit_catalog import get_pack, packs_public
+from core.credits.dto.credit_response import (
+    CreditBalanceItem,
+    CreditCheckoutRequest,
+    CreditPackItem,
+    UserCreditsResponse,
+    WalletBalance,
+)
 from core.credits.service.credit_service import CreditService
+from core.paystack.dto.request.paystack_request import PaystackInitializeRequest
+from core.paystack.service.paystack_service import PaystackService
 from core.user.controller.usercontroller import validate_token, get_db
 from core.user.service.user_service import UserService
 
@@ -15,16 +24,66 @@ def get_my_credits(
     authjwt: AuthJWT = Depends(validate_token),
     db: Session = Depends(get_db),
 ):
-    """Current user's credit balances per resource category."""
+    """Current user's unified wallet and per-feature remaining actions."""
     user = UserService(db).get_current_user(authjwt.get_jwt_subject())
     data = CreditService(db).get_user_credits(user.id)
     credits = {
         key: CreditBalanceItem(**value) for key, value in data["credits"].items()
     }
+    wallet = data.get("wallet") or {}
     return UserCreditsResponse(
         user_id=data["user_id"],
         plan_id=data.get("plan_id"),
-        plan_name=data.get("plan_name") or "Free",
-        has_active_subscription=data.get("has_active_subscription", False),
+        plan_name=data.get("plan_name") or "Credits",
+        has_active_subscription=True,
+        wallet=WalletBalance(**wallet) if wallet else None,
+        costs=data.get("costs") or {},
+        packs=[CreditPackItem(**p) for p in data.get("packs") or []],
         credits=credits,
     )
+
+
+@credit_routes.get("/packs")
+def list_credit_packs():
+    """Consumable credit packs sold via IAP and Paystack."""
+    return {"packs": packs_public()}
+
+
+@credit_routes.post("/checkout")
+async def checkout_credit_pack(
+    request: CreditCheckoutRequest,
+    authjwt: AuthJWT = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Start a Paystack checkout for a credit pack (web / Android)."""
+    pack = get_pack(request.pack_id)
+    if not pack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Credit pack not found")
+
+    user = UserService(db).get_current_user(authjwt.get_jwt_subject())
+    email = (request.email or user.email or "").strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required to buy credits")
+
+    amount_subunit = int(round(float(pack["paystack_amount"]) * 100))
+    paystack = PaystackService(db)
+    init = await paystack.initialize_transaction(
+        user_id=user.id,
+        request=PaystackInitializeRequest(
+            email=email,
+            amount=amount_subunit,
+            callback_url=request.callback_url,
+            metadata={
+                "purpose": "credits",
+                "pack_id": pack["id"],
+                "credits": pack["credits"],
+            },
+        ),
+    )
+    return {
+        "pack": pack,
+        "authorization_url": init.authorization_url,
+        "access_code": init.access_code,
+        "reference": init.reference,
+        "amount": pack["paystack_amount"],
+    }

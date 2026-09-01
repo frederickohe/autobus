@@ -20,15 +20,8 @@ class FilterPipeline:
         return {"ok": True, "user": user}
 
     def check_subscription_active(self, user) -> Dict[str, Any]:
-        from core.subscription.service.subscription_service import SubscriptionService
-
-        service = SubscriptionService(self.db)
-        try:
-            result = service.get_user_subscription_status(user.phone)
-            has_active = bool(result.get("has_active_subscription", False))
-            return {"ok": True, "has_active_subscription": has_active}
-        except Exception as e:
-            return {"ok": False, "message": f"Error checking subscription: {e}"}
+        # Access is credit-metered per feature, not gated by a subscription plan.
+        return {"ok": True, "has_active_subscription": True}
 
     def check_context_matches_agent(self, user, context: Optional[str]) -> Dict[str, Any]:
         # user.agents is expected to be a dict stored in the User.agents JSONB column

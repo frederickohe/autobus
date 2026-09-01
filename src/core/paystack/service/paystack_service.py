@@ -144,6 +144,13 @@ class PaystackService:
                     transaction.paid_at = datetime.utcnow()
                     transaction.gateway_response = result["data"]["gateway_response"]
                     self.db.commit()
+
+                data = result.get("data") or {}
+                if (
+                    result.get("status")
+                    and str(data.get("status") or "").lower() == "success"
+                ):
+                    self._grant_credit_pack_if_needed(transaction, data)
                 
                 return PaystackVerifyResponse(
                     status=result["status"],
@@ -162,6 +169,48 @@ class PaystackService:
                 detail=f"Payment service unavailable: {str(e)}"
             )
     
+    def _grant_credit_pack_if_needed(self, transaction, data: dict) -> None:
+        metadata = {}
+        if transaction is not None and getattr(transaction, "transaction_metadata", None):
+            raw = transaction.transaction_metadata
+            if isinstance(raw, dict):
+                metadata = raw
+        if not metadata:
+            raw = data.get("metadata") if isinstance(data, dict) else None
+            if isinstance(raw, dict):
+                metadata = raw
+        if str(metadata.get("purpose") or "") != "credits":
+            return
+        pack_id = str(metadata.get("pack_id") or "").strip()
+        user_id = None
+        if transaction is not None:
+            user_id = getattr(transaction, "user_id", None)
+        user_id = user_id or metadata.get("user_id")
+        reference = str(
+            (transaction.reference if transaction is not None else None)
+            or data.get("reference")
+            or ""
+        )
+        if not pack_id or not user_id or not reference:
+            return
+        amount = None
+        try:
+            raw_amount = data.get("amount")
+            if raw_amount is not None:
+                amount = float(raw_amount) / 100.0
+        except (TypeError, ValueError):
+            amount = None
+        from core.credits.service.credit_service import CreditService
+
+        CreditService(self.db).grant_pack(
+            user_id=str(user_id),
+            pack_id=pack_id,
+            provider="paystack",
+            transaction_id=reference,
+            product_id=pack_id,
+            amount=amount,
+        )
+
     async def list_banks(self, country: str = "nigeria") -> list:
         """Get list of banks for Paystack"""
         try:

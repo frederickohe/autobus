@@ -158,6 +158,17 @@ class Settings(BaseSettings):
     APPLE_IAP_PRODUCT_PREFIX: str = os.environ.get("APPLE_IAP_PRODUCT_PREFIX", "autobus").strip()
     APPLE_IAP_PRODUCT_MAP: str = os.environ.get("APPLE_IAP_PRODUCT_MAP", "").strip()
 
+    # Google Play Billing (Android consumable credits)
+    GOOGLE_PLAY_PACKAGE_NAME: str = os.environ.get(
+        "GOOGLE_PLAY_PACKAGE_NAME", "com.autobus.app"
+    ).strip()
+    GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: str = os.environ.get(
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_JSON", ""
+    ).strip()
+    GOOGLE_PLAY_SERVICE_ACCOUNT_FILE: str = os.environ.get(
+        "GOOGLE_PLAY_SERVICE_ACCOUNT_FILE", ""
+    ).strip()
+
     @property
     def DB_DSN(self) -> URL:
         return URL.create(

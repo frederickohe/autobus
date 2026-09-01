@@ -6,6 +6,9 @@ from pydantic import BaseModel
 class AppleIapVerifyResponse(BaseModel):
     success: bool
     message: str
+    credits_granted: Optional[float] = None
+    wallet_remaining: Optional[float] = None
+    pack_id: Optional[str] = None
     subscription_id: Optional[int] = None
     plan_id: Optional[int] = None
     plan_name: Optional[str] = None
