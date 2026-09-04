@@ -14,6 +14,7 @@ WRITE_TOOLS = frozenset(
         "send_customer_sms",
         "send_customer_email",
         "publish_instagram_post",
+        "publish_social_post",
     }
 )
 
@@ -26,6 +27,7 @@ CONFIRM_TITLES = {
     "send_customer_sms": "Send this SMS?",
     "send_customer_email": "Send this email?",
     "publish_instagram_post": "Post this to Instagram?",
+    "publish_social_post": "Post this to your linked accounts?",
 }
 
 _ASK_ACCEPT = {
@@ -41,7 +43,13 @@ _ASK_ACCEPT = {
 }
 
 
-def confirm_title(tool: str) -> str:
+def confirm_title(tool: str, args: Optional[Dict[str, Any]] = None) -> str:
+    labels = _destination_labels(args)
+    if tool in {"publish_instagram_post", "publish_social_post"}:
+        if len(labels) == 1:
+            return f"Post this to {labels[0]}?"
+        if len(labels) > 1:
+            return "Post this to your linked accounts?"
     return CONFIRM_TITLES.get(tool, "Go ahead with this?")
 
 
@@ -78,16 +86,46 @@ def confirm_summary(tool: str, args: Dict[str, Any]) -> str:
         ids = args.get("customer_ids") or []
         n = len(ids) if isinstance(ids, list) else 1
         return f"Email {n} customer{'s' if n != 1 else ''} — subject: {subject}"
-    if tool == "publish_instagram_post":
+    if tool in {"publish_instagram_post", "publish_social_post"}:
         caption = str(args.get("caption") or "").strip()
         urls = args.get("media_urls") or []
         n = len(urls) if isinstance(urls, list) else 0
         media = "image" if n <= 1 else f"{n} images"
+        if any(
+            str(url).split("?", 1)[0].lower().endswith(ext)
+            for url in (urls if isinstance(urls, list) else [])
+            for ext in (".mp4", ".mov", ".m4v", ".webm")
+        ):
+            media = "video" if n <= 1 else f"{n} videos"
+        dest = _destination_phrase(args, fallback="Instagram" if tool == "publish_instagram_post" else "your linked accounts")
         preview = caption if len(caption) <= 140 else caption[:137] + "..."
         if preview:
-            return f"Post this {media} to Instagram: {preview}"
-        return f"Post this {media} to Instagram."
+            return f"Post this {media} to {dest}: {preview}"
+        return f"Post this {media} to {dest}."
     return json.dumps(args, default=str)[:400]
+
+
+def _destination_labels(args: Optional[Dict[str, Any]]) -> List[str]:
+    raw = (args or {}).get("destination_labels") or []
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    for item in raw:
+        label = str(item or "").strip()
+        if label:
+            out.append(label)
+    return out
+
+
+def _destination_phrase(args: Dict[str, Any], *, fallback: str) -> str:
+    labels = _destination_labels(args)
+    if not labels:
+        return fallback
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return f"{', '.join(labels[:-1])}, and {labels[-1]}"
 
 
 def ask_accept_for(kind: str) -> List[str]:

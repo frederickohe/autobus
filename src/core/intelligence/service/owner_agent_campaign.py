@@ -1,4 +1,4 @@
-"""Last generated campaign + Instagram helpers for the owner agent."""
+"""Last generated campaign + linked social destinations for the owner agent."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,17 @@ from core.instagram.model.InstagramAccount import InstagramAccount
 from core.intelligence.service.business_context_assembler import owner_conversation_key
 from core.nlu.service.conversation_manager import ConversationManager
 from core.user.model.User import User
+
+from core.intelligence.service.owner_agent_destinations import (
+    AUTOBUS_IG_PREFIX,
+    SKIP_POSTIZ_IDENTIFIERS,
+    VIDEO_ONLY_PROVIDERS,
+    build_postiz_payload,
+    match_destinations,
+    media_looks_like_video,
+    provider_label,
+    string_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +44,10 @@ def _await(coro):
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, coro).result()
+
+
+def run_async(coro):
+    return _await(coro)
 
 
 def load_campaign(user: User) -> Dict[str, Any]:
@@ -58,12 +74,18 @@ def save_campaign(user: User, **fields: Any) -> Dict[str, Any]:
     return campaign
 
 
-def fill_publish_args(user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+def fill_publish_args(
+    user: User,
+    args: Dict[str, Any],
+    *,
+    db: Optional[Session] = None,
+    instagram_only: bool = False,
+) -> Dict[str, Any]:
     merged = dict(args or {})
     campaign = load_campaign(user)
-    urls = _string_list(merged.get("media_urls"))
+    urls = string_list(merged.get("media_urls"))
     if not urls:
-        urls = _string_list(campaign.get("media_urls"))
+        urls = string_list(campaign.get("media_urls"))
         if not urls:
             url = str(campaign.get("url") or "").strip()
             if url:
@@ -76,10 +98,20 @@ def fill_publish_args(user: User, args: Dict[str, Any]) -> Dict[str, Any]:
         if caption:
             merged["caption"] = caption
     account_id = str(merged.get("account_id") or "").strip()
-    if not account_id:
+    if not account_id and instagram_only:
         account_id = str(campaign.get("account_id") or "").strip()
         if account_id:
             merged["account_id"] = account_id
+    if db is not None:
+        dests = resolve_destinations(
+            db,
+            user,
+            merged,
+            instagram_only=instagram_only,
+        )
+        merged["destinations"] = dests
+        merged["destination_ids"] = [d["id"] for d in dests]
+        merged["destination_labels"] = [d["label"] for d in dests]
     return merged
 
 
@@ -138,14 +170,94 @@ def upload_image_bytes(user_id: str, raw_b64: str, mime: str) -> str:
     )
 
 
-def _string_list(raw: Any) -> List[str]:
-    if isinstance(raw, str) and raw.strip():
-        return [raw.strip()]
-    if not isinstance(raw, list):
+def list_social_destinations(db: Session, user: User) -> List[Dict[str, Any]]:
+    dests: List[Dict[str, Any]] = []
+    for ig in list_accounts(db, user):
+        username = str(ig.get("username") or "").strip()
+        name = str(ig.get("name") or "").strip()
+        handle = f"@{username}" if username else (name or "Instagram")
+        dests.append(
+            {
+                "id": f"{AUTOBUS_IG_PREFIX}{ig['id']}",
+                "account_id": ig["id"],
+                "provider": "instagram",
+                "channel": "autobus_instagram",
+                "label": f"Instagram ({handle})",
+                "publishing_enabled": bool(ig.get("publishing_enabled")),
+            }
+        )
+    for row in fetch_postiz_integrations(db, user):
+        ident = str(row.get("identifier") or "").strip().lower()
+        iid = str(
+            row.get("id") or row.get("integrationId") or row.get("integration_id") or ""
+        ).strip()
+        if not iid or ident in SKIP_POSTIZ_IDENTIFIERS:
+            continue
+        if row.get("disabled") is True:
+            continue
+        name = str(row.get("name") or row.get("profile") or ident).strip()
+        label = provider_label(ident)
+        dests.append(
+            {
+                "id": iid,
+                "provider": ident,
+                "channel": "postiz",
+                "label": f"{label} ({name})" if name and name.lower() != ident else label,
+                "publishing_enabled": True,
+            }
+        )
+    return dests
+
+
+def resolve_destinations(
+    db: Session,
+    user: User,
+    args: Dict[str, Any],
+    *,
+    instagram_only: bool = False,
+) -> List[Dict[str, Any]]:
+    ids = string_list(args.get("account_ids"))
+    if not ids:
+        ids = string_list(args.get("destination_ids"))
+    single = str(args.get("account_id") or "").strip()
+    if single:
+        ids.append(single)
+    platforms = string_list(args.get("platforms"))
+    urls = string_list(args.get("media_urls"))
+    return match_destinations(
+        list_social_destinations(db, user),
+        account_ids=ids,
+        platforms=platforms,
+        instagram_only=instagram_only,
+        has_video=media_looks_like_video(urls),
+    )
+
+
+def fetch_postiz_integrations(db: Session, user: User) -> List[Dict[str, Any]]:
+    from core.socialmedia.service.postiz_api_service import (
+        PostizAPIError,
+        PostizClient,
+        normalize_postiz_integrations_list,
+        postiz_enabled,
+    )
+    from core.socialmedia.service.postiz_org_service import PostizOrgService
+
+    if not postiz_enabled():
         return []
-    out: List[str] = []
-    for item in raw:
-        value = str(item or "").strip()
-        if value:
-            out.append(value)
-    return out
+    api_key = PostizOrgService(db).get_public_api_key_for_user(user.id) or (
+        os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
+        or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
+        or None
+    )
+    base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not api_key or not base_url:
+        return []
+    try:
+        raw = _await(PostizClient(base_url).list_integrations(api_key))
+        return normalize_postiz_integrations_list(raw)
+    except PostizAPIError as exc:
+        logger.warning("[OWNER_AGENT] Postiz list integrations failed: %s", exc)
+        return []
+    except Exception:
+        logger.exception("[OWNER_AGENT] Postiz list integrations failed")
+        return []

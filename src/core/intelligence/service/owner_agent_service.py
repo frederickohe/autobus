@@ -57,8 +57,9 @@ You can look things up and you can take action. For anything that changes data o
 sends a message, the app will ask the owner to confirm before it runs.
 
 Help with: products and stock, orders, customers, inbox, messaging, marketing
-campaigns (images, videos, captions), posting to Instagram, and knowledge from
-uploaded files or the business profile.
+campaigns (images, videos, captions), posting to linked social accounts
+(Instagram, YouTube, TikTok), and knowledge from uploaded files or the
+business profile.
 
 Guidelines:
 - Be warm, concise, and practical. Plain text only. No markdown.
@@ -71,16 +72,18 @@ Guidelines:
 - After tools return, tell the owner what you found or what you are ready to do.
 - If a section is empty, say so and offer the next step (add a product, upload a file).
 
-Marketing and Instagram:
+Marketing and social posts:
 - If they ask for sale content, a poster, flyer, campaign, or something to post,
   call generate_marketing_image unless they clearly want only words or a video/reel.
 - generate_marketing_image also returns a caption. Show the image in chat (the app
-  renders the media URL). Invite them to post it to Instagram when they are ready.
+  renders the media URL). Invite them to post it when they are ready.
 - For a video or reel, call generate_marketing_video.
-- To post: list_instagram_accounts first. If none are linked, tell them to connect
-  Instagram under Marketing, Manage Outlets. If accounts exist, call
-  publish_instagram_post (omit media_urls and caption to reuse the last generated
-  campaign). Do not claim it was posted until they confirm in the app.
+- To post: list_social_accounts first. If none are linked, tell them to connect
+  outlets under Marketing, Manage Outlets. If accounts exist, call
+  publish_social_post (omit media_urls and caption to reuse the last generated
+  campaign). Pass platforms or account_ids when they name a channel; otherwise
+  post to every linked account that can take the media. YouTube and TikTok need
+  a video. Do not claim it was posted until they confirm in the app.
 
 Business snapshot:
 {context}
@@ -159,7 +162,10 @@ class OwnerAgentService:
                 turn_type="reply",
             )
 
-        title = pending.get("title") or confirm_title(str(pending.get("tool") or ""))
+        title = pending.get("title") or confirm_title(
+            str(pending.get("tool") or ""),
+            pending.get("args") if isinstance(pending.get("args"), dict) else {},
+        )
         if request.confirmed is False:
             self._remember(conv_key, "user", f"[Owner declined: {title}]")
             self._set_pending(conv_key, None)
@@ -325,8 +331,13 @@ class OwnerAgentService:
             spoken = content or _spoken_for_control(name, args)
             if name == "ask_user":
                 return self._pause_ask(conv_key, spoken, args, actions, context.sources)
-            if name == "publish_instagram_post":
-                args = fill_publish_args(user, args)
+            if name in {"publish_instagram_post", "publish_social_post"}:
+                args = fill_publish_args(
+                    user,
+                    args,
+                    db=self.db,
+                    instagram_only=name == "publish_instagram_post",
+                )
             return self._pause_confirm(
                 conv_key, spoken, name, args, actions, context.sources, attachments
             )
@@ -364,8 +375,13 @@ class OwnerAgentService:
             tool = str(control.get("tool") or "").strip()
             args = control.get("args") if isinstance(control.get("args"), dict) else {}
             if tool in WRITE_TOOLS:
-                if tool == "publish_instagram_post":
-                    args = fill_publish_args(user, args)
+                if tool in {"publish_instagram_post", "publish_social_post"}:
+                    args = fill_publish_args(
+                        user,
+                        args,
+                        db=self.db,
+                        instagram_only=tool == "publish_instagram_post",
+                    )
                 return self._pause_confirm(conv_key, message, tool, args, actions, sources, media)
         if kind == "call_tool":
             tool = str(control.get("tool") or "").strip()
@@ -373,8 +389,13 @@ class OwnerAgentService:
             if tool == "ask_user":
                 return self._pause_ask(conv_key, message, args, actions, sources)
             if tool in WRITE_TOOLS:
-                if tool == "publish_instagram_post":
-                    args = fill_publish_args(user, args)
+                if tool in {"publish_instagram_post", "publish_social_post"}:
+                    args = fill_publish_args(
+                        user,
+                        args,
+                        db=self.db,
+                        instagram_only=tool == "publish_instagram_post",
+                    )
                 return self._pause_confirm(conv_key, message, tool, args, actions, sources, media)
             raw = execute_tool(self.db, user, tool, args)
             parsed = _as_dict(raw)
@@ -455,7 +476,7 @@ class OwnerAgentService:
         extra_attachments: Optional[List[AgentAttachment]] = None,
     ) -> AgentTurnResponse:
         confirm_id = str(uuid.uuid4())
-        title = confirm_title(tool)
+        title = confirm_title(tool, args)
         summary = confirm_summary(tool, args)
         message = spoken or f"{title} {summary}"
         media = list(extra_attachments or [])
@@ -650,7 +671,7 @@ def _action_detail(parsed: Optional[Dict[str, Any]], raw: str) -> str:
 def _spoken_for_control(name: str, args: Dict[str, Any]) -> str:
     if name == "ask_user":
         return str(args.get("prompt") or "I need a bit more from you.")
-    return confirm_title(name)
+    return confirm_title(name, args)
 
 
 def _agent_greeting(user: User, snapshot: Dict[str, Any]) -> str:

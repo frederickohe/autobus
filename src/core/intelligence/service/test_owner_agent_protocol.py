@@ -14,7 +14,9 @@ class OwnerAgentProtocolTest(unittest.TestCase):
         self.assertIn("create_product", WRITE_TOOLS)
         self.assertIn("send_customer_sms", WRITE_TOOLS)
         self.assertIn("publish_instagram_post", WRITE_TOOLS)
+        self.assertIn("publish_social_post", WRITE_TOOLS)
         self.assertNotIn("list_products", WRITE_TOOLS)
+        self.assertNotIn("list_social_accounts", WRITE_TOOLS)
         self.assertNotIn("generate_marketing_image", WRITE_TOOLS)
         self.assertNotIn("ask_user", WRITE_TOOLS)
 
@@ -39,6 +41,31 @@ class OwnerAgentProtocolTest(unittest.TestCase):
         )
         self.assertIn("Instagram", title)
         self.assertIn("Easter sale", summary)
+
+    def test_confirm_copy_for_linked_social_accounts(self):
+        args = {
+            "caption": "Easter sale this weekend",
+            "media_urls": ["https://cdn/easter.jpg"],
+            "destination_labels": [
+                "Instagram (@shop)",
+                "YouTube (Shop TV)",
+                "TikTok (shop)",
+            ],
+        }
+        title = confirm_title("publish_social_post", args)
+        summary = confirm_summary("publish_social_post", args)
+        self.assertIn("linked accounts", title.lower())
+        self.assertIn("Instagram (@shop)", summary)
+        self.assertIn("YouTube (Shop TV)", summary)
+        self.assertIn("TikTok (shop)", summary)
+        self.assertIn("Easter sale", summary)
+
+    def test_confirm_title_for_single_destination(self):
+        title = confirm_title(
+            "publish_social_post",
+            {"destination_labels": ["Instagram (@shop)"]},
+        )
+        self.assertEqual(title, "Post this to Instagram (@shop)?")
 
     def test_parse_ask_and_confirm_json(self):
         ask = parse_control_payload(

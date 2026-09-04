@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any, Dict, List
 
 from fastapi import HTTPException
@@ -403,39 +404,148 @@ def _tool_list_instagram_accounts(db: Session, user: User, args: Dict[str, Any])
     )
 
 
-def _tool_publish_instagram_post(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
-    from core.instagram.service.instagram_publish_service import InstagramPublishService
-    from core.intelligence.service.owner_agent_campaign import (
-        fill_publish_args,
-        pick_publish_account,
-        save_campaign,
+def _tool_list_social_accounts(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.intelligence.service.owner_agent_campaign import list_social_destinations
+
+    accounts = list_social_destinations(db, user)
+    return _ok(
+        {
+            "accounts": accounts,
+            "connect_hint": None
+            if accounts
+            else "No social accounts are linked. Ask the owner to connect Instagram, YouTube, or TikTok under Marketing → Manage Outlets.",
+        }
     )
 
-    payload = fill_publish_args(user, args)
-    urls = payload.get("media_urls") or []
+
+def _tool_publish_instagram_post(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(args or {})
+    if not payload.get("platforms") and not payload.get("account_ids") and not payload.get("account_id"):
+        payload["platforms"] = ["instagram"]
+    return _publish_to_destinations(db, user, payload, instagram_only=True)
+
+
+def _tool_publish_social_post(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    return _publish_to_destinations(db, user, args or {}, instagram_only=False)
+
+
+def _publish_to_destinations(
+    db: Session,
+    user: User,
+    args: Dict[str, Any],
+    *,
+    instagram_only: bool,
+) -> Dict[str, Any]:
+    from core.instagram.service.instagram_publish_service import InstagramPublishService
+    from core.intelligence.service.owner_agent_campaign import (
+        VIDEO_ONLY_PROVIDERS,
+        build_postiz_payload,
+        fill_publish_args,
+        media_looks_like_video,
+        pick_publish_account,
+        run_async,
+        save_campaign,
+    )
+    from core.socialmedia.service.instagram_media_prepare import InstagramMediaPrepareError, InstagramMediaPrepareService
+    from core.socialmedia.service.postiz_api_service import (
+        PostizAPIError,
+        PostizClient,
+        coerce_tiktok_privacy_for_unaudited_app,
+        postiz_enabled,
+    )
+    from core.socialmedia.service.postiz_org_service import PostizOrgService
+
+    payload = fill_publish_args(user, args, db=db, instagram_only=instagram_only)
+    urls = list(payload.get("media_urls") or [])
     caption = str(payload.get("caption") or "").strip()
     if not urls:
         return json.loads(
             _err("There is no generated image or video to post. Generate campaign content first.")
         )
-    account = pick_publish_account(db, user, payload.get("account_id"))
-    if not account:
+    dests = list(payload.get("destinations") or [])
+    if not dests:
+        if instagram_only:
+            return json.loads(
+                _err("No Instagram account is linked. Connect Instagram under Marketing → Manage Outlets.")
+            )
+        if media_looks_like_video(urls):
+            return json.loads(
+                _err("No social accounts are linked. Connect Instagram, YouTube, or TikTok under Marketing → Manage Outlets.")
+            )
         return json.loads(
             _err(
-                "No Instagram account is linked. Connect Instagram under Marketing → Manage Outlets."
+                "No linked accounts can take this image. Connect Instagram, or generate a video for YouTube and TikTok."
             )
         )
-    if not account.publishing_enabled:
-        return json.loads(_err("Publishing is disabled for the linked Instagram account."))
-    result = InstagramPublishService().publish(account, caption=caption, media_urls=list(urls))
-    save_campaign(user, account_id=account.id)
-    return _ok(
-        {
-            "message": f"Published to Instagram (@{account.username or account.ig_user_id})",
-            "post_id": result.get("post_id"),
-            "account": account.username or account.ig_user_id,
-        }
+
+    published: List[str] = []
+    errors: List[str] = []
+    ig_dests = [d for d in dests if d.get("channel") == "autobus_instagram"]
+    postiz_dests = [d for d in dests if d.get("channel") == "postiz"]
+    has_video = media_looks_like_video(urls)
+
+    for dest in ig_dests:
+        account = pick_publish_account(db, user, dest.get("account_id"))
+        if not account:
+            errors.append(f"{dest.get('label') or 'Instagram'}: account not found")
+            continue
+        if not account.publishing_enabled:
+            errors.append(f"{dest.get('label') or 'Instagram'}: publishing is disabled")
+            continue
+        try:
+            result = InstagramPublishService().publish(account, caption=caption, media_urls=list(urls))
+            label = dest.get("label") or f"@{account.username or account.ig_user_id}"
+            published.append(label)
+            save_campaign(user, account_id=account.id)
+            logger.info("[OWNER_AGENT] Published Instagram post %s", result.get("post_id"))
+        except Exception as exc:
+            errors.append(f"{dest.get('label') or 'Instagram'}: {exc}")
+
+    ready_postiz: List[Dict[str, Any]] = []
+    for dest in postiz_dests:
+        provider = str(dest.get("provider") or "").strip().lower()
+        if provider in VIDEO_ONLY_PROVIDERS and not has_video:
+            errors.append(f"{dest.get('label') or provider}: needs a video")
+            continue
+        ready_postiz.append(dest)
+
+    if ready_postiz:
+        api_key = PostizOrgService(db).get_public_api_key_for_user(user.id) or (
+            os.getenv("POSTIZ_PUBLIC_API_KEY", "").strip()
+            or os.getenv("POSTIZ_GLOBAL_PUBLIC_API_KEY", "").strip()
+            or None
+        )
+        base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+        if not postiz_enabled() or not api_key or not base_url:
+            errors.append("YouTube/TikTok posting is not configured for this business.")
+        else:
+            try:
+                postiz_payload = coerce_tiktok_privacy_for_unaudited_app(
+                    build_postiz_payload(ready_postiz, caption=caption, media_urls=list(urls))
+                )
+                postiz_payload = InstagramMediaPrepareService().prepare_postiz_payload(
+                    postiz_payload
+                )
+                run_async(PostizClient(base_url).create_post(api_key, postiz_payload, timeout_s=40.0))
+                published.extend(str(d.get("label") or d.get("provider")) for d in ready_postiz)
+            except InstagramMediaPrepareError as exc:
+                errors.append(str(exc))
+            except PostizAPIError as exc:
+                errors.append(str(exc))
+            except Exception as exc:
+                logger.exception("[OWNER_AGENT] Postiz publish failed")
+                errors.append(str(exc))
+
+    if not published:
+        return json.loads(_err("; ".join(errors) if errors else "Publishing failed."))
+    message = "Published to " + (
+        published[0]
+        if len(published) == 1
+        else ", ".join(published[:-1]) + f", and {published[-1]}"
     )
+    if errors:
+        message += ". Some destinations failed: " + "; ".join(errors)
+    return _ok({"message": message, "published": published, "errors": errors})
 
 
 def _int_ids(raw: Any) -> List[int]:
@@ -472,7 +582,9 @@ _EXECUTORS = {
     "generate_marketing_image": _tool_generate_marketing_image,
     "generate_marketing_video": _tool_generate_marketing_video,
     "list_instagram_accounts": _tool_list_instagram_accounts,
+    "list_social_accounts": _tool_list_social_accounts,
     "publish_instagram_post": _tool_publish_instagram_post,
+    "publish_social_post": _tool_publish_social_post,
 }
 
 _FUNCTION_SPECS: List[Dict[str, Any]] = [
@@ -675,16 +787,44 @@ _FUNCTION_SPECS: List[Dict[str, Any]] = [
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
     {
+        "name": "list_social_accounts",
+        "description": (
+            "List linked social destinations this owner can publish to: Autobus Instagram plus "
+            "Postiz YouTube/TikTok (and other Postiz channels except Facebook/WhatsApp)."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "publish_instagram_post",
         "description": (
-            "Publish the last generated campaign (or given media URLs) to a linked Instagram account. "
-            "The app asks the owner to confirm before this runs. "
-            "Call list_instagram_accounts first. Omit media_urls/caption to reuse the last generated campaign."
+            "Publish the last generated campaign to a linked Autobus Instagram account. "
+            "The app asks the owner to confirm before this runs. Prefer publish_social_post "
+            "when they want more than Instagram."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "account_id": {"type": "string"},
+                "caption": {"type": "string"},
+                "media_urls": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "name": "publish_social_post",
+        "description": (
+            "Publish the last generated campaign to linked social accounts. "
+            "The app asks the owner to confirm and lists every destination before this runs. "
+            "Call list_social_accounts first. Omit media_urls/caption to reuse the last generated campaign. "
+            "Pass platforms (instagram, youtube, tiktok) or account_ids to target specific outlets; "
+            "otherwise post to every linked account that can take the media. YouTube and TikTok need a video."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "account_ids": {"type": "array", "items": {"type": "string"}},
+                "account_id": {"type": "string"},
+                "platforms": {"type": "array", "items": {"type": "string"}},
                 "caption": {"type": "string"},
                 "media_urls": {"type": "array", "items": {"type": "string"}},
             },
