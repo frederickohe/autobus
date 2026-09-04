@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from core.cloudstorage.service.storageservice import refresh_public_object_url
+from core.product.media import media_looks_like_video
 
 
 class ProductImageResponseDTO(BaseModel):
@@ -11,6 +12,7 @@ class ProductImageResponseDTO(BaseModel):
     url: str
     sort_order: int
     is_primary: bool
+    media_type: str = "image"
     created_at: datetime
 
     class Config:
@@ -24,5 +26,6 @@ class ProductImageResponseDTO(BaseModel):
             url=refresh_public_object_url(image.url),
             sort_order=image.sort_order,
             is_primary=image.is_primary,
+            media_type="video" if media_looks_like_video(image.url) else "image",
             created_at=image.created_at,
         )

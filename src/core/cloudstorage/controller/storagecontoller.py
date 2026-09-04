@@ -122,11 +122,16 @@ async def upload_file(
     authjwt: AuthJWT = Depends(validate_token),
 ):
     safe_name = os.path.basename(file.filename)
+    content_type = file.content_type or ""
+    is_video = content_type.startswith("video/") or safe_name.lower().endswith(
+        (".mp4", ".mov", ".m4v", ".webm")
+    )
     url = storage_service.upload_file(
         file.file,
         safe_name,
         content_type=file.content_type,
         folder=folder,
+        timeout_seconds=180 if is_video else 30,
     )
     return FileDTO(
         file_name=safe_name,

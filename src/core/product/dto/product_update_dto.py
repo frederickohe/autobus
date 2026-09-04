@@ -11,6 +11,9 @@ class ProductUpdateDTO(BaseModel):
     photos: Optional[List[str]] = Field(
         None, description="Replace gallery with these image URLs (2+ supported)"
     )
+    videos: Optional[List[str]] = Field(
+        None, description="Replace or append product video URLs"
+    )
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Product name")
     description: Optional[str] = Field(None, description="Product description")
     price: Optional[float] = Field(None, ge=0, description="Product price")
@@ -60,6 +63,16 @@ class ProductUpdateDTO(BaseModel):
         cleaned = [url.strip() for url in v if url and url.strip()]
         if not cleaned:
             raise ValueError("photos must contain at least one non-empty URL")
+        return cleaned
+
+    @field_validator("videos")
+    @classmethod
+    def validate_videos(cls, v):
+        if v is None:
+            return v
+        cleaned = [url.strip() for url in v if url and url.strip()]
+        if not cleaned:
+            raise ValueError("videos must contain at least one non-empty URL")
         return cleaned
 
     @field_validator('condition')

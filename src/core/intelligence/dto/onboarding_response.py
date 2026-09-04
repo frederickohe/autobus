@@ -10,6 +10,7 @@ class OnboardingQuestion(BaseModel):
     placeholder: str = ""
     multiline: bool = True
     required: bool = True
+    options: List[str] = []
 
 
 class OnboardingProfileResponse(BaseModel):

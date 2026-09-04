@@ -162,9 +162,13 @@ class SessionDriver:
                     detail="Refresh token mismatch"
                 )
             
-            # Create new access token
+            # Create new access token, preserving session manager claim
+            mgr = payload.get("mgr")
+            access_claims = {"sub": email}
+            if mgr:
+                access_claims["mgr"] = mgr
             new_access_token = self.create_access_token(
-                data={"sub": email},
+                data=access_claims,
                 expires_delta=timedelta(minutes=self.ACCESS_TOKEN_EXPIRE_MINUTES)
             )
             

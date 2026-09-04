@@ -303,13 +303,13 @@ class ProductService:
             if existing:
                 return False, None, f"Product with inventory_id {inventory_id} already exists. Try a different product name."
 
-            photo_urls = product_data.resolved_photo_urls()
+            media_urls = product_data.resolved_media_urls()
 
             # Create product
             product = Product(
                 inventory_id=inventory_id,
                 user_id=resolved_user_id,
-                photo=photo_urls[0],
+                photo=product_data.primary_photo,
                 name=product_data.name,
                 description=product_data.description,
                 price=product_data.price,
@@ -322,7 +322,7 @@ class ProductService:
             self.db.add(product)
             self.db.flush()  # Flush to get the product_id before creating inventory
 
-            self._attach_product_images(product.product_id, photo_urls)
+            self._attach_product_images(product.product_id, media_urls)
             
             # Automatically create an inventory record for the new product
             inventory = Inventory(
@@ -539,8 +539,16 @@ class ProductService:
                 return False, None, "Product not found"
 
             if update_data.photos is not None:
+                gallery_urls = list(update_data.photos)
+                if update_data.videos:
+                    gallery_urls.extend(update_data.videos)
                 self._attach_product_images(
-                    product.product_id, update_data.photos, replace=True
+                    product.product_id, gallery_urls, replace=True
+                )
+                self._sync_primary_photo(product)
+            elif update_data.videos is not None:
+                self._attach_product_images(
+                    product.product_id, update_data.videos, replace=False
                 )
                 self._sync_primary_photo(product)
             elif update_data.photo is not None:
@@ -626,11 +634,15 @@ class ProductService:
             storage_key = f"{owner_prefix}/{product_id}_{image_count}_{safe_name}"
 
             storage_service = StorageService()
+            is_video = (content_type or "").startswith("video/") or (
+                safe_name.lower().endswith((".mp4", ".mov", ".m4v", ".webm"))
+            )
             photo_url = storage_service.upload_file(
                 file_obj=file_obj,
                 file_name=storage_key,
                 content_type=content_type,
                 folder=StorageFolder.product_images,
+                timeout_seconds=180 if is_video else 30,
             )
 
             return self.add_product_image(

@@ -43,6 +43,9 @@ class UserResponse(BaseModel):
     # Outbound From address for customer / agent email (Zeptomail)
     sender_email: Optional[str] = None
 
+    # Linked-business: set when this account is managed from another login
+    managed_by_user_id: Optional[str] = None
+
     # Status and Timestamps
     status: str
     enabled: bool

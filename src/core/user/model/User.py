@@ -111,6 +111,14 @@ class User(Base):
     )
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # When set, this user is a linked business managed from another login.
+    # Password sign-in is blocked until detach (password reset) clears the FK.
+    managed_by_user_id: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        ForeignKey("users.id"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     
     status: Mapped[UserStatus] = mapped_column(String, nullable=False, default=UserStatus.ACTIVE)

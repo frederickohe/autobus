@@ -4,6 +4,7 @@ from typing import Optional, List
 from datetime import datetime
 
 from core.cloudstorage.service.storageservice import refresh_public_object_url
+from core.product.media import split_media_urls
 
 
 class ProductResponseDTO(BaseModel):
@@ -15,6 +16,7 @@ class ProductResponseDTO(BaseModel):
 
     photo: str
     photos: List[str] = []
+    videos: List[str] = []
     name: str
     description: Optional[str] = None
     price: float
@@ -60,16 +62,19 @@ class ProductResponseDTO(BaseModel):
             getattr(product, "images", []) or [],
             key=lambda img: (not img.is_primary, img.sort_order, img.created_at),
         )
-        photo_urls = [refresh_public_object_url(img.url) for img in gallery]
-        if not photo_urls and product.photo:
-            photo_urls = [refresh_public_object_url(product.photo)]
+        media_urls = [refresh_public_object_url(img.url) for img in gallery]
+        if not media_urls and product.photo:
+            media_urls = [refresh_public_object_url(product.photo)]
+        photo_urls, video_urls = split_media_urls(media_urls)
+        cover = photo_urls[0] if photo_urls else (video_urls[0] if video_urls else product.photo)
 
         return cls(
             product_id=str(product.product_id),
             inventory_id=product.inventory_id,
             user_id=getattr(product, "user_id", None),
-            photo=photo_urls[0] if photo_urls else product.photo,
+            photo=cover,
             photos=photo_urls,
+            videos=video_urls,
             name=product.name,
             description=product.description,
             price=float(product.price),

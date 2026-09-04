@@ -1,13 +1,14 @@
 from fastapi.responses import JSONResponse
 import jwt
 from passlib.context import CryptContext
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from fastapi import HTTPException
 from fastapi import status
 from datetime import datetime, timedelta, timezone
 from core.auth.service.sessiondriver import SessionDriver
-from core.exceptions.AuthException import InvalidCredentialsError
+from core.exceptions.AuthException import InvalidCredentialsError, LinkedBusinessLoginError
 from core.exceptions.UserException import UserAlreadyExistsError
 from core.user.model.User import User
 from core.notification.model.Notification import (
@@ -51,19 +52,22 @@ class AuthService:
 
     def create_user(self, request: BaseModel):
         """Create a new user in the database."""
+        email = (request.email or "").strip()
+        username = (request.fullname or "").strip()
         existing_user = (
             self.db.query(User)
             .filter(
-                (User.email == request.email) | (User.fullname == request.fullname)
+                (func.lower(User.email) == email.lower())
+                | (func.lower(User.fullname) == username.lower())
             )
             .first()
         )
 
         if existing_user:
-            if existing_user.email == request.email:
+            if (existing_user.email or "").lower() == email.lower():
                 raise UserAlreadyExistsError(field="email")
             else:
-                raise UserAlreadyExistsError(field="fullname")
+                raise UserAlreadyExistsError(field="username")
             
         user_id = self.generate_user_id()
 
@@ -198,8 +202,9 @@ class AuthService:
         if not identifier:
             raise InvalidCredentialsError()
 
+        ident = identifier.lower()
         db_user = self.db.query(User).filter(
-            (User.email == identifier) | (User.fullname == identifier)
+            (func.lower(User.email) == ident) | (func.lower(User.fullname) == ident)
         ).first()
 
         if not db_user:
@@ -208,33 +213,40 @@ class AuthService:
         if not self.verify_password(password, db_user.hashed_password):
             raise InvalidCredentialsError()
 
+        if db_user.managed_by_user_id:
+            raise LinkedBusinessLoginError()
+
         return db_user
+
+    def issue_session_tokens(self, user: User, manager_id: str, status: str = "Login successful"):
+        """Mint access + refresh tokens with active-business `sub` and session `mgr`."""
+        claims = {"sub": user.email, "mgr": manager_id}
+        access_token = self.session_driver.create_access_token(
+            data=claims,
+            expires_delta=timedelta(minutes=self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES),
+        )
+        refresh_token = self.session_driver.create_refresh_token(data=claims)
+        self.session_driver.store_tokens(access_token, refresh_token)
+        return {
+            "status": status,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        }
 
     def signin(self, user: BaseModel):
         """Login the user by generating a JWT token and returning tokens."""
         db_user = self.authenticate_user(user.login_identifier, user.password)
+        payload = self.issue_session_tokens(db_user, db_user.id)
+        return JSONResponse(status_code=200, content=payload)
 
-        access_token = self.session_driver.create_access_token(
-            data={"sub": db_user.email},
-            expires_delta=timedelta(minutes=self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES)
-        )
-        
-        refresh_token = self.session_driver.create_refresh_token(
-            data={"sub": db_user.email}
-        )
-
-        self.session_driver.store_tokens(access_token, refresh_token)
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "Login successful",
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "token_type": "bearer",
-                "expires_in": self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES * 60
-            },
-        )
+    def unlink_managed_account(self, db_user: User) -> bool:
+        """Clear managed_by so the account can sign in independently. Returns True if it was linked."""
+        if not db_user.managed_by_user_id:
+            return False
+        db_user.managed_by_user_id = None
+        return True
 
     def signout(self, token: str):
         try:
@@ -378,6 +390,7 @@ class AuthService:
                 raise InvalidCredentialsError()
                 
             db_user.hashed_password = self.hash_password(request.new_password)
+            self.unlink_managed_account(db_user)
             self.db.commit()
             
             # Invalidate all existing tokens
@@ -447,6 +460,7 @@ class AuthService:
                 )
 
             db_user.hashed_password = self.hash_password(request.new_password)
+            self.unlink_managed_account(db_user)
             self.db.commit()
             if db_user.email:
                 self.session_driver.remove_tokens(db_user.email)

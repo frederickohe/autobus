@@ -12,6 +12,9 @@ class ProductCreateDTO(BaseModel):
     photos: Optional[List[str]] = Field(
         None, description="One or more product image URLs (2+ supported)"
     )
+    videos: Optional[List[str]] = Field(
+        None, description="One or more product video URLs (mp4, mov, webm)"
+    )
     name: str = Field(..., min_length=1, max_length=255, description="Product name")
     description: Optional[str] = Field(None, description="Product description")
     price: float = Field(..., ge=0, description="Product price")
@@ -63,6 +66,16 @@ class ProductCreateDTO(BaseModel):
             raise ValueError("photos must contain at least one non-empty URL")
         return cleaned
 
+    @field_validator("videos")
+    @classmethod
+    def validate_videos(cls, v):
+        if v is None:
+            return v
+        cleaned = [url.strip() for url in v if url and url.strip()]
+        if not cleaned:
+            raise ValueError("videos must contain at least one non-empty URL")
+        return cleaned
+
     @field_validator("condition")
     @classmethod
     def validate_condition(cls, v):
@@ -71,9 +84,9 @@ class ProductCreateDTO(BaseModel):
         return v.strip()
 
     @model_validator(mode="after")
-    def require_at_least_one_image(self):
-        if not self.resolved_photo_urls():
-            raise ValueError("At least one image is required via photo or photos")
+    def require_at_least_one_media(self):
+        if not self.resolved_media_urls():
+            raise ValueError("At least one image or video is required")
         return self
 
     def resolved_photo_urls(self) -> List[str]:
@@ -87,6 +100,26 @@ class ProductCreateDTO(BaseModel):
             urls = [self.photo] + [u for u in urls if u != self.photo]
         return urls
 
+    def resolved_video_urls(self) -> List[str]:
+        if not self.videos:
+            return []
+        seen: set[str] = set()
+        urls: List[str] = []
+        for url in self.videos:
+            if url in seen:
+                continue
+            seen.add(url)
+            urls.append(url)
+        return urls
+
+    def resolved_media_urls(self) -> List[str]:
+        """Images first, then videos. First image (or first video) is cover."""
+        urls = list(self.resolved_photo_urls())
+        for url in self.resolved_video_urls():
+            if url not in urls:
+                urls.append(url)
+        return urls
+
     @property
     def primary_photo(self) -> str:
-        return self.resolved_photo_urls()[0]
+        return self.resolved_media_urls()[0]

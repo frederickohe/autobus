@@ -64,6 +64,7 @@ class UserService:
             else None,
             currency_code=(getattr(user, "currency_code", None) or "GHS").upper(),
             sender_email=_sender_email_of(user),
+            managed_by_user_id=getattr(user, "managed_by_user_id", None),
             enabled=user.enabled,
             status=user.status,
             created_at=user.created_at,

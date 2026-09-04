@@ -26,6 +26,31 @@ logger = logging.getLogger(__name__)
 ONBOARDING_OBJECT_KEY = "onboarding/business-profile"
 ONBOARDING_FILE_NAME = "business-onboarding.txt"
 
+# Fixed catalog so industry/sector reporting stays aggregatable.
+ONBOARDING_INDUSTRY_OPTIONS: List[str] = [
+    "Agriculture & Farming",
+    "Automotive",
+    "Beauty & Personal Care",
+    "Construction & Trades",
+    "Education & Training",
+    "Energy & Utilities",
+    "Fashion & Apparel",
+    "Finance & Insurance",
+    "Food & Beverage",
+    "Government & Public Sector",
+    "Healthcare & Wellness",
+    "Hospitality & Tourism",
+    "Logistics & Transportation",
+    "Manufacturing",
+    "Media & Entertainment",
+    "Nonprofit & Community",
+    "Professional Services",
+    "Real Estate & Property",
+    "Retail & E-commerce",
+    "Technology & Software",
+    "Other",
+]
+
 ONBOARDING_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
         id="business_name",
@@ -62,10 +87,11 @@ ONBOARDING_QUESTIONS: List[OnboardingQuestion] = [
     OnboardingQuestion(
         id="industry",
         prompt="What industry or category are you in?",
-        hint="Helps the chatbot use the right language for your market.",
-        placeholder="e.g. Food and bakery, retail fashion, logistics",
+        hint="Pick the closest match so we can analyze businesses by sector and use the right language for your market.",
+        placeholder="Select an industry",
         multiline=False,
         required=True,
+        options=ONBOARDING_INDUSTRY_OPTIONS,
     ),
     OnboardingQuestion(
         id="service_area",
@@ -244,6 +270,14 @@ class OnboardingIndexService:
                 if question.required:
                     missing.append(question.prompt)
                 continue
+            if question.options:
+                matched = _match_option(text, question.options)
+                if not matched:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Please choose an option from the list for: {question.prompt}",
+                    )
+                text = matched
             if len(text) < _MIN_ANSWER_LEN:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -366,3 +400,11 @@ def _answers_from_profile(profile: Dict[str, Any]) -> Dict[str, str]:
 def _clean_answer(value: Any) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text
+
+
+def _match_option(text: str, options: List[str]) -> Optional[str]:
+    lowered = text.casefold()
+    for option in options:
+        if option.casefold() == lowered:
+            return option
+    return None

@@ -37,3 +37,15 @@ class InvalidTokenError(AuthenticationError):
 class PermissionDeniedError(HTTPException):
     def __init__(self, detail: str = "Permission denied"):
         super().__init__(status_code=403, detail=detail)
+
+
+class LinkedBusinessLoginError(HTTPException):
+    def __init__(self):
+        super().__init__(
+            status_code=403,
+            detail=(
+                "This business is managed from another account. "
+                "Sign in with that account to switch, or reset this "
+                "business's password to detach it."
+            ),
+        )

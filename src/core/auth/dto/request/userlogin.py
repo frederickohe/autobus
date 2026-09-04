@@ -17,4 +17,8 @@ class UserLoginRequest(BaseModel):
 
     @property
     def login_identifier(self) -> str:
-        return (self.email or self.username or "").strip()
+        email = (self.email or "").strip()
+        username = (self.username or "").strip()
+        if email and "@" in email:
+            return email
+        return username or email

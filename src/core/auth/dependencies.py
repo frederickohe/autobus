@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Set
+from typing import Optional, Set
 
 from another_fastapi_jwt_auth import AuthJWT
 from another_fastapi_jwt_auth.exceptions import MissingTokenError
@@ -60,6 +60,50 @@ def _admin_id_set() -> Set[str]:
 def _admin_email_set() -> Set[str]:
     raw = getattr(settings, "ADMIN_EMAILS", "") or ""
     return {p.strip().lower() for p in str(raw).split(",") if p.strip()}
+
+
+def get_jwt_claims(authjwt: AuthJWT) -> dict:
+    try:
+        raw = authjwt.get_raw_jwt()
+        if isinstance(raw, dict) and raw:
+            return raw
+    except Exception:
+        logger.debug("Could not read raw JWT claims", exc_info=True)
+    token = getattr(authjwt, "_token", None)
+    if token:
+        try:
+            return jwt.decode(
+                token,
+                settings.SECRET_KEY,
+                algorithms=[getattr(settings, "ALGORITHM", "HS256")],
+            )
+        except Exception:
+            logger.debug("Could not decode JWT for mgr claim", exc_info=True)
+    return {}
+
+
+def get_manager_id_from_jwt(authjwt: AuthJWT) -> Optional[str]:
+    mgr = get_jwt_claims(authjwt).get("mgr")
+    if mgr:
+        return str(mgr)
+    return None
+
+
+def resolve_session_manager(authjwt: AuthJWT, db: Session, current_user: User) -> User:
+    """The login identity that may switch among linked businesses."""
+    mgr_id = get_manager_id_from_jwt(authjwt)
+    if mgr_id:
+        manager = db.query(User).filter(User.id == mgr_id).first()
+        if manager and (
+            current_user.id == manager.id
+            or current_user.managed_by_user_id == manager.id
+        ):
+            return manager
+    if current_user.managed_by_user_id:
+        manager = db.query(User).filter(User.id == current_user.managed_by_user_id).first()
+        if manager:
+            return manager
+    return current_user
 
 
 def resolve_user_from_jwt(authjwt: AuthJWT, db: Session) -> User:

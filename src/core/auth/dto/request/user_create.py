@@ -1,10 +1,11 @@
 from datetime import date, datetime
 from typing import List, Optional
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 from core.auth.dto.request.password_policy import PASSWORD_MIN_LENGTH
 
 class UserCreateRequest(BaseModel):  
-    fullname: str
+    fullname: Optional[str] = None
+    username: Optional[str] = None
     email: str
     phone: Optional[str] = None
     profile_picture_url: Optional[str] = None
@@ -34,3 +35,11 @@ class UserCreateRequest(BaseModel):
     profile_sharing: Optional[bool] = None
     in_app_notification: Optional[bool] = None
     sms_notification: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def resolve_username(self):
+        name = (self.username or self.fullname or "").strip()
+        if not name:
+            raise ValueError("Username is required")
+        self.fullname = name
+        return self

@@ -13,6 +13,17 @@ from core.auth.dto.request.otp_verify import OTPVerifyRequest
 from core.auth.dto.request.refresh_token import RefreshTokenRequest
 from core.auth.dto.request.verify_account import VerifyAccountRequest
 from core.auth.service.authservice import AuthService
+from core.auth.service.linked_business_service import LinkedBusinessService
+from core.auth.dto.request.linked_business import (
+    CreateBusinessRequest,
+    DetachBusinessRequest,
+    SwitchBusinessRequest,
+)
+from core.auth.dto.response.linked_business import (
+    LinkedBusinessItem,
+    LinkedBusinessListResponse,
+)
+from core.auth.dependencies import resolve_user_from_jwt
 from core.exceptions.AuthException import InvalidCredentialsError
 from core.exceptions.UserException import UserAlreadyExistsError
 from utilities.dbconfig import SessionLocal
@@ -123,3 +134,55 @@ def verify_otp(request: OTPVerifyRequest, db: Session = Depends(get_db)):
             detail=result.get("message") or "Invalid or expired OTP",
         )
     return result
+
+
+@auth_routes.get("/businesses", response_model=LinkedBusinessListResponse)
+def list_businesses(
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return LinkedBusinessService(db).list_businesses(current_user, authjwt)
+
+
+@auth_routes.post("/businesses", response_model=LinkedBusinessItem)
+def create_business(
+    request: CreateBusinessRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return LinkedBusinessService(db).create_business(current_user, authjwt, request)
+
+
+@auth_routes.post("/switch-business")
+def switch_business(
+    request: SwitchBusinessRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return LinkedBusinessService(db).switch_business(current_user, authjwt, request)
+
+
+@auth_routes.post("/businesses/{business_id}/send-detach-otp")
+def send_detach_otp(
+    business_id: str,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return LinkedBusinessService(db).send_detach_otp(current_user, authjwt, business_id)
+
+
+@auth_routes.post("/businesses/{business_id}/detach")
+def detach_business(
+    business_id: str,
+    request: DetachBusinessRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return LinkedBusinessService(db).detach_business(
+        current_user, authjwt, business_id, request
+    )

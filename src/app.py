@@ -132,6 +132,20 @@ async def lifespan(app: FastAPI):
                         )
                     )
                 logger.info("[APP_STARTUP] Added users.currency_code column")
+            if "managed_by_user_id" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD COLUMN managed_by_user_id VARCHAR(20)"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_users_managed_by_user_id "
+                            "ON users (managed_by_user_id)"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.managed_by_user_id column")
 
         if "otps" in insp.get_table_names():
             try:
