@@ -13,6 +13,7 @@ WRITE_TOOLS = frozenset(
         "create_customer",
         "send_customer_sms",
         "send_customer_email",
+        "publish_instagram_post",
     }
 )
 
@@ -24,6 +25,7 @@ CONFIRM_TITLES = {
     "create_customer": "Save this customer?",
     "send_customer_sms": "Send this SMS?",
     "send_customer_email": "Send this email?",
+    "publish_instagram_post": "Post this to Instagram?",
 }
 
 _ASK_ACCEPT = {
@@ -76,6 +78,15 @@ def confirm_summary(tool: str, args: Dict[str, Any]) -> str:
         ids = args.get("customer_ids") or []
         n = len(ids) if isinstance(ids, list) else 1
         return f"Email {n} customer{'s' if n != 1 else ''} — subject: {subject}"
+    if tool == "publish_instagram_post":
+        caption = str(args.get("caption") or "").strip()
+        urls = args.get("media_urls") or []
+        n = len(urls) if isinstance(urls, list) else 0
+        media = "image" if n <= 1 else f"{n} images"
+        preview = caption if len(caption) <= 140 else caption[:137] + "..."
+        if preview:
+            return f"Post this {media} to Instagram: {preview}"
+        return f"Post this {media} to Instagram."
     return json.dumps(args, default=str)[:400]
 
 

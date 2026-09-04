@@ -61,3 +61,4 @@ class AgentTurnResponse(BaseModel):
     confirm: Optional[AgentConfirmSpec] = None
     actions: List[AgentActionLog] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list)
+    attachments: List[AgentAttachment] = Field(default_factory=list)

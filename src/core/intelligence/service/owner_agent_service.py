@@ -26,6 +26,7 @@ from core.intelligence.service.business_context_assembler import (
     is_owner_greeting,
     owner_conversation_key,
 )
+from core.intelligence.service.owner_agent_campaign import fill_publish_args, load_campaign
 from core.intelligence.service.owner_agent_protocol import (
     CONTROL_TOOLS,
     WRITE_TOOLS,
@@ -46,7 +47,7 @@ from utilities.plain_text import strip_markdown_formatting
 
 logger = logging.getLogger(__name__)
 
-_MAX_STEPS = 6
+_MAX_STEPS = 8
 _PENDING_KEY = "owner_agent"
 
 _SYSTEM_PROMPT = """You are the AI that runs this owner's business inside Autobus.
@@ -55,8 +56,9 @@ You are speaking with the owner, not a customer.
 You can look things up and you can take action. For anything that changes data or
 sends a message, the app will ask the owner to confirm before it runs.
 
-Help with: products and stock, orders, customers, inbox, messaging, marketing copy,
-and knowledge from uploaded files or the business profile.
+Help with: products and stock, orders, customers, inbox, messaging, marketing
+campaigns (images, videos, captions), posting to Instagram, and knowledge from
+uploaded files or the business profile.
 
 Guidelines:
 - Be warm, concise, and practical. Plain text only. No markdown.
@@ -68,6 +70,17 @@ Guidelines:
 - Never claim you already did a write action. Confirmation happens in the app.
 - After tools return, tell the owner what you found or what you are ready to do.
 - If a section is empty, say so and offer the next step (add a product, upload a file).
+
+Marketing and Instagram:
+- If they ask for sale content, a poster, flyer, campaign, or something to post,
+  call generate_marketing_image unless they clearly want only words or a video/reel.
+- generate_marketing_image also returns a caption. Show the image in chat (the app
+  renders the media URL). Invite them to post it to Instagram when they are ready.
+- For a video or reel, call generate_marketing_video.
+- To post: list_instagram_accounts first. If none are linked, tell them to connect
+  Instagram under Marketing, Manage Outlets. If accounts exist, call
+  publish_instagram_post (omit media_urls and caption to reuse the last generated
+  campaign). Do not claim it was posted until they confirm in the app.
 
 Business snapshot:
 {context}
@@ -227,12 +240,24 @@ class OwnerAgentService:
         conv_key = owner_conversation_key(user.id)
         context = self.assembler.assemble(user, user_content)
         system = _SYSTEM_PROMPT.format(context=context.as_prompt_block())
+        campaign = load_campaign(user)
+        campaign_bits = {
+            k: campaign.get(k)
+            for k in ("kind", "url", "media_urls", "caption")
+            if campaign.get(k)
+        }
+        if campaign_bits:
+            system += (
+                "\n\nLast generated campaign (reuse for Instagram unless they ask for new content):\n"
+                + json.dumps(campaign_bits, default=str)
+            )
         state = self.conversations.get_conversation_state(conv_key)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system}]
         messages.extend(_llm_history(state.conversation_history or []))
         messages.append(_user_message(user_content, image_url))
 
         actions: List[AgentActionLog] = []
+        attachments: List[AgentAttachment] = []
         tools = openai_tools()
 
         for _ in range(_MAX_STEPS):
@@ -249,7 +274,7 @@ class OwnerAgentService:
                 control = parse_control_payload(content)
                 if control:
                     handled = self._handle_control_json(
-                        user, conv_key, control, content, actions, context.sources
+                        user, conv_key, control, content, actions, context.sources, attachments
                     )
                     if handled is not None:
                         return handled
@@ -262,6 +287,7 @@ class OwnerAgentService:
                     turn_type="reply",
                     actions=actions,
                     sources=list(context.sources),
+                    attachments=attachments,
                 )
 
             read_calls = []
@@ -282,6 +308,7 @@ class OwnerAgentService:
                     parsed = _as_dict(raw)
                     ok = bool(parsed.get("ok", True)) if parsed else True
                     actions.append(AgentActionLog(tool=name, ok=ok, detail=_action_detail(parsed, raw)))
+                    attachments.extend(_attachments_from_tool(name, parsed))
                     messages.append({"role": "tool", "tool_call_id": call_id, "content": raw})
                 continue
 
@@ -292,12 +319,17 @@ class OwnerAgentService:
                     parsed = _as_dict(raw)
                     ok = bool(parsed.get("ok", True)) if parsed else True
                     actions.append(AgentActionLog(tool=name, ok=ok, detail=_action_detail(parsed, raw)))
+                    attachments.extend(_attachments_from_tool(name, parsed))
 
             name, args, _ = _split_tool_call(control_call)
             spoken = content or _spoken_for_control(name, args)
             if name == "ask_user":
                 return self._pause_ask(conv_key, spoken, args, actions, context.sources)
-            return self._pause_confirm(conv_key, spoken, name, args, actions, context.sources)
+            if name == "publish_instagram_post":
+                args = fill_publish_args(user, args)
+            return self._pause_confirm(
+                conv_key, spoken, name, args, actions, context.sources, attachments
+            )
 
         fallback = content if "content" in locals() and content else (
             "I need another moment. Please send that again."
@@ -309,6 +341,7 @@ class OwnerAgentService:
             turn_type="reply",
             actions=actions,
             sources=list(context.sources),
+            attachments=attachments,
         )
 
     def _handle_control_json(
@@ -319,9 +352,11 @@ class OwnerAgentService:
         content: str,
         actions: List[AgentActionLog],
         sources: List[str],
+        attachments: Optional[List[AgentAttachment]] = None,
     ) -> Optional[AgentTurnResponse]:
         kind = (control.get("type") or "").strip().lower()
         message = strip_markdown_formatting(str(control.get("message") or content)).strip()
+        media = list(attachments or [])
         if kind == "ask_input" or kind == "ask_user":
             ask = control.get("ask") if isinstance(control.get("ask"), dict) else control
             return self._pause_ask(conv_key, message, ask, actions, sources)
@@ -329,18 +364,23 @@ class OwnerAgentService:
             tool = str(control.get("tool") or "").strip()
             args = control.get("args") if isinstance(control.get("args"), dict) else {}
             if tool in WRITE_TOOLS:
-                return self._pause_confirm(conv_key, message, tool, args, actions, sources)
+                if tool == "publish_instagram_post":
+                    args = fill_publish_args(user, args)
+                return self._pause_confirm(conv_key, message, tool, args, actions, sources, media)
         if kind == "call_tool":
             tool = str(control.get("tool") or "").strip()
             args = control.get("args") if isinstance(control.get("args"), dict) else {}
             if tool == "ask_user":
                 return self._pause_ask(conv_key, message, args, actions, sources)
             if tool in WRITE_TOOLS:
-                return self._pause_confirm(conv_key, message, tool, args, actions, sources)
+                if tool == "publish_instagram_post":
+                    args = fill_publish_args(user, args)
+                return self._pause_confirm(conv_key, message, tool, args, actions, sources, media)
             raw = execute_tool(self.db, user, tool, args)
             parsed = _as_dict(raw)
             ok = bool(parsed.get("ok", True)) if parsed else True
             actions.append(AgentActionLog(tool=tool, ok=ok, detail=_action_detail(parsed, raw)))
+            media.extend(_attachments_from_tool(tool, parsed))
             follow = f"Tool {tool} returned:\n{raw}\nReply briefly to the owner."
             self._remember(conv_key, "user", follow)
             return self._run_loop(user, follow)
@@ -353,6 +393,7 @@ class OwnerAgentService:
                 turn_type="reply",
                 actions=actions,
                 sources=list(sources),
+                attachments=media,
             )
         return None
 
@@ -411,11 +452,14 @@ class OwnerAgentService:
         args: Dict[str, Any],
         actions: List[AgentActionLog],
         sources: List[str],
+        extra_attachments: Optional[List[AgentAttachment]] = None,
     ) -> AgentTurnResponse:
         confirm_id = str(uuid.uuid4())
         title = confirm_title(tool)
         summary = confirm_summary(tool, args)
         message = spoken or f"{title} {summary}"
+        media = list(extra_attachments or [])
+        media.extend(_attachments_from_publish_args(args))
         self._remember(conv_key, "assistant", message)
         self._set_pending(
             conv_key,
@@ -440,6 +484,7 @@ class OwnerAgentService:
             ),
             actions=actions,
             sources=list(sources),
+            attachments=media,
         )
 
     def _remember(self, conv_key: str, role: str, content: str) -> None:
@@ -478,6 +523,45 @@ def _first_image_url(attachments: Optional[List[AgentAttachment]]) -> Optional[s
         if url and kind in {"image", "photo", "picture"}:
             return url
     return None
+
+
+def _attachments_from_tool(name: str, parsed: Optional[Dict[str, Any]]) -> List[AgentAttachment]:
+    if not parsed or parsed.get("ok") is False:
+        return []
+    data = parsed.get("data")
+    if not isinstance(data, dict):
+        return []
+    url = str(data.get("url") or "").strip()
+    kind = str(data.get("kind") or "").strip().lower()
+    if name == "generate_marketing_video":
+        kind = kind or "video"
+    elif name == "generate_marketing_image":
+        kind = kind or "image"
+    if not url or kind not in {"image", "video"}:
+        return []
+    return [
+        AgentAttachment(
+            kind=kind,
+            url=url,
+            name=str(data.get("name") or "").strip() or None,
+            mime=str(data.get("mime") or "").strip() or None,
+        )
+    ]
+
+
+def _attachments_from_publish_args(args: Dict[str, Any]) -> List[AgentAttachment]:
+    urls = args.get("media_urls") if isinstance(args, dict) else None
+    if not isinstance(urls, list):
+        return []
+    out: List[AgentAttachment] = []
+    for item in urls:
+        url = str(item or "").strip()
+        if not url:
+            continue
+        lower = url.lower()
+        kind = "video" if any(lower.endswith(ext) for ext in (".mp4", ".mov", ".m4v", ".webm")) else "image"
+        out.append(AgentAttachment(kind=kind, url=url))
+    return out
 
 
 def _user_message(text: str, image_url: Optional[str]) -> Dict[str, Any]:

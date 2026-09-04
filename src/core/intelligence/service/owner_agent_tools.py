@@ -273,6 +273,7 @@ def _tool_send_customer_email(db: Session, user: User, args: Dict[str, Any]) -> 
 
 
 def _tool_draft_marketing_copy(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.intelligence.service.owner_agent_campaign import save_campaign
     from core.nlu.config import SYSTEM_PROMPTS
     from core.nlu.service.llmclient import LLMClient
 
@@ -290,7 +291,151 @@ def _tool_draft_marketing_copy(db: Session, user: User, args: Dict[str, Any]) ->
     text = strip_markdown_formatting(raw or "").strip()
     if not text:
         return json.loads(_err("Could not draft copy right now."))
-    return _ok({"copy": text})
+    save_campaign(user, caption=text, copy=text)
+    return _ok({"copy": text, "caption": text})
+
+
+def _suggested_caption(prompt: str) -> str:
+    from core.nlu.config import SYSTEM_PROMPTS
+    from core.nlu.service.llmclient import LLMClient
+
+    raw = LLMClient().chat_completion(
+        system_prompt=SYSTEM_PROMPTS.get("marketing")
+        or "Write a short Instagram caption. Plain text only. No hashtag spam.",
+        user_message=f"Write a short Instagram caption for this campaign: {prompt}",
+        conversation_history=None,
+        temperature=0.7,
+        max_tokens=180,
+    )
+    return strip_markdown_formatting(raw or "").strip()
+
+
+def _tool_generate_marketing_image(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.agent.tools.google_image.google_image_service import GoogleImageService
+    from core.intelligence.service.owner_agent_campaign import (
+        save_campaign,
+        upload_image_bytes,
+        _await,
+    )
+    from core.media.service.media_rag_prompt import enrich_media_generation_prompt
+
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return json.loads(_err("prompt is required"))
+    CreditService(db).require_credits(
+        user.id, CreditType.IMAGE_GEN.value, 1.0, "owner_agent_image"
+    )
+    grounded = enrich_media_generation_prompt(
+        prompt, db, req_user_id=user.id, media_kind="image"
+    )
+    service = GoogleImageService()
+    b64 = _await(service.generate_image_base64(grounded, user_id=user.id))
+    mime = service.last_mime_type or "image/png"
+    url = upload_image_bytes(user.id, b64, mime)
+    caption = str(args.get("caption") or "").strip() or _suggested_caption(prompt)
+    save_campaign(
+        user,
+        kind="image",
+        url=url,
+        media_urls=[url],
+        caption=caption,
+        copy=caption,
+        prompt=prompt,
+    )
+    return _ok(
+        {
+            "kind": "image",
+            "url": url,
+            "mime": mime,
+            "caption": caption,
+            "name": "Generated campaign image",
+        }
+    )
+
+
+def _tool_generate_marketing_video(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.agent.tools.google_veo.google_veo_service import GoogleVeoService
+    from core.intelligence.service.owner_agent_campaign import _await, save_campaign
+    from core.media.service.media_rag_prompt import enrich_media_generation_prompt
+
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return json.loads(_err("prompt is required"))
+    CreditService(db).require_credits(
+        user.id, CreditType.VIDEO_GEN.value, 1.0, "owner_agent_video"
+    )
+    grounded = enrich_media_generation_prompt(
+        prompt, db, req_user_id=user.id, media_kind="video"
+    )
+    url = _await(GoogleVeoService().generate_video_and_store(grounded, user_id=user.id))
+    caption = str(args.get("caption") or "").strip() or _suggested_caption(prompt)
+    save_campaign(
+        user,
+        kind="video",
+        url=url,
+        media_urls=[url],
+        caption=caption,
+        copy=caption,
+        prompt=prompt,
+    )
+    return _ok(
+        {
+            "kind": "video",
+            "url": url,
+            "mime": "video/mp4",
+            "caption": caption,
+            "name": "Generated campaign video",
+        }
+    )
+
+
+def _tool_list_instagram_accounts(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.intelligence.service.owner_agent_campaign import list_accounts
+
+    accounts = list_accounts(db, user)
+    return _ok(
+        {
+            "accounts": accounts,
+            "connect_hint": None
+            if accounts
+            else "No Instagram account is linked. Ask the owner to connect Instagram under Marketing → Manage Outlets.",
+        }
+    )
+
+
+def _tool_publish_instagram_post(db: Session, user: User, args: Dict[str, Any]) -> Dict[str, Any]:
+    from core.instagram.service.instagram_publish_service import InstagramPublishService
+    from core.intelligence.service.owner_agent_campaign import (
+        fill_publish_args,
+        pick_publish_account,
+        save_campaign,
+    )
+
+    payload = fill_publish_args(user, args)
+    urls = payload.get("media_urls") or []
+    caption = str(payload.get("caption") or "").strip()
+    if not urls:
+        return json.loads(
+            _err("There is no generated image or video to post. Generate campaign content first.")
+        )
+    account = pick_publish_account(db, user, payload.get("account_id"))
+    if not account:
+        return json.loads(
+            _err(
+                "No Instagram account is linked. Connect Instagram under Marketing → Manage Outlets."
+            )
+        )
+    if not account.publishing_enabled:
+        return json.loads(_err("Publishing is disabled for the linked Instagram account."))
+    result = InstagramPublishService().publish(account, caption=caption, media_urls=list(urls))
+    save_campaign(user, account_id=account.id)
+    return _ok(
+        {
+            "message": f"Published to Instagram (@{account.username or account.ig_user_id})",
+            "post_id": result.get("post_id"),
+            "account": account.username or account.ig_user_id,
+        }
+    )
 
 
 def _int_ids(raw: Any) -> List[int]:
@@ -324,6 +469,10 @@ _EXECUTORS = {
     "send_customer_sms": _tool_send_customer_sms,
     "send_customer_email": _tool_send_customer_email,
     "draft_marketing_copy": _tool_draft_marketing_copy,
+    "generate_marketing_image": _tool_generate_marketing_image,
+    "generate_marketing_video": _tool_generate_marketing_video,
+    "list_instagram_accounts": _tool_list_instagram_accounts,
+    "publish_instagram_post": _tool_publish_instagram_post,
 }
 
 _FUNCTION_SPECS: List[Dict[str, Any]] = [
@@ -482,11 +631,63 @@ _FUNCTION_SPECS: List[Dict[str, Any]] = [
     },
     {
         "name": "draft_marketing_copy",
-        "description": "Draft marketing copy. Does not publish. Owner still confirms any send/publish.",
+        "description": "Draft marketing copy or an Instagram caption. Does not publish.",
         "parameters": {
             "type": "object",
             "properties": {"prompt": {"type": "string"}},
             "required": ["prompt"],
+        },
+    },
+    {
+        "name": "generate_marketing_image",
+        "description": (
+            "Generate a campaign image/poster the owner can preview in chat. "
+            "Use for sale content, flyers, and Instagram posts unless they only want words or a video. "
+            "Does not publish."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "caption": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "generate_marketing_video",
+        "description": (
+            "Generate a short campaign video/reel the owner can preview. "
+            "Only when they ask for a video or reel. Does not publish."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string"},
+                "caption": {"type": "string"},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "list_instagram_accounts",
+        "description": "List Instagram Business accounts linked to this owner.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "publish_instagram_post",
+        "description": (
+            "Publish the last generated campaign (or given media URLs) to a linked Instagram account. "
+            "The app asks the owner to confirm before this runs. "
+            "Call list_instagram_accounts first. Omit media_urls/caption to reuse the last generated campaign."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "account_id": {"type": "string"},
+                "caption": {"type": "string"},
+                "media_urls": {"type": "array", "items": {"type": "string"}},
+            },
         },
     },
     {

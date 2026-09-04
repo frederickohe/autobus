@@ -13,7 +13,9 @@ class OwnerAgentProtocolTest(unittest.TestCase):
     def test_write_tools_require_confirmation(self):
         self.assertIn("create_product", WRITE_TOOLS)
         self.assertIn("send_customer_sms", WRITE_TOOLS)
+        self.assertIn("publish_instagram_post", WRITE_TOOLS)
         self.assertNotIn("list_products", WRITE_TOOLS)
+        self.assertNotIn("generate_marketing_image", WRITE_TOOLS)
         self.assertNotIn("ask_user", WRITE_TOOLS)
 
     def test_confirm_copy_for_product(self):
@@ -25,6 +27,18 @@ class OwnerAgentProtocolTest(unittest.TestCase):
         self.assertIn("product", title.lower())
         self.assertIn("Shea butter", summary)
         self.assertIn("40", summary)
+
+    def test_confirm_copy_for_instagram(self):
+        title = confirm_title("publish_instagram_post")
+        summary = confirm_summary(
+            "publish_instagram_post",
+            {
+                "caption": "Easter sale this weekend",
+                "media_urls": ["https://cdn/easter.jpg"],
+            },
+        )
+        self.assertIn("Instagram", title)
+        self.assertIn("Easter sale", summary)
 
     def test_parse_ask_and_confirm_json(self):
         ask = parse_control_payload(
