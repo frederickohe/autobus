@@ -136,6 +136,11 @@ class ConversationManager:
                 return st
         return None
 
+    def persist(self, user_id: str) -> None:
+        """Write the cached conversation state without appending a message."""
+        state = self.get_conversation_state(user_id)
+        self._save_conversation_state(state)
+
     def update_conversation_history(self, user_id: str, role: str, content: str):
         state = self.get_conversation_state(user_id)
         state.conversation_history.append(

@@ -289,3 +289,61 @@ class LLMClient:
             temperature=temperature,
             max_tokens=max_tokens
         )
+
+    def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict]] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 900,
+    ) -> Any:
+        """Chat completion that may return tool_calls. Falls back to plain text/JSON."""
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+            message = response.choices[0].message if response.choices else None
+            if message is not None:
+                return message
+        except Exception as exc:
+            logger.warning("Tool calling failed, falling back to JSON completion: %s", exc)
+
+        fallback_messages = list(messages)
+        fallback_messages.append(
+            {
+                "role": "system",
+                "content": (
+                    "Respond as JSON only, one object: "
+                    '{"type":"reply","message":"..."} or '
+                    '{"type":"ask_input","message":"...","kind":"text|image|video|file|choice","prompt":"..."} or '
+                    '{"type":"confirm","message":"...","tool":"create_product","args":{}} or '
+                    '{"type":"call_tool","tool":"list_products","args":{}}.'
+                ),
+            }
+        )
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=fallback_messages,
+                temperature=temperature,
+                max_completion_tokens=max_tokens,
+            )
+            message = response.choices[0].message if response.choices else None
+            if message is not None:
+                return message
+        except Exception as exc:
+            logger.error("Fallback chat completion failed: %s", exc)
+
+        class _Empty:
+            content = ""
+            tool_calls = None
+
+        return _Empty()
