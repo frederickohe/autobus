@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, status, Query
@@ -39,6 +39,11 @@ from core.socialmedia.service.postiz_api_service import (
     coerce_tiktok_privacy_for_unaudited_app,
     derive_postiz_password,
     normalize_postiz_integrations_list,
+)
+from core.socialmedia.service.tiktok_direct_post import (
+    extract_publish_ids,
+    load_tiktok_creator_info,
+    load_tiktok_publish_status,
 )
 from core.socialmedia.service.postiz_marketing_extract import (
     extract_marketing_text_and_links,
@@ -811,6 +816,121 @@ async def postiz_list_integrations(
         raise HTTPException(status_code=502, detail=str(e))
 
 
+def _postiz_login_credentials(user: User) -> Tuple[str, str]:
+    email = (getattr(user, "email", None) or "").strip()
+    password = derive_postiz_password(username=_postiz_username_for_user(user))
+    return email, password
+
+
+@social_routes.get("/postiz/tiktok/creator-info")
+async def postiz_tiktok_creator_info(
+    integration_id: str = Query(..., min_length=1),
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Latest TikTok creator_info for the Post to TikTok screen."""
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    api_key = _resolve_postiz_api_key(internal_user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    user = _get_user_for_jwt_subject(db, jwt_subject)
+    email, password = _postiz_login_credentials(user)
+    try:
+        client = PostizClient(postiz_base_url)
+        return await load_tiktok_creator_info(
+            client=client,
+            api_key=api_key,
+            integration_id=integration_id,
+            postiz_email=email,
+            postiz_password=password,
+        )
+    except PostizAPIError as e:
+        status_code = e.status_code if e.status_code in {400, 401, 404} else 502
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+
+
+@social_routes.get("/postiz/tiktok/publish-status")
+async def postiz_tiktok_publish_status(
+    integration_id: str = Query(..., min_length=1),
+    publish_id: Optional[str] = Query(None),
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """Poll TikTok / Postiz for Direct Post processing status."""
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    api_key = _resolve_postiz_api_key(internal_user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    user = _get_user_for_jwt_subject(db, jwt_subject)
+    email, password = _postiz_login_credentials(user)
+    try:
+        client = PostizClient(postiz_base_url)
+        return await load_tiktok_publish_status(
+            client=client,
+            api_key=api_key,
+            integration_id=integration_id,
+            publish_id=(publish_id or "").strip(),
+            postiz_email=email,
+            postiz_password=password,
+        )
+    except PostizAPIError as e:
+        status_code = e.status_code if e.status_code in {400, 401, 404} else 502
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+
+
+@social_routes.get("/postiz/posts")
+async def postiz_list_posts(
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+):
+    """List recent Postiz posts so the app can show publish status."""
+    postiz_base_url = os.getenv("POSTIZ_BASE_URL", "").strip()
+    if not postiz_base_url:
+        raise HTTPException(status_code=400, detail="POSTIZ_BASE_URL not configured")
+
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    api_key = _resolve_postiz_api_key(internal_user_id, db)
+    if not api_key:
+        raise HTTPException(
+            status_code=404,
+            detail="No Postiz API key found. Configure mapping or set POSTIZ_PUBLIC_API_KEY.",
+        )
+
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    start = (start_date or "").strip() or (
+        (now - timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+    )
+    end = (end_date or "").strip() or (
+        (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    )
+    try:
+        client = PostizClient(postiz_base_url)
+        return await client.list_posts(api_key, start_date=start, end_date=end)
+    except PostizAPIError as e:
+        status_code = e.status_code if e.status_code in {400, 401, 404} else 502
+        raise HTTPException(status_code=status_code, detail=str(e)) from e
+
+
 @social_routes.delete("/postiz/integrations/{integration_id}")
 async def postiz_delete_integration(
     integration_id: str,
@@ -1017,6 +1137,11 @@ async def postiz_create_post(
     try:
         client = PostizClient(postiz_base_url)
         result = await client.create_post(api_key, payload)
+        publish_ids = extract_publish_ids(result)
+        if isinstance(result, dict):
+            result = {**result, "tiktok_publish_ids": publish_ids}
+        else:
+            result = {"value": result, "tiktok_publish_ids": publish_ids}
     except PostizAPIError as e:
         logger.warning("[SOCIAL] Postiz create post failed: %s", e)
         # Postiz 400s are client/payload problems (wrong media type, settings, etc.).

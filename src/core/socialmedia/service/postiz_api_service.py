@@ -371,6 +371,119 @@ class PostizClient:
                 return data
             return {"id": iid, "deleted": True, "value": data}
 
+    async def login_local_session(
+        self,
+        email: str,
+        password: str,
+        timeout_s: float = 20.0,
+    ) -> str:
+        """LOCAL login that returns the Postiz session JWT (``auth`` header/cookie)."""
+        email_norm = _normalize_postiz_email(email)
+        async with httpx.AsyncClient(
+            timeout=timeout_s,
+            follow_redirects=True,
+        ) as client:
+            res = await client.post(
+                self._url("/api/auth/login"),
+                json={
+                    "provider": "LOCAL",
+                    "email": email_norm,
+                    "password": password,
+                    "providerToken": "",
+                },
+            )
+            if res.status_code >= 400:
+                raise PostizAPIError(
+                    f"Postiz login failed ({res.status_code}): {res.text}"
+                )
+            jwt = _extract_session_jwt(res)
+            if not jwt:
+                raise PostizAPIError("Postiz login did not return a session token")
+            return jwt
+
+    async def call_integration_function(
+        self,
+        session_jwt: str,
+        *,
+        integration_id: str,
+        name: str,
+        data: Optional[Dict[str, Any]] = None,
+        timeout_s: float = 20.0,
+    ) -> Any:
+        """Call Postiz ``POST /api/integrations/function`` (uses the stored provider token)."""
+        iid = (integration_id or "").strip()
+        method = (name or "").strip()
+        if not iid or not method:
+            raise PostizAPIError("integration id and function name are required")
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            res = await client.post(
+                self._url("/api/integrations/function"),
+                headers={
+                    **_auth_request_headers(session_jwt),
+                    "Content-Type": "application/json",
+                },
+                json={"id": iid, "name": method, "data": data or {}},
+            )
+        if res.status_code >= 400:
+            raise PostizAPIError(
+                f"Postiz integration function failed ({res.status_code}): {res.text}",
+                status_code=res.status_code,
+                body=res.text or "",
+            )
+        if not res.text.strip():
+            return {}
+        try:
+            return res.json()
+        except Exception:
+            return {"raw": res.text}
+
+    async def get_tiktok_creator_info_public(
+        self,
+        public_api_key: str,
+        integration_id: str,
+        timeout_s: float = 20.0,
+    ) -> Dict[str, Any]:
+        """Optional Postiz public API: ``GET /integrations/{id}/tiktok/creator-info``."""
+        iid = (integration_id or "").strip()
+        if not iid:
+            raise PostizAPIError("integration id is required")
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            res = await client.get(
+                self._url(f"/api/public/v1/integrations/{iid}/tiktok/creator-info"),
+                headers={"Authorization": public_api_key},
+            )
+        if res.status_code >= 400:
+            raise PostizAPIError(
+                f"Postiz TikTok creator-info failed ({res.status_code}): {res.text}",
+                status_code=res.status_code,
+                body=res.text or "",
+            )
+        return res.json() if res.text.strip() else {}
+
+    async def list_posts(
+        self,
+        public_api_key: str,
+        *,
+        start_date: str,
+        end_date: str,
+        timeout_s: float = 20.0,
+    ) -> Any:
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
+            res = await client.get(
+                self._url("/api/public/v1/posts"),
+                headers={"Authorization": public_api_key},
+                params={"startDate": start_date, "endDate": end_date},
+            )
+        if res.status_code >= 400:
+            raise PostizAPIError(
+                f"Postiz list posts failed ({res.status_code}): {res.text}",
+                status_code=res.status_code,
+                body=res.text or "",
+            )
+        if not res.text.strip():
+            return []
+        return res.json()
+
 
 def facebook_login_config_id() -> str:
     """Login for Business config for Postiz Page publishing (not WhatsApp ES)."""
