@@ -154,11 +154,26 @@ class GoogleVeoService:
             pool=30.0,
         )
 
-    async def generate_video_url(self, prompt: str, *, user_id: str | None = None) -> str:
+    async def generate_video_url(
+        self,
+        prompt: str,
+        *,
+        user_id: str | None = None,
+        reference_base64: str | None = None,
+        reference_mime_type: str | None = None,
+    ) -> str:
         # Veo does not accept arbitrary user_id on the request body.
         headers, params = self._auth()
+        from core.media.service.media_reference import build_veo_instance
+
         payload: dict[str, Any] = {
-            "instances": [{"prompt": prompt}],
+            "instances": [
+                build_veo_instance(
+                    prompt,
+                    reference_base64=reference_base64,
+                    reference_mime_type=reference_mime_type,
+                )
+            ],
         }
 
         timeout = self._http_timeout()
@@ -233,12 +248,24 @@ class GoogleVeoService:
             f"Google Veo video generation did not complete within {int(self._max_poll_seconds)} seconds."
         )
 
-    async def generate_video_and_store(self, prompt: str, *, user_id: str | None = None) -> str:
+    async def generate_video_and_store(
+        self,
+        prompt: str,
+        *,
+        user_id: str | None = None,
+        reference_base64: str | None = None,
+        reference_mime_type: str | None = None,
+    ) -> str:
         """
         Generates a video with Veo, downloads it, uploads to Contabo storage,
         and returns the Contabo URL (suitable for streaming by the frontend).
         """
-        source_url = await self.generate_video_url(prompt, user_id=user_id)
+        source_url = await self.generate_video_url(
+            prompt,
+            user_id=user_id,
+            reference_base64=reference_base64,
+            reference_mime_type=reference_mime_type,
+        )
 
         suffix = ".mp4"
         tmp_path = None

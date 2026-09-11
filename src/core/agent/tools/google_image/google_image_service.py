@@ -99,24 +99,23 @@ class GoogleImageService:
         if not self._model:
             raise GoogleImageGenerationError("NANA_BANANA_MODEL is not set")
 
-    async def generate_image_base64(self, prompt: str, *, user_id: str | None = None) -> str:
+    async def generate_image_base64(
+        self,
+        prompt: str,
+        *,
+        user_id: str | None = None,
+        reference_base64: str | None = None,
+        reference_mime_type: str | None = None,
+    ) -> str:
         url = f"{self._base_url}/models/{self._model}:generateContent"
 
-        # Minimal generateContent payload. If your frontend/tooling needs richer
-        # generation configs, extend this payload.
-        payload: dict[str, Any] = {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": prompt}],
-                }
-            ],
-            # Required for Gemini image models; without this the API often returns
-            # text-only responses with no inline image bytes.
-            "generationConfig": {
-                "responseModalities": ["TEXT", "IMAGE"],
-            },
-        }
+        from core.media.service.media_reference import build_image_generate_payload
+
+        payload = build_image_generate_payload(
+            prompt,
+            reference_base64=reference_base64,
+            reference_mime_type=reference_mime_type,
+        )
         # Note: Google's Generative Language `generateContent` does not accept an
         # arbitrary `user_id` field; passing it causes INVALID_ARGUMENT.
         # Keep `user_id` only for our own logging/telemetry if needed.

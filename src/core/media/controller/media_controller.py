@@ -23,6 +23,11 @@ from core.media.dto.media_generation_response import (
     VideoGenerationResponse,
 )
 from core.media.service.media_rag_prompt import enrich_media_generation_prompt
+from core.media.service.media_reference import (
+    MediaReferenceError,
+    reference_prompt_prefix,
+    resolve_generation_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +89,24 @@ async def generate_image(
     The user prompt is grounded with RAG-indexed business documents, website knowledge,
     and the merchant product catalog before it is sent to the image model.
     """
+    try:
+        reference = await resolve_generation_reference(req)
+    except MediaReferenceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     _deduct_media_credit(db, CreditType.IMAGE_GEN.value, "image_generation", authjwt, req.user_id)
     try:
         service = GoogleImageService()
         grounded_prompt = _grounded_media_prompt(req, db, authjwt, "image")
-        b64 = await service.generate_image_base64(grounded_prompt, user_id=req.user_id)
+        ref_b64 = ref_mime = None
+        if reference:
+            ref_b64, ref_mime = reference
+            grounded_prompt = reference_prompt_prefix(ref_mime) + grounded_prompt
+        b64 = await service.generate_image_base64(
+            grounded_prompt,
+            user_id=req.user_id,
+            reference_base64=ref_b64,
+            reference_mime_type=ref_mime,
+        )
         mime_type = service.last_mime_type or "image/png"
         return ImageGenerationResponse(prompt=req.prompt, image_base64=b64, mime_type=mime_type)
     except GoogleImageTimeoutError as e:
@@ -116,20 +134,36 @@ async def generate_video(
     The user prompt is grounded with RAG-indexed business documents, website knowledge,
     and the merchant product catalog before it is sent to Veo.
     """
+    try:
+        reference = await resolve_generation_reference(req)
+    except MediaReferenceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     _deduct_media_credit(db, CreditType.VIDEO_GEN.value, "video_generation", authjwt, req.user_id)
     try:
         service = GoogleVeoService()
         grounded_prompt = _grounded_media_prompt(req, db, authjwt, "video")
+        ref_b64 = ref_mime = None
+        if reference:
+            ref_b64, ref_mime = reference
+            grounded_prompt = reference_prompt_prefix(ref_mime) + grounded_prompt
         if store:
             stored_url = await service.generate_video_and_store(
-                grounded_prompt, user_id=req.user_id
+                grounded_prompt,
+                user_id=req.user_id,
+                reference_base64=ref_b64,
+                reference_mime_type=ref_mime,
             )
             return VideoGenerationResponse(
                 prompt=req.prompt,
                 video_url=stored_url,
                 stored_url=stored_url,
             )
-        video_url = await service.generate_video_url(grounded_prompt, user_id=req.user_id)
+        video_url = await service.generate_video_url(
+            grounded_prompt,
+            user_id=req.user_id,
+            reference_base64=ref_b64,
+            reference_mime_type=ref_mime,
+        )
         return VideoGenerationResponse(
             prompt=req.prompt,
             video_url=video_url,
