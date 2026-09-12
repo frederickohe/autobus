@@ -170,6 +170,28 @@ class ChatwootClient:
                 )
             return res.json() if res.text.strip() else {}
 
+    async def delete_account(self, account_id: int, *, timeout_s: float = 15.0) -> None:
+        async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+            res = await client.delete(
+                self._url(f"/platform/api/v1/accounts/{int(account_id)}"),
+                headers=self._headers(),
+            )
+            if res.status_code >= 400 and res.status_code != 404:
+                raise ChatwootAPIError(
+                    f"Chatwoot delete account failed ({res.status_code}): {res.text}"
+                )
+
+    async def delete_user(self, user_id: int, *, timeout_s: float = 15.0) -> None:
+        async with httpx.AsyncClient(timeout=timeout_s, follow_redirects=True) as client:
+            res = await client.delete(
+                self._url(f"/platform/api/v1/users/{int(user_id)}"),
+                headers=self._headers(),
+            )
+            if res.status_code >= 400 and res.status_code != 404:
+                raise ChatwootAPIError(
+                    f"Chatwoot delete user failed ({res.status_code}): {res.text}"
+                )
+
 
 def chatwoot_enabled() -> bool:
     return bool(os.getenv("CHATWOOT_BASE_URL", "").strip()) and bool(

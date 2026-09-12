@@ -23,6 +23,12 @@ from core.auth.dto.response.linked_business import (
     LinkedBusinessItem,
     LinkedBusinessListResponse,
 )
+from core.auth.dto.request.delete_account import DeleteAccountRequest
+from core.auth.dto.response.account_deletion import (
+    AccountDeletionPreview,
+    AccountDeletionResult,
+)
+from core.auth.service.account_deletion_service import AccountDeletionService
 from core.auth.dependencies import resolve_user_from_jwt
 from core.exceptions.AuthException import InvalidCredentialsError
 from core.exceptions.UserException import UserAlreadyExistsError
@@ -185,4 +191,26 @@ def detach_business(
     current_user = resolve_user_from_jwt(authjwt, db)
     return LinkedBusinessService(db).detach_business(
         current_user, authjwt, business_id, request
+    )
+
+
+@auth_routes.get("/account-deletion-preview", response_model=AccountDeletionPreview)
+def account_deletion_preview(
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return AccountDeletionService(db).preview(current_user, authjwt)
+
+
+@auth_routes.delete("/me", response_model=AccountDeletionResult)
+@auth_routes.post("/delete-account", response_model=AccountDeletionResult)
+async def delete_my_account(
+    request: DeleteAccountRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    current_user = resolve_user_from_jwt(authjwt, db)
+    return await AccountDeletionService(db).delete_account(
+        current_user, authjwt, request.password
     )

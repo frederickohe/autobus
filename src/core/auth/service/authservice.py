@@ -33,9 +33,13 @@ class AuthService:
         self.session_driver = SessionDriver()
         self.otp_service = OTPService(db)
 
+    @staticmethod
+    def hash_password_static(password: str) -> str:
+        return pwd_context.hash(password)
+
     def hash_password(self, password: str) -> str:
         """Hash a plain-text password."""
-        return pwd_context.hash(password)
+        return self.hash_password_static(password)
 
     def verify_password(self, plain_password: str, hashed_password: str) -> bool:
         """Verify a plain-text password against a hashed one."""
@@ -211,6 +215,13 @@ class AuthService:
             raise InvalidCredentialsError()
 
         if not self.verify_password(password, db_user.hashed_password):
+            raise InvalidCredentialsError()
+
+        from core.user.model.User import UserStatus
+
+        if getattr(db_user, "status", None) == UserStatus.DELETED or str(
+            getattr(db_user, "status", "") or ""
+        ).upper() == UserStatus.DELETED.value:
             raise InvalidCredentialsError()
 
         if db_user.managed_by_user_id:
