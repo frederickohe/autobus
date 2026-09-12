@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 logger = logging.getLogger(__name__)
 
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_REFERENCES = 3
 _ALLOWED_SCHEMES = {"http", "https"}
 
 
@@ -17,10 +18,17 @@ class MediaReferenceError(ValueError):
     pass
 
 
+class GenerationReferenceItem(Protocol):
+    base64: str | None
+    mime_type: str | None
+    url: str | None
+
+
 class GenerationReferenceSource(Protocol):
     reference_base64: str | None
     reference_mime_type: str | None
     reference_url: str | None
+    references: list[GenerationReferenceItem] | None
 
 
 def clean_base64(value: str | None) -> tuple[str | None, str]:
@@ -137,14 +145,14 @@ def validate_reference(raw: bytes, mime: str) -> None:
         )
 
 
-async def resolve_generation_reference(
-    req: GenerationReferenceSource,
+async def _resolve_one(
+    *,
+    reference_base64: str | None,
+    reference_mime_type: str | None,
+    reference_url: str | None,
 ) -> tuple[str, str] | None:
-    """
-    Return (base64, mime_type) for an optional generation reference, or None.
-    """
-    header_mime, cleaned = clean_base64(req.reference_base64)
-    mime_hint = req.reference_mime_type or header_mime
+    header_mime, cleaned = clean_base64(reference_base64)
+    mime_hint = reference_mime_type or header_mime
     raw: bytes | None = None
     mime = infer_mime(mime_hint, fallback="")
 
@@ -152,8 +160,8 @@ async def resolve_generation_reference(
         raw = decode_reference_base64(cleaned)
         if not mime:
             mime = infer_mime(header_mime, fallback="image/jpeg")
-    elif (req.reference_url or "").strip():
-        raw, fetched_mime = await fetch_reference_from_url(req.reference_url.strip())
+    elif (reference_url or "").strip():
+        raw, fetched_mime = await fetch_reference_from_url(reference_url.strip())
         mime = infer_mime(mime_hint or fetched_mime, fallback=fetched_mime)
 
     if raw is None:
@@ -163,38 +171,105 @@ async def resolve_generation_reference(
         mime = "image/jpeg"
     validate_reference(raw, mime)
     encoded = base64.b64encode(raw).decode("ascii")
-    logger.info(
-        "[MEDIA_REF] Resolved %s reference (%s bytes)",
-        mime,
-        len(raw),
-    )
+    logger.info("[MEDIA_REF] Resolved %s reference (%s bytes)", mime, len(raw))
     return encoded, mime
 
 
-def reference_prompt_prefix(mime: str) -> str:
-    kind = "video" if is_video_mime(mime) else "image"
+async def resolve_generation_references(
+    req: GenerationReferenceSource,
+) -> list[tuple[str, str]]:
+    """Return (base64, mime_type) pairs for every attached reference."""
+    items: list[tuple[str | None, str | None, str | None]] = []
+    extra = getattr(req, "references", None) or []
+    for item in extra:
+        items.append(
+            (
+                getattr(item, "base64", None),
+                getattr(item, "mime_type", None),
+                getattr(item, "url", None),
+            )
+        )
+    if not items:
+        items.append((req.reference_base64, req.reference_mime_type, req.reference_url))
+
+    resolved: list[tuple[str, str]] = []
+    for base64_value, mime_type, url in items:
+        found = await _resolve_one(
+            reference_base64=base64_value,
+            reference_mime_type=mime_type,
+            reference_url=url,
+        )
+        if found:
+            resolved.append(found)
+
+    if len(resolved) > MAX_REFERENCES:
+        raise MediaReferenceError(
+            f"You can attach up to {MAX_REFERENCES} reference files."
+        )
+    return resolved
+
+
+async def resolve_generation_reference(
+    req: GenerationReferenceSource,
+) -> tuple[str, str] | None:
+    refs = await resolve_generation_references(req)
+    return refs[0] if refs else None
+
+
+def reference_prompt_prefix(references: list[tuple[str, str]]) -> str:
+    if not references:
+        return ""
+    images = sum(1 for _, mime in references if is_image_mime(mime))
+    videos = sum(1 for _, mime in references if is_video_mime(mime))
+    bits = []
+    if images:
+        bits.append(f"{images} reference image{'s' if images != 1 else ''}")
+    if videos:
+        bits.append(f"{videos} reference video{'s' if videos != 1 else ''}")
+    attached = " and ".join(bits) if bits else "reference media"
     return (
-        f"A reference {kind} is attached. Use it as visual guidance for subject, "
-        "composition, branding, and style. Follow the creative brief for what to "
-        "create or change.\n\n"
+        f"{attached.capitalize()} {'are' if (images + videos) != 1 else 'is'} attached. "
+        "Use them as visual guidance for subject, composition, branding, and style. "
+        "Follow the creative brief for what to create or change.\n\n"
     )
+
+
+def _normalized_refs(
+    *,
+    references: list[tuple[str, str]] | None,
+    reference_base64: str | None,
+    reference_mime_type: str | None,
+) -> list[tuple[str, str]]:
+    if references:
+        return references
+    header_mime, cleaned = clean_base64(reference_base64)
+    if not cleaned:
+        return []
+    mime = (reference_mime_type or header_mime or "image/png").strip() or "image/png"
+    return [(cleaned, mime)]
 
 
 def build_image_generate_payload(
     prompt: str,
     *,
+    references: list[tuple[str, str]] | None = None,
     reference_base64: str | None = None,
     reference_mime_type: str | None = None,
 ) -> dict:
-    """Gemini generateContent payload; optional inline reference image/video."""
+    """Gemini generateContent payload; optional inline reference images/videos."""
     parts: list[dict] = [{"text": prompt}]
-    header_mime, cleaned = clean_base64(reference_base64)
-    if cleaned:
-        mime = (reference_mime_type or header_mime or "image/png").strip() or "image/png"
+    for raw_b64, mime in _normalized_refs(
+        references=references,
+        reference_base64=reference_base64,
+        reference_mime_type=reference_mime_type,
+    ):
+        header_mime, cleaned = clean_base64(raw_b64)
+        if not cleaned:
+            continue
         parts.append(
             {
                 "inlineData": {
-                    "mimeType": mime,
+                    "mimeType": (mime or header_mime or "image/png").strip() or "image/png",
                     "data": cleaned,
                 }
             }
@@ -215,18 +290,62 @@ def build_image_generate_payload(
 def build_veo_instance(
     prompt: str,
     *,
+    references: list[tuple[str, str]] | None = None,
     reference_base64: str | None = None,
     reference_mime_type: str | None = None,
 ) -> dict:
-    """Veo predictLongRunning instance: text, optional first-frame image, or video."""
+    """
+    Veo instance: text plus optional first-frame / reference images.
+
+    User-uploaded videos are not sent as ``video`` — Veo extension only accepts
+    a URI from a previous Veo output, and sending bytes leaves an empty result.
+    """
     instance: dict = {"prompt": prompt}
-    header_mime, cleaned = clean_base64(reference_base64)
-    if not cleaned:
+    refs = _normalized_refs(
+        references=references,
+        reference_base64=reference_base64,
+        reference_mime_type=reference_mime_type,
+    )
+    images: list[dict] = []
+    for raw_b64, mime in refs:
+        header_mime, cleaned = clean_base64(raw_b64)
+        if not cleaned or is_video_mime(mime or header_mime or ""):
+            continue
+        images.append(
+            {
+                "bytesBase64Encoded": cleaned,
+                "mimeType": (mime or header_mime or "image/jpeg").strip() or "image/jpeg",
+            }
+        )
+    if not images:
         return instance
-    mime = (reference_mime_type or header_mime or "image/jpeg").strip() or "image/jpeg"
-    media = {"bytesBase64Encoded": cleaned, "mimeType": mime}
-    if is_video_mime(mime):
-        instance["video"] = media
-    else:
-        instance["image"] = media
+    if len(images) == 1:
+        instance["image"] = images[0]
+        return instance
+    instance["referenceImages"] = [
+        {"image": image, "referenceType": "asset"} for image in images[:MAX_REFERENCES]
+    ]
     return instance
+
+
+def build_veo_payload(
+    prompt: str,
+    *,
+    references: list[tuple[str, str]] | None = None,
+    reference_base64: str | None = None,
+    reference_mime_type: str | None = None,
+) -> dict:
+    return {
+        "instances": [
+            build_veo_instance(
+                prompt,
+                references=references,
+                reference_base64=reference_base64,
+                reference_mime_type=reference_mime_type,
+            )
+        ],
+        "parameters": {
+            "sampleCount": 1,
+            "durationSeconds": 8,
+        },
+    }

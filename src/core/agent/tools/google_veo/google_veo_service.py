@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
-import re
 import tempfile
 import uuid
 from pathlib import Path
@@ -13,9 +13,16 @@ import httpx
 from dotenv import load_dotenv
 
 from core.cloudstorage.service.storageservice import StorageService
+from core.media.service.veo_operation import (
+    VeoVideoResult,
+    extract_video_from_operation,
+    missing_video_error,
+)
 
 _env_path = Path(__file__).resolve().parents[5] / ".env"
 load_dotenv(dotenv_path=_env_path)
+
+logger = logging.getLogger(__name__)
 
 
 class GoogleVeoGenerationError(RuntimeError):
@@ -26,48 +33,6 @@ class GoogleVeoTimeoutError(GoogleVeoGenerationError):
     """Raised when Veo video generation does not complete in time."""
 
     pass
-
-
-def _extract_first_url(value: Any) -> str | None:
-    if isinstance(value, str):
-        m = re.search(r"https?://\S+", value)
-        return m.group(0) if m else None
-    if isinstance(value, dict):
-        for key in ("fileUri", "file_uri", "uri", "downloadUri", "download_uri"):
-            uri = value.get(key)
-            if isinstance(uri, str) and uri.strip().startswith(("http://", "https://", "gs://")):
-                return uri.strip()
-        for v in value.values():
-            url = _extract_first_url(v)
-            if url:
-                return url
-    if isinstance(value, list):
-        for v in value:
-            url = _extract_first_url(v)
-            if url:
-                return url
-    return None
-
-
-def _extract_video_uri_from_operation(data: dict[str, Any]) -> str | None:
-    """Parse completed Veo long-running operation JSON for a video download URI."""
-    response = data.get("response")
-    if not isinstance(response, dict):
-        return None
-
-    generate_video = response.get("generateVideoResponse") or response.get("generate_video_response")
-    if isinstance(generate_video, dict):
-        samples = generate_video.get("generatedSamples") or generate_video.get("generated_samples")
-        if isinstance(samples, list) and samples:
-            first = samples[0]
-            if isinstance(first, dict):
-                video = first.get("video")
-                if isinstance(video, dict):
-                    uri = video.get("uri")
-                    if isinstance(uri, str) and uri.strip():
-                        return uri.strip()
-
-    return _extract_first_url(data)
 
 
 class GoogleVeoService:
@@ -161,20 +126,38 @@ class GoogleVeoService:
         user_id: str | None = None,
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
+        references: list[tuple[str, str]] | None = None,
     ) -> str:
+        result = await self._generate_video_result(
+            prompt,
+            user_id=user_id,
+            reference_base64=reference_base64,
+            reference_mime_type=reference_mime_type,
+            references=references,
+        )
+        if result.uri:
+            return result.uri
+        raise GoogleVeoGenerationError(missing_video_error(result))
+
+    async def _generate_video_result(
+        self,
+        prompt: str,
+        *,
+        user_id: str | None = None,
+        reference_base64: str | None = None,
+        reference_mime_type: str | None = None,
+        references: list[tuple[str, str]] | None = None,
+    ) -> VeoVideoResult:
         # Veo does not accept arbitrary user_id on the request body.
         headers, params = self._auth()
-        from core.media.service.media_reference import build_veo_instance
+        from core.media.service.media_reference import build_veo_payload
 
-        payload: dict[str, Any] = {
-            "instances": [
-                build_veo_instance(
-                    prompt,
-                    reference_base64=reference_base64,
-                    reference_mime_type=reference_mime_type,
-                )
-            ],
-        }
+        payload = build_veo_payload(
+            prompt,
+            references=references,
+            reference_base64=reference_base64,
+            reference_mime_type=reference_mime_type,
+        )
 
         timeout = self._http_timeout()
         try:
@@ -236,13 +219,15 @@ class GoogleVeoService:
                 raise GoogleVeoGenerationError(f"Google Veo generation failed: {poll_data['error']}")
 
             if poll_data.get("done"):
-                video_uri = _extract_video_uri_from_operation(poll_data)
-                if not video_uri:
-                    raise GoogleVeoGenerationError(
-                        "No video URI found in completed Google Veo operation. "
-                        "Confirm VEO_MODEL is a Veo model (e.g. veo-3.1-generate-preview)."
-                    )
-                return video_uri
+                result = extract_video_from_operation(poll_data)
+                if result.has_media:
+                    return result
+                logger.warning(
+                    "[VEO] Completed operation had no video media. keys=%s rai=%s",
+                    list(poll_data.keys()),
+                    result.rai_reason,
+                )
+                raise GoogleVeoGenerationError(missing_video_error(result))
 
         raise GoogleVeoTimeoutError(
             f"Google Veo video generation did not complete within {int(self._max_poll_seconds)} seconds."
@@ -255,17 +240,21 @@ class GoogleVeoService:
         user_id: str | None = None,
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
+        references: list[tuple[str, str]] | None = None,
     ) -> str:
         """
         Generates a video with Veo, downloads it, uploads to Contabo storage,
         and returns the Contabo URL (suitable for streaming by the frontend).
         """
-        source_url = await self.generate_video_url(
+        result = await self._generate_video_result(
             prompt,
             user_id=user_id,
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
+            references=references,
         )
+        if not result.has_media:
+            raise GoogleVeoGenerationError(missing_video_error(result))
 
         suffix = ".mp4"
         tmp_path = None
@@ -273,25 +262,31 @@ class GoogleVeoService:
             with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                 tmp_path = tmp.name
 
-            download_url, dl_headers = self._binary_download_request(source_url)
-            download_timeout = self._http_timeout()
-            async with httpx.AsyncClient(
-                timeout=download_timeout, follow_redirects=True
-            ) as client:
-                async with client.stream(
-                    "GET",
-                    download_url,
-                    headers=dl_headers,
-                ) as r:
-                    if r.status_code >= 400:
-                        detail = (await r.aread()).decode(errors="replace")[:2000]
-                        raise GoogleVeoGenerationError(
-                            f"Failed to download generated video ({r.status_code}): {detail}"
-                        )
-                    with open(tmp_path, "wb") as f:
-                        async for chunk in r.aiter_bytes():
-                            if chunk:
-                                f.write(chunk)
+            if result.base64 and not result.uri:
+                import base64
+
+                with open(tmp_path, "wb") as f:
+                    f.write(base64.b64decode(result.base64, validate=False))
+            else:
+                download_url, dl_headers = self._binary_download_request(result.uri or "")
+                download_timeout = self._http_timeout()
+                async with httpx.AsyncClient(
+                    timeout=download_timeout, follow_redirects=True
+                ) as client:
+                    async with client.stream(
+                        "GET",
+                        download_url,
+                        headers=dl_headers,
+                    ) as r:
+                        if r.status_code >= 400:
+                            detail = (await r.aread()).decode(errors="replace")[:2000]
+                            raise GoogleVeoGenerationError(
+                                f"Failed to download generated video ({r.status_code}): {detail}"
+                            )
+                        with open(tmp_path, "wb") as f:
+                            async for chunk in r.aiter_bytes():
+                                if chunk:
+                                    f.write(chunk)
 
             storage = StorageService()
             object_name = f"{uuid.uuid4().hex}{suffix}"

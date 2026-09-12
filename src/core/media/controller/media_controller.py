@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from core.agent.dto.media_generation_request import MediaGenerationRequest
+from core.credits.credit_catalog import feature_cost
 from core.credits.model.credit_types import CreditType
 from core.credits.service.credit_service import CreditService
 from core.user.controller.usercontroller import get_db, validate_token
@@ -25,8 +26,9 @@ from core.media.dto.media_generation_response import (
 from core.media.service.media_rag_prompt import enrich_media_generation_prompt
 from core.media.service.media_reference import (
     MediaReferenceError,
+    is_video_mime,
     reference_prompt_prefix,
-    resolve_generation_reference,
+    resolve_generation_references,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,13 +36,11 @@ logger = logging.getLogger(__name__)
 media_routes = APIRouter()
 
 
-def _deduct_media_credit(
+def _resolve_credit_user(
     db: Session,
-    credit_type: str,
-    operation: str,
     authjwt: AuthJWT | None,
     req_user_id: str | None,
-) -> None:
+) -> str:
     credit_service = CreditService(db)
     user_id = None
     if authjwt:
@@ -49,7 +49,47 @@ def _deduct_media_credit(
         user_id = credit_service.resolve_user_id(req_user_id)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required for media generation.")
-    credit_service.require_credits(user_id, credit_type, 1.0, operation)
+    return user_id
+
+
+def _deduct_generation_credits(
+    db: Session,
+    credit_type: str,
+    operation: str,
+    authjwt: AuthJWT | None,
+    req_user_id: str | None,
+    references: list[tuple[str, str]],
+) -> None:
+    """Charge the generation plus one extra feature unit per attached reference."""
+    credit_service = CreditService(db)
+    user_id = _resolve_credit_user(db, authjwt, req_user_id)
+
+    charges: list[tuple[str, str]] = [(credit_type, operation)]
+    for _, mime in references:
+        if is_video_mime(mime):
+            charges.append((CreditType.VIDEO_GEN.value, "generation_reference"))
+        else:
+            charges.append((CreditType.IMAGE_GEN.value, "generation_reference"))
+
+    needed = sum(feature_cost(kind, 1.0) for kind, _ in charges)
+    remaining = credit_service.get_remaining(user_id, "wallet")
+    if needed > 0 and remaining < needed:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": (
+                    "Insufficient credits for this generation"
+                    + (" and its references" if references else "")
+                    + ". Buy more credits to continue."
+                ),
+                "credit_type": credit_type,
+                "remaining": remaining,
+                "required": needed,
+            },
+        )
+
+    for kind, op in charges:
+        credit_service.require_credits(user_id, kind, 1.0, op)
 
 
 def _jwt_subject(authjwt: AuthJWT | None) -> str | None:
@@ -90,22 +130,21 @@ async def generate_image(
     and the merchant product catalog before it is sent to the image model.
     """
     try:
-        reference = await resolve_generation_reference(req)
+        references = await resolve_generation_references(req)
     except MediaReferenceError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    _deduct_media_credit(db, CreditType.IMAGE_GEN.value, "image_generation", authjwt, req.user_id)
+    _deduct_generation_credits(
+        db, CreditType.IMAGE_GEN.value, "image_generation", authjwt, req.user_id, references
+    )
     try:
         service = GoogleImageService()
         grounded_prompt = _grounded_media_prompt(req, db, authjwt, "image")
-        ref_b64 = ref_mime = None
-        if reference:
-            ref_b64, ref_mime = reference
-            grounded_prompt = reference_prompt_prefix(ref_mime) + grounded_prompt
+        if references:
+            grounded_prompt = reference_prompt_prefix(references) + grounded_prompt
         b64 = await service.generate_image_base64(
             grounded_prompt,
             user_id=req.user_id,
-            reference_base64=ref_b64,
-            reference_mime_type=ref_mime,
+            references=references,
         )
         mime_type = service.last_mime_type or "image/png"
         return ImageGenerationResponse(prompt=req.prompt, image_base64=b64, mime_type=mime_type)
@@ -135,23 +174,22 @@ async def generate_video(
     and the merchant product catalog before it is sent to Veo.
     """
     try:
-        reference = await resolve_generation_reference(req)
+        references = await resolve_generation_references(req)
     except MediaReferenceError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    _deduct_media_credit(db, CreditType.VIDEO_GEN.value, "video_generation", authjwt, req.user_id)
+    _deduct_generation_credits(
+        db, CreditType.VIDEO_GEN.value, "video_generation", authjwt, req.user_id, references
+    )
     try:
         service = GoogleVeoService()
         grounded_prompt = _grounded_media_prompt(req, db, authjwt, "video")
-        ref_b64 = ref_mime = None
-        if reference:
-            ref_b64, ref_mime = reference
-            grounded_prompt = reference_prompt_prefix(ref_mime) + grounded_prompt
+        if references:
+            grounded_prompt = reference_prompt_prefix(references) + grounded_prompt
         if store:
             stored_url = await service.generate_video_and_store(
                 grounded_prompt,
                 user_id=req.user_id,
-                reference_base64=ref_b64,
-                reference_mime_type=ref_mime,
+                references=references,
             )
             return VideoGenerationResponse(
                 prompt=req.prompt,
@@ -161,8 +199,7 @@ async def generate_video(
         video_url = await service.generate_video_url(
             grounded_prompt,
             user_id=req.user_id,
-            reference_base64=ref_b64,
-            reference_mime_type=ref_mime,
+            references=references,
         )
         return VideoGenerationResponse(
             prompt=req.prompt,

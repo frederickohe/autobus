@@ -106,6 +106,7 @@ class GoogleImageService:
         user_id: str | None = None,
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
+        references: list[tuple[str, str]] | None = None,
     ) -> str:
         url = f"{self._base_url}/models/{self._model}:generateContent"
 
@@ -113,6 +114,7 @@ class GoogleImageService:
 
         payload = build_image_generate_payload(
             prompt,
+            references=references,
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
         )
