@@ -13,6 +13,7 @@ from core.socialmedia.service.tiktok_direct_post import (
     normalize_creator_info,
     normalize_publish_status,
     tiktok_consent_text,
+    user_facing_publish_error,
 )
 
 
@@ -88,6 +89,13 @@ class ConsentAndStatusTest(unittest.TestCase):
     def test_consent_switches_for_branded(self):
         self.assertEqual(tiktok_consent_text(branded_content=False), CONSENT_MUSIC)
         self.assertEqual(tiktok_consent_text(branded_content=True), CONSENT_BRANDED)
+
+    def test_unaudited_error_is_explained(self):
+        text = user_facing_publish_error(
+            "ApplicationFailure: App not approved for public posting, contact support"
+        )
+        self.assertIn("Private", text)
+        self.assertIn("audit", text.lower())
 
     def test_publish_complete(self):
         status = normalize_publish_status(

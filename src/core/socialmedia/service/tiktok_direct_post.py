@@ -54,6 +54,10 @@ PROCESSING_NOTICE = (
     "After you finish publishing, it may take a few minutes for the content "
     "to process and be visible on your TikTok profile."
 )
+UNAUDITED_PUBLIC_MESSAGE = (
+    "TikTok has not approved this app for posting to public accounts. "
+    "Until that audit is approved, set the TikTok account to Private and try again."
+)
 
 
 def tiktok_consent_text(*, branded_content: bool) -> str:
@@ -130,6 +134,17 @@ def _privacy_options(raw: Any) -> List[str]:
         seen.add(key)
         out.append(key)
     return out
+
+
+def user_facing_publish_error(fail_reason: str) -> str:
+    text = (fail_reason or "").strip()
+    lowered = text.lower()
+    if (
+        "unaudited_client_can_only_post_to_private_accounts" in lowered
+        or "not approved for public posting" in lowered
+    ):
+        return UNAUDITED_PUBLIC_MESSAGE
+    return text
 
 
 def cannot_post_reason(error_code: str, error_message: str = "") -> str:
@@ -329,7 +344,9 @@ def normalize_publish_status(payload: Any) -> Dict[str, Any]:
     if complete:
         message = "Your post is on TikTok."
     elif failed:
-        message = fail_reason or "TikTok could not publish this post."
+        message = user_facing_publish_error(fail_reason) or (
+            "TikTok could not publish this post."
+        )
     elif status == "SEND_TO_USER_INBOX":
         message = (
             "TikTok sent a draft to the creator inbox. Open TikTok to finish the post."
@@ -379,6 +396,32 @@ def token_from_postiz_db(integration_id: str) -> Optional[str]:
     except Exception as exc:
         logger.warning("[SOCIAL] Could not read TikTok token from Postiz DB: %s", exc)
     return None
+
+
+def latest_postiz_post_error(integration_id: str) -> str:
+    """Read the newest Postiz Post.error for this TikTok integration."""
+    dsn = os.getenv("POSTIZ_DATABASE_URL", "").strip()
+    iid = (integration_id or "").strip()
+    if not dsn or not iid:
+        return ""
+    sql = """
+        SELECT error FROM "Post"
+        WHERE "integrationId" = :id AND ("deletedAt" IS NULL)
+        ORDER BY "publishDate" DESC NULLS LAST, "createdAt" DESC
+        LIMIT 1
+    """
+    try:
+        engine = create_engine(dsn, pool_pre_ping=True)
+        with engine.connect() as conn:
+            row = conn.execute(text(sql), {"id": iid}).first()
+    except Exception as exc:
+        logger.info("[SOCIAL] Could not read Postiz post error: %s", exc)
+        return ""
+    if not row or not row[0]:
+        return ""
+    raw = row[0]
+    blob = raw if isinstance(raw, str) else _error_text(raw)
+    return user_facing_publish_error(blob)
 
 
 async def query_tiktok_creator_info(access_token: str) -> Dict[str, Any]:
@@ -584,7 +627,13 @@ async def load_tiktok_publish_status(
     if not matched:
         return normalize_publish_status({"status": "PROCESSING_DOWNLOAD"})
     latest = matched[0]
-    return normalize_publish_status(latest)
+    status = normalize_publish_status(latest)
+    if status["failed"]:
+        db_error = latest_postiz_post_error(iid)
+        if db_error:
+            status["fail_reason"] = db_error
+            status["message"] = db_error
+    return status
 
 
 def _recent_post_window() -> Tuple[str, str]:
