@@ -35,6 +35,7 @@ from core.whatsapp.controller.whatsapp_controller import (
     whatsapp_routes,
 )
 from core.instagram.controller.instagram_controller import instagram_routes
+from core.greenmall.controller.greenmall_controller import greenmall_routes
 from core.sms_sender_id.controller.sms_sender_id_controller import sms_sender_id_routes
 from core.chatwoot.controller.chatwoot_controller import chatwoot_routes
 from core.integrations.controller.integration_test_controller import integration_routes
@@ -272,6 +273,7 @@ app.include_router(media_routes, prefix="/api/v1/media", tags=["Media Generation
 app.include_router(social_routes, prefix="/api/v1/social", tags=["Social Media Routes"])
 app.include_router(whatsapp_routes, prefix="/api/v1/whatsapp", tags=["WhatsApp Meta Routes"])
 app.include_router(instagram_routes, prefix="/api/v1/instagram", tags=["Instagram Business Login"])
+app.include_router(greenmall_routes, prefix="/api/v1/greenmall", tags=["GreenMall Store Login"])
 # Shared Meta redirect_uri (WhatsApp ES + Instagram Business Login):
 # https://useautobus.com/api/social/callback
 app.include_router(meta_whatsapp_callback_routes, prefix="/api", tags=["WhatsApp Meta Callback"])

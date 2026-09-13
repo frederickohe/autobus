@@ -41,6 +41,7 @@ _model_modules = [
 	"core.chatwoot.model.ChatwootAccount",
 	"core.whatsapp.model.WhatsAppAccount",
 	"core.instagram.model.InstagramAccount",
+	"core.greenmall.model.GreenMallAccount",
 	"core.sms_sender_id.model.SmsSenderIdRegistration",
 	"core.product.model.product",
 	"core.orders.model.order",

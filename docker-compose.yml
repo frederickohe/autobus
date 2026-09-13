@@ -225,6 +225,14 @@ services:
       # Optional: public origin of this API for Meta crawlers (Instagram publish) and webhook hints.
       AUTOBUS_PUBLIC_API_URL: ${AUTOBUS_PUBLIC_API_URL:-https://api.useautobus.com}
 
+      # GreenMall first-party store / POS linking
+      GREENMALL_API_URL: ${GREENMALL_API_URL:-}
+      GREENMALL_AUTHORIZE_URL: ${GREENMALL_AUTHORIZE_URL:-}
+      GREENMALL_AUTHORIZE_PATH: ${GREENMALL_AUTHORIZE_PATH:-/integrations/autobus/authorize}
+      GREENMALL_CALLBACK_URL: ${GREENMALL_CALLBACK_URL:-}
+      GREENMALL_SHARED_SECRET: ${GREENMALL_SHARED_SECRET:-}
+      GREENMALL_CALLBACK_SECRET: ${GREENMALL_CALLBACK_SECRET:-}
+
       # Meta WhatsApp Cloud API (webhook verify + outbound send / media)
       META_API_KEY: ${META_API_KEY:-}
       META_APP_SECRET: ${META_APP_SECRET:-}

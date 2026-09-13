@@ -28,6 +28,7 @@ from core.chatwoot.service.chatwoot_api_service import (
     chatwoot_enabled,
 )
 from core.customers.model.customer import Customer
+from core.greenmall.model.GreenMallAccount import GreenMallAccount
 from core.instagram.model.InstagramAccount import InstagramAccount
 from core.orders.model.order import Order
 from core.product.model.product import Product
@@ -221,6 +222,18 @@ class AccountDeletionService:
                 )
             )
         for row in (
+            self.db.query(GreenMallAccount)
+            .filter(GreenMallAccount.user_id == user.id, GreenMallAccount.is_active.is_(True))
+            .all()
+        ):
+            items.append(
+                DeletionConnection(
+                    kind="greenmall",
+                    label="GreenMall",
+                    detail=row.store_name or row.store_email or row.store_id,
+                )
+            )
+        for row in (
             self.db.query(SocialAccount).filter(SocialAccount.user_id == user.id).all()
         ):
             items.append(
@@ -359,6 +372,7 @@ class AccountDeletionService:
         user_id = user.id
         self._delete_rows(WhatsAppAccount, WhatsAppAccount.user_id, user_id)
         self._delete_rows(InstagramAccount, InstagramAccount.user_id, user_id)
+        self._delete_rows(GreenMallAccount, GreenMallAccount.user_id, user_id)
         self._delete_rows(SocialAccount, SocialAccount.user_id, user_id)
         self._delete_rows(ChatwootAccount, ChatwootAccount.user_id, user_id)
         self._delete_rows(PostizOrganization, PostizOrganization.user_id, user_id)

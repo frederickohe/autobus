@@ -150,6 +150,16 @@ class Settings(BaseSettings):
                 )
         return self
 
+    # GreenMall first-party store / POS linking
+    GREENMALL_API_URL: str = os.environ.get("GREENMALL_API_URL", "").strip()
+    GREENMALL_AUTHORIZE_URL: str = os.environ.get("GREENMALL_AUTHORIZE_URL", "").strip()
+    GREENMALL_AUTHORIZE_PATH: str = os.environ.get(
+        "GREENMALL_AUTHORIZE_PATH", "/integrations/autobus/authorize"
+    ).strip()
+    GREENMALL_CALLBACK_URL: str = os.environ.get("GREENMALL_CALLBACK_URL", "").strip()
+    GREENMALL_SHARED_SECRET: str = os.environ.get("GREENMALL_SHARED_SECRET", "").strip()
+    GREENMALL_CALLBACK_SECRET: str = os.environ.get("GREENMALL_CALLBACK_SECRET", "").strip()
+
     # Paystack (standalone billing checkout)
     PAYSTACK_SECRET_KEY: str = os.environ.get("PAYSTACK_SECRET_KEY", "").strip()
     PAYSTACK_BILLING_CALLBACK_URL: str = os.environ.get("PAYSTACK_BILLING_CALLBACK_URL", "").strip()
