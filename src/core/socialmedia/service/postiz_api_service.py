@@ -547,7 +547,12 @@ def apply_tiktok_oauth_scopes(
     *,
     slug: Optional[str] = None,
 ) -> str:
-    """Drop deprecated TikTok scopes Postiz still puts on the authorize URL."""
+    """Rewrite TikTok authorize URLs before we send the user to Login Kit.
+
+    Drop deprecated scopes Postiz still puts on the URL, and always set
+    ``disable_auto_auth=1``. Without that flag TikTok skips login and
+    consent when the same phone already authorized this client.
+    """
     url = (authorization_url or "").strip()
     if not url:
         return url
@@ -563,17 +568,18 @@ def apply_tiktok_oauth_scopes(
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     raw_scope = query.get("scope") or ""
-    if not raw_scope:
-        return url
+    if raw_scope:
+        kept = [
+            item.strip()
+            for item in raw_scope.replace(" ", ",").split(",")
+            if item.strip() and item.strip() not in _TIKTOK_DROPPED_SCOPES
+        ]
+        if kept:
+            query["scope"] = ",".join(kept)
 
-    kept = [
-        item.strip()
-        for item in raw_scope.replace(" ", ",").split(",")
-        if item.strip() and item.strip() not in _TIKTOK_DROPPED_SCOPES
-    ]
-    if not kept:
-        return url
-    query["scope"] = ",".join(kept)
+    # TikTok Login Kit: 0 (default) auto-approves a prior grant; 1 shows
+    # the authorization page so the user can log in and accept terms again.
+    query["disable_auto_auth"] = "1"
     return urlunsplit(
         (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
     )
