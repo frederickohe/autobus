@@ -82,6 +82,43 @@ def is_video_url(url: str) -> bool:
     return _path_ext(url) in VIDEO_EXTENSIONS
 
 
+def parse_http_byte_range(header: str, total: int) -> Optional[Tuple[int, int]]:
+    """Parse ``Range: bytes=start-end`` into inclusive indexes.
+
+    Postiz TikTok FILE_UPLOAD requires HTTP 206 for these requests. Returns
+    None when the header is missing or not a single byte range.
+    """
+    raw = (header or "").strip()
+    if not raw or total <= 0:
+        return None
+    lowered = raw.lower()
+    if not lowered.startswith("bytes="):
+        return None
+    spec = raw.split("=", 1)[1].strip()
+    if "," in spec:
+        return None
+    start_s, sep, end_s = spec.partition("-")
+    if not sep:
+        return None
+    start_s = start_s.strip()
+    end_s = end_s.strip()
+    try:
+        if start_s == "":
+            suffix = int(end_s)
+            if suffix <= 0:
+                return None
+            start = max(total - suffix, 0)
+            end = total - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else total - 1
+    except ValueError:
+        return None
+    if start < 0 or end < start or start >= total:
+        return None
+    return start, min(end, total - 1)
+
+
 def select_instagram_media_urls(urls: Iterable[str], *, is_story: bool) -> List[str]:
     """Pick Instagram-legal attachments: one story item, one reel, or 1–10 images."""
     cleaned = [u.strip() for u in urls if u and str(u).strip()]

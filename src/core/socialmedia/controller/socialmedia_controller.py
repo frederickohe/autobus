@@ -11,8 +11,8 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from another_fastapi_jwt_auth import AuthJWT
@@ -54,6 +54,7 @@ from core.socialmedia.service.postiz_org_service import PostizOrgService
 from core.socialmedia.service.instagram_media_prepare import (
     InstagramMediaPrepareError,
     InstagramMediaPrepareService,
+    parse_http_byte_range,
 )
 from core.socialmedia.model.PostizOrganization import PostizOrganization
 from core.cloudstorage.service.storageservice import StorageFolder, StorageService
@@ -918,7 +919,7 @@ async def postiz_list_posts(
 
     now = datetime.now(timezone.utc)
     start = (start_date or "").strip() or (
-        (now - timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+        (now - timedelta(days=14)).isoformat().replace("+00:00", "Z")
     )
     end = (end_date or "").strip() or (
         (now + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
@@ -1049,18 +1050,20 @@ def _get_storage_service() -> StorageService:
     return _storage_service
 
 
-@social_routes.get("/media/public/{file_name}")
-async def public_instagram_media(file_name: str):
+@social_routes.api_route("/media/public/{file_name}", methods=["GET", "HEAD"])
+async def public_instagram_media(file_name: str, request: Request):
     """
-    Unauthenticated JPEG/MP4 for Meta crawlers. Filenames are unguessable UUIDs
-    written only by InstagramMediaPrepareService (no query-string signatures).
+    Unauthenticated JPEG/MP4 for Meta and Postiz.
+
+    Filenames are unguessable UUIDs written only by InstagramMediaPrepareService.
+    Postiz TikTok FILE_UPLOAD requires HEAD + ``Accept-Ranges`` / HTTP 206.
     """
     safe_name = os.path.basename(file_name)
     if not _PUBLIC_MEDIA_FILE.fullmatch(safe_name):
         raise HTTPException(status_code=404, detail="Media not found")
     storage = _get_storage_service()
     try:
-        content_type, length, chunks = storage.iter_object_chunks(
+        content_type, total_length = storage.head_object_meta(
             safe_name,
             folder=StorageFolder.instagram_publish,
         )
@@ -1077,10 +1080,48 @@ async def public_instagram_media(file_name: str):
     media_type = "image/jpeg" if safe_name.endswith(".jpg") else "video/mp4"
     if content_type and content_type != "application/octet-stream":
         media_type = content_type
-    headers = {"Cache-Control": "public, max-age=86400"}
-    if length is not None:
-        headers["Content-Length"] = str(length)
-    return StreamingResponse(chunks, media_type=media_type, headers=headers)
+
+    headers = {
+        "Cache-Control": "public, max-age=86400",
+        "Accept-Ranges": "bytes",
+        "Content-Encoding": "identity",
+    }
+    range_header = request.headers.get("range") or request.headers.get("Range") or ""
+    byte_range = parse_http_byte_range(range_header, total_length)
+    if range_header.strip() and byte_range is None:
+        headers["Content-Range"] = f"bytes */{total_length}"
+        return Response(status_code=416, headers=headers)
+
+    start = end = None
+    status_code = 200
+    content_length = total_length
+    if byte_range is not None:
+        start, end = byte_range
+        content_length = end - start + 1
+        status_code = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{total_length}"
+    headers["Content-Length"] = str(content_length)
+
+    if request.method == "HEAD":
+        return Response(status_code=status_code, media_type=media_type, headers=headers)
+
+    try:
+        _, _, chunks = storage.iter_object_chunks(
+            safe_name,
+            folder=StorageFolder.instagram_publish,
+            start=start,
+            end=end,
+        )
+    except ClientError as exc:
+        logger.error("[SOCIAL] public media fetch failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Media unavailable") from exc
+
+    return StreamingResponse(
+        chunks,
+        status_code=status_code,
+        media_type=media_type,
+        headers=headers,
+    )
 
 
 @social_routes.post("/postiz/posts")

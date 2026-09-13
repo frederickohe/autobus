@@ -18,6 +18,7 @@ from core.socialmedia.service.instagram_media_prepare import (
     fit_image_for_instagram,
     image_bytes_to_instagram_jpeg,
     is_prepared_public_url,
+    parse_http_byte_range,
     select_instagram_media_urls,
 )
 
@@ -153,6 +154,25 @@ class PostizPayloadTests(unittest.TestCase):
         self.assertNotIn("&", path)
         self.assertTrue(storage.files)
         self.assertTrue(next(iter(storage.files.values()))[:3] == b"\xff\xd8\xff")
+
+
+class ParseHttpByteRangeTest(unittest.TestCase):
+    def test_inclusive_range(self):
+        self.assertEqual(parse_http_byte_range("bytes=0-999", 5000), (0, 999))
+
+    def test_open_ended_range(self):
+        self.assertEqual(parse_http_byte_range("bytes=100-", 250), (100, 249))
+
+    def test_suffix_range(self):
+        self.assertEqual(parse_http_byte_range("bytes=-50", 200), (150, 199))
+
+    def test_clamps_to_file_end(self):
+        self.assertEqual(parse_http_byte_range("bytes=0-9999", 100), (0, 99))
+
+    def test_missing_or_invalid(self):
+        self.assertIsNone(parse_http_byte_range("", 100))
+        self.assertIsNone(parse_http_byte_range("bytes=20-10", 100))
+        self.assertIsNone(parse_http_byte_range("bytes=100-200", 100))
 
 
 if __name__ == "__main__":

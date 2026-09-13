@@ -93,6 +93,24 @@ def _as_int(value: Any) -> Optional[int]:
     return None
 
 
+def _error_text(*values: Any) -> str:
+    for value in values:
+        if isinstance(value, dict):
+            nested = _first_str(
+                value.get("message"),
+                value.get("value"),
+                value.get("error"),
+                value.get("detail"),
+            )
+            if nested:
+                return nested
+            continue
+        text = _first_str(value)
+        if text and text.upper() not in {"ERROR", "FAILED", "OK", "SUCCESS"}:
+            return text
+    return ""
+
+
 def _first_str(*values: Any) -> str:
     for value in values:
         if isinstance(value, str) and value.strip():
@@ -285,11 +303,13 @@ def normalize_publish_status(payload: Any) -> Dict[str, Any]:
         root.get("state"),
         data.get("state"),
     ).upper()
-    fail_reason = _first_str(
+    fail_reason = _error_text(
         data.get("fail_reason"),
         data.get("error"),
         root.get("fail_reason"),
         root.get("error"),
+        root.get("lastMessage"),
+        root.get("message"),
     )
     public_ids = data.get("publicaly_available_post_id") or data.get(
         "publicly_available_post_id"
@@ -401,6 +421,32 @@ async def query_tiktok_publish_status(
     return res.json() if res.text.strip() else {}
 
 
+def _usable_creator_info(
+    payload: Any,
+    *,
+    fallback_name: str = "",
+    fallback_username: str = "",
+    fallback_avatar: str = "",
+) -> Optional[Dict[str, Any]]:
+    info = normalize_creator_info(
+        payload,
+        fallback_name=fallback_name,
+        fallback_username=fallback_username,
+        fallback_avatar=fallback_avatar,
+    )
+    if not (
+        info["privacy_level_options"] or info["creator_nickname"] or info["error_code"]
+    ):
+        return None
+    if not info["creator_nickname"]:
+        info["creator_nickname"] = fallback_name
+    if not info["creator_username"]:
+        info["creator_username"] = fallback_username
+    if not info["creator_avatar_url"]:
+        info["creator_avatar_url"] = fallback_avatar
+    return info
+
+
 def _integration_row(
     rows: Iterable[Dict[str, Any]], integration_id: str
 ) -> Optional[Dict[str, Any]]:
@@ -437,17 +483,21 @@ async def load_tiktok_creator_info(
     fallback_username = _first_str(integration.get("profile"), integration.get("display"))
     fallback_avatar = _first_str(integration.get("picture"))
 
-    attempts: List[Tuple[str, Any]] = []
-
-    try:
-        attempts.append(
-            (
-                "public",
-                await client.get_tiktok_creator_info_public(api_key, iid),
+    # TikTok's official API is the source of truth. This Postiz build has no
+    # public creator-info route (404) and no getCreatorInfo method (500).
+    token = token_from_postiz_db(iid)
+    if token:
+        try:
+            info = _usable_creator_info(
+                await query_tiktok_creator_info(token),
+                fallback_name=fallback_name,
+                fallback_username=fallback_username,
+                fallback_avatar=fallback_avatar,
             )
-        )
-    except PostizAPIError as exc:
-        logger.info("[SOCIAL] Postiz public creator-info unavailable: %s", exc)
+            if info:
+                return info
+        except PostizAPIError as exc:
+            logger.info("[SOCIAL] Direct TikTok creator_info failed: %s", exc)
 
     session_jwt = ""
     if postiz_email and postiz_password:
@@ -459,44 +509,24 @@ async def load_tiktok_creator_info(
             logger.info("[SOCIAL] Postiz session for creator_info failed: %s", exc)
 
     if session_jwt:
-        for method in ("queryCreatorInfo", "getCreatorInfo"):
-            try:
-                attempts.append(
-                    (
-                        method,
-                        await client.call_integration_function(
-                            session_jwt,
-                            integration_id=iid,
-                            name=method,
-                            data={},
-                        ),
-                    )
-                )
-            except PostizAPIError as exc:
-                logger.info("[SOCIAL] Postiz %s failed: %s", method, exc)
-
-    token = token_from_postiz_db(iid)
-    if token:
+        # queryCreatorInfo is injected by patch-tiktok-scopes.sh. Do not call
+        # getCreatorInfo — stock Postiz TikTok has no such method.
         try:
-            attempts.append(("tiktok", await query_tiktok_creator_info(token)))
+            info = _usable_creator_info(
+                await client.call_integration_function(
+                    session_jwt,
+                    integration_id=iid,
+                    name="queryCreatorInfo",
+                    data={},
+                ),
+                fallback_name=fallback_name,
+                fallback_username=fallback_username,
+                fallback_avatar=fallback_avatar,
+            )
+            if info:
+                return info
         except PostizAPIError as exc:
-            logger.info("[SOCIAL] Direct TikTok creator_info failed: %s", exc)
-
-    for _source, payload in attempts:
-        info = normalize_creator_info(
-            payload,
-            fallback_name=fallback_name,
-            fallback_username=fallback_username,
-            fallback_avatar=fallback_avatar,
-        )
-        if info["privacy_level_options"] or info["creator_nickname"] or info["error_code"]:
-            if not info["creator_nickname"]:
-                info["creator_nickname"] = fallback_name
-            if not info["creator_username"]:
-                info["creator_username"] = fallback_username
-            if not info["creator_avatar_url"]:
-                info["creator_avatar_url"] = fallback_avatar
-            return info
+            logger.info("[SOCIAL] Postiz queryCreatorInfo failed: %s", exc)
 
     raise PostizAPIError(
         "Could not load TikTok creator info. Reconnect TikTok and try again.",
@@ -600,4 +630,13 @@ def _posts_for_integration(payload: Any, integration_id: str) -> List[Dict[str, 
         if ident and ident != "tiktok" and iid:
             continue
         matched.append(row)
+    matched.sort(
+        key=lambda row: _first_str(
+            row.get("publishDate"),
+            row.get("publish_date"),
+            row.get("createdAt"),
+            row.get("updatedAt"),
+        ),
+        reverse=True,
+    )
     return matched

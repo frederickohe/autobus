@@ -369,18 +369,47 @@ class StorageService:
 
         return results
 
+    def head_object_meta(
+        self,
+        file_name: str,
+        folder: Optional[Union["StorageFolder", str]] = None,
+        subfolder: str = "operations/",
+    ) -> Tuple[str, int]:
+        """Return ``(content_type, content_length)`` without downloading the object."""
+        subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
+        s3_key = f"{subfolder}{file_name}"
+        try:
+            head = self.s3_client.head_object(Bucket=self.bucket, Key=s3_key)
+        except ClientError as e:
+            logger.error(f"Contabo S3 head_object error for {file_name}: {str(e)}")
+            raise
+        content_type = str(head.get("ContentType") or "application/octet-stream")
+        length = head.get("ContentLength")
+        if length is None:
+            raise ClientError(
+                {"Error": {"Code": "NotFound", "Message": "Missing ContentLength"}},
+                "HeadObject",
+            )
+        return content_type, int(length)
+
     def iter_object_chunks(
         self,
         file_name: str,
         folder: Optional[Union["StorageFolder", str]] = None,
         subfolder: str = "operations/",
         chunk_size: int = 65536,
+        start: Optional[int] = None,
+        end: Optional[int] = None,
     ) -> Tuple[str, Optional[int], Iterator[bytes]]:
         """Stream an object from Contabo S3 without loading it all into memory."""
         subfolder = self.resolve_subfolder(folder=folder, subfolder=subfolder)
         s3_key = f"{subfolder}{file_name}"
+        params: dict = {"Bucket": self.bucket, "Key": s3_key}
+        if start is not None:
+            last = "" if end is None else str(end)
+            params["Range"] = f"bytes={start}-{last}"
         try:
-            obj = self.s3_client.get_object(Bucket=self.bucket, Key=s3_key)
+            obj = self.s3_client.get_object(**params)
         except ClientError as e:
             logger.error(f"Contabo S3 get_object error for {file_name}: {str(e)}")
             raise
