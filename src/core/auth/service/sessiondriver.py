@@ -31,6 +31,7 @@ class SessionDriver:
             db=0,
             decode_responses=True,
             socket_connect_timeout=5,
+            socket_timeout=5,
         )
         
         # Token configuration (use central settings with sensible fallbacks)
