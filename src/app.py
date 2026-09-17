@@ -43,6 +43,7 @@ from core.orders.controller.order_controller import order_routes
 from core.interventions.controller.intervention_controller import intervention_routes
 from core.conversationmanager.controller.conversation_controller import conversation_routes
 from core.intelligence.controller.intelligence_controller import intelligence_routes
+from core.admin.controller.admin_controller import admin_routes, public_ads_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -62,7 +63,10 @@ async def lifespan(app: FastAPI):
     logger.info("[APP_STARTUP] Application starting...")
     try:
         import utilities.dbmodels  # noqa: F401 — register all ORM models
-        Base.metadata.create_all(bind=engine)
+        try:
+            Base.metadata.create_all(bind=engine)
+        except Exception as create_err:
+            logger.warning("[APP_STARTUP] metadata.create_all skipped: %s", create_err)
         from sqlalchemy import inspect, text
         from core.credits.service.credit_service import CreditService
         from utilities.dbconfig import SessionLocal
@@ -132,6 +136,20 @@ async def lifespan(app: FastAPI):
                         )
                     )
                 logger.info("[APP_STARTUP] Added users.currency_code column")
+            if "platform_role" not in user_cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE users ADD COLUMN platform_role VARCHAR(32)"
+                        )
+                    )
+                    conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_users_platform_role "
+                            "ON users (platform_role)"
+                        )
+                    )
+                logger.info("[APP_STARTUP] Added users.platform_role column")
             if "managed_by_user_id" not in user_cols:
                 with engine.begin() as conn:
                     conn.execute(
@@ -160,6 +178,23 @@ async def lifespan(app: FastAPI):
             synced = CreditService(db).sync_plan_credit_allocations()
             if synced:
                 logger.info(f"[APP_STARTUP] Synced credit allocations for {synced} plan(s)")
+            from sqlalchemy import func as sa_func, or_ as sa_or
+            from core.user.model.User import User as UserModel
+            admin_emails = [
+                e.strip().lower()
+                for e in (settings.ADMIN_EMAILS or "").split(",")
+                if e.strip()
+            ]
+            if admin_emails:
+                seeded = (
+                    db.query(UserModel)
+                    .filter(sa_func.lower(UserModel.email).in_(admin_emails))
+                    .filter(sa_or(UserModel.platform_role.is_(None), UserModel.platform_role == ""))
+                    .update({UserModel.platform_role: "super_admin"}, synchronize_session=False)
+                )
+                if seeded:
+                    db.commit()
+                    logger.info("[APP_STARTUP] Seeded platform_role for %s env admin(s)", seeded)
         finally:
             db.close()
     except Exception as e:
@@ -283,6 +318,8 @@ app.include_router(order_routes, prefix="/api/v1/orders", tags=["Order Routes"])
 app.include_router(intervention_routes, prefix="/api/v1/interventions", tags=["Interventions Routes"])
 app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["Conversation Routes"])
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
+app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
+app.include_router(public_ads_routes, prefix="/api/v1/ads", tags=["Platform Ads"])
 
 # JWT Authentication Settings
 class JWTSettings(BaseSettings):

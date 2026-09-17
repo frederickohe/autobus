@@ -136,6 +136,7 @@ services:
       
       # Frontend and Other URLs
       BASE_FRONTEND_URL: ${BASE_FRONTEND_URL:-https://useautobus.com}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://useautobus.com,https://www.useautobus.com,https://admin.useautobus.com,http://localhost:8080,http://localhost:3000,http://localhost:4200}
       
       # OTP Configuration
       OTP_EXPIRE_MINUTES: ${OTP_EXPIRE_MINUTES:-5}

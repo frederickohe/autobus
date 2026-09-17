@@ -42,6 +42,7 @@ _model_modules = [
 	"core.whatsapp.model.WhatsAppAccount",
 	"core.instagram.model.InstagramAccount",
 	"core.sms_sender_id.model.SmsSenderIdRegistration",
+	"core.admin.model.platform_ad",
 	"core.product.model.product",
 	"core.orders.model.order",
  

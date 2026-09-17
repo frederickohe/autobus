@@ -111,6 +111,8 @@ class User(Base):
     )
 
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Platform admin portal role: super_admin | admin | support. Null = merchant user.
+    platform_role: Mapped[Optional[str]] = mapped_column(String(32), nullable=True, index=True)
     # When set, this user is a linked business managed from another login.
     # Password sign-in is blocked until detach (password reset) clears the FK.
     managed_by_user_id: Mapped[Optional[str]] = mapped_column(

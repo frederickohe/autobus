@@ -118,12 +118,20 @@ def resolve_user_from_jwt(authjwt: AuthJWT, db: Session) -> User:
     return user
 
 
+PLATFORM_ADMIN_ROLES = {"super_admin", "admin", "support"}
+
+
+def platform_role_of(user: User) -> Optional[str]:
+    role = (getattr(user, "platform_role", None) or "").strip().lower()
+    if role in PLATFORM_ADMIN_ROLES:
+        return role
+    if user.id in _admin_id_set() or (user.email or "").lower() in _admin_email_set():
+        return "super_admin"
+    return None
+
+
 def is_platform_admin(user: User) -> bool:
-    if user.id in _admin_id_set():
-        return True
-    if (user.email or "").lower() in _admin_email_set():
-        return True
-    return False
+    return platform_role_of(user) is not None
 
 
 def get_current_user(
@@ -144,6 +152,15 @@ def require_admin(
             detail="Admin privileges required",
         )
     return user
+
+
+def require_super_admin(admin: User = Depends(require_admin)) -> User:
+    if platform_role_of(admin) != "super_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super admin privileges required",
+        )
+    return admin
 
 
 def require_self_or_admin(user_id: str, current: User) -> None:

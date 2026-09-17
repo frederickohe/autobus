@@ -97,7 +97,7 @@ class UserService:
         user = self.db.query(User).filter(User.id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-        user.is_active = enabled
+        user.enabled = enabled
         self.db.commit()
         status_msg = "enabled" if enabled else "disabled"
         return MessageResponse(message=f"User {status_msg} successfully")

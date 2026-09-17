@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # Comma-separated browser origins for CORS (never use * with credentials)
     CORS_ORIGINS: str = os.environ.get(
         "CORS_ORIGINS",
-        "https://useautobus.com,https://www.useautobus.com,http://localhost:8080,http://localhost:3000",
+        "https://useautobus.com,https://www.useautobus.com,https://admin.useautobus.com,http://localhost:8080,http://localhost:3000,http://localhost:4200",
     )
 
     # Platform admins (user ids and/or emails). Falls back to ADMIN_NOTIFICATION_USER_IDS.
