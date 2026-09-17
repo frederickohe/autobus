@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import secrets
 import string
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,8 @@ from typing import Optional
 import os
 import smtplib
 import ssl
+import urllib.error
+import urllib.request
 from email.message import EmailMessage
 from sqlalchemy.orm import Session
 from core.otp.model.otp import OTP
@@ -147,55 +150,39 @@ class OTPService:
             seconds = int(settings.OTP_EXPIRE_SECONDS)
             subject = subject or "Your Autobus verification code"
             if body_template:
-                body = body_template.format(otp=otp_code, seconds=seconds)
+                body = body_template.replace("{otp}", otp_code).replace("{seconds}", str(seconds))
             else:
                 body = f"Your verification code is: {otp_code}. Valid for {seconds} seconds."
 
-            smtp_host = settings.ZEPTOMAIL_SMTP_HOST
-            smtp_port = settings.ZEPTOMAIL_SMTP_PORT
-            smtp_username = settings.ZEPTOMAIL_SMTP_USERNAME
-            smtp_password = settings.ZEPTOMAIL_SMTP_PASSWORD
-
-            sender_domain = os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com").strip()
+            sender_domain = (
+                getattr(settings, "ZEPTOMAIL_SENDER_DOMAIN", None)
+                or os.getenv("ZEPTOMAIL_SENDER_DOMAIN", "useautobus.com")
+            ).strip()
             from_email = settings.ZEPTOMAIL_FROM_EMAIL or f"no-reply@{sender_domain}"
+            token = self._zeptomail_token()
 
-            if not smtp_password:
-                # Rollback OTP creation if we cannot send
+            if not token:
                 self.db.delete(otp_record)
                 self.db.commit()
                 logger.error("ZEPTOMAIL_SMTP_PASSWORD/ZEPTOMAIL_API_TOKEN not set; cannot send OTP email")
                 return OTPSendResponse(success=False, message="Email service not configured")
 
-            msg = EmailMessage()
-            msg["Subject"] = subject
-            msg["From"] = from_email
-            msg["To"] = email
-            msg.set_content(body)
-
-            try:
-                if smtp_port == 465:
-                    context = ssl.create_default_context()
-                    with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as server:
-                        server.login(smtp_username, smtp_password)
-                        server.send_message(msg)
-                else:
-                    with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
-                        server.starttls()
-                        server.login(smtp_username, smtp_password)
-                        server.send_message(msg)
-
-                logger.info(f"OTP email sent successfully to {email}")
+            sent, send_error = self._deliver_email(from_email, email, subject, body, token)
+            if sent:
+                logger.info("OTP email sent successfully to %s", email)
                 return OTPSendResponse(
                     success=True,
                     message="OTP sent successfully to your email",
                     data={"email": email, "expires_at": expires_at.isoformat()},
                 )
-            except Exception as e:
-                # Rollback OTP creation if email send fails
-                self.db.delete(otp_record)
-                self.db.commit()
-                logger.error(f"Failed to send OTP email to {email}: {e}")
-                return OTPSendResponse(success=False, message="Failed to send OTP email. Please try again.")
+
+            self.db.delete(otp_record)
+            self.db.commit()
+            logger.error("Failed to send OTP email to %s: %s", email, send_error)
+            return OTPSendResponse(
+                success=False,
+                message=send_error or "Failed to send OTP email. Please try again.",
+            )
             
         except Exception as e:
             logger.error(f"Error sending OTP to email {email}: {str(e)}")
@@ -203,6 +190,118 @@ class OTPService:
                 success=False,
                 message="Failed to send OTP. Please try again."
             )
+
+    @staticmethod
+    def _zeptomail_token() -> str:
+        raw = (
+            settings.ZEPTOMAIL_SMTP_PASSWORD
+            or os.getenv("ZEPTOMAIL_API_TOKEN")
+            or ""
+        ).strip()
+        prefix = "zoho-enczapikey "
+        if raw.lower().startswith(prefix):
+            return raw[len(prefix) :].strip()
+        return raw
+
+    def _deliver_email(
+        self,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        token: str,
+    ) -> tuple[bool, str]:
+        api_error = self._send_zeptomail_http(from_email, to_email, subject, body, token)
+        if api_error is None:
+            return True, ""
+        logger.warning("ZeptoMail HTTP send failed, trying SMTP: %s", api_error)
+        smtp_error = self._send_zeptomail_smtp(from_email, to_email, subject, body, token)
+        if smtp_error is None:
+            return True, ""
+        return False, api_error or smtp_error
+
+    def _send_zeptomail_http(
+        self,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        token: str,
+    ) -> Optional[str]:
+        api_url = (
+            os.getenv("ZEPTOMAIL_API_URL") or "https://api.zeptomail.com/v1.1/email"
+        ).strip()
+        payload = {
+            "from": {"address": from_email, "name": "Autobus Admin"},
+            "to": [{"email_address": {"address": to_email}}],
+            "subject": subject,
+            "textbody": body,
+        }
+        request = urllib.request.Request(
+            api_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Zoho-enczapikey {token}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                if 200 <= response.status < 300:
+                    return None
+                return f"ZeptoMail API returned HTTP {response.status}"
+        except urllib.error.HTTPError as exc:
+            detail = ""
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")
+                parsed = json.loads(raw)
+                err = parsed.get("error") or parsed
+                if isinstance(err, dict):
+                    detail = str(err.get("message") or err.get("details") or raw[:240])
+                else:
+                    detail = raw[:240]
+            except Exception:
+                detail = str(exc)
+            return f"ZeptoMail rejected the email ({exc.code}): {detail}".strip()
+        except Exception as exc:
+            return f"Could not reach ZeptoMail API: {exc}"
+
+    def _send_zeptomail_smtp(
+        self,
+        from_email: str,
+        to_email: str,
+        subject: str,
+        body: str,
+        token: str,
+    ) -> Optional[str]:
+        smtp_host = settings.ZEPTOMAIL_SMTP_HOST
+        smtp_port = settings.ZEPTOMAIL_SMTP_PORT
+        smtp_username = settings.ZEPTOMAIL_SMTP_USERNAME or "emailapikey"
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = from_email
+        msg["To"] = to_email
+        msg.set_content(body)
+        context = ssl.create_default_context()
+        try:
+            if smtp_port == 465:
+                with smtplib.SMTP_SSL(smtp_host, smtp_port, context=context, timeout=30) as server:
+                    server.login(smtp_username, token)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
+                    server.ehlo()
+                    server.starttls(context=context)
+                    server.ehlo()
+                    server.login(smtp_username, token)
+                    server.send_message(msg)
+            return None
+        except smtplib.SMTPAuthenticationError:
+            return "Email server rejected login. Check the ZeptoMail send-mail token."
+        except Exception as exc:
+            return f"SMTP send failed: {exc}"
 
     def validate_otp(
         self,

@@ -55,9 +55,14 @@ def admin_dashboard(
 
 
 @admin_routes.get("/merchants", response_model=List[MerchantResponse])
-def list_merchants(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def list_merchants(
+    q: Optional[str] = Query(None),
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     _ = admin
-    return AdminService(db).list_merchants()
+    return AdminService(db).list_merchants(q=q, limit=limit)
 
 
 @admin_routes.get("/merchants/{merchant_id}", response_model=MerchantResponse)

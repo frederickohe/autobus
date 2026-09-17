@@ -263,14 +263,22 @@ class AdminService:
             return start, end
         return today - timedelta(days=29), now + timedelta(days=1)
 
-    def list_merchants(self) -> List[MerchantResponse]:
-        rows = (
-            self.db.query(User)
-            .filter(self._merchant_filter(), self._not_deleted())
-            .order_by(User.created_at.desc())
-            .all()
-        )
-        return [self._merchant_to_dto(u) for u in rows]
+    def list_merchants(self, q: Optional[str] = None, limit: Optional[int] = None) -> List[MerchantResponse]:
+        query = self.db.query(User).filter(self._merchant_filter(), self._not_deleted())
+        term = (q or "").strip()
+        if term:
+            like = f"%{term}%"
+            query = query.filter(
+                or_(
+                    User.company.ilike(like),
+                    User.fullname.ilike(like),
+                    User.email.ilike(like),
+                )
+            )
+        query = query.order_by(User.created_at.desc())
+        if limit:
+            query = query.limit(limit)
+        return [self._merchant_to_dto(u) for u in query.all()]
 
     def get_merchant(self, merchant_id: str) -> MerchantResponse:
         user = self._get_merchant_or_404(merchant_id)
