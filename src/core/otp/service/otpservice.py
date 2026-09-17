@@ -115,8 +115,17 @@ class OTPService:
                 message="Failed to send OTP. Please try again."
             )
 
-    def send_otp_email(self, email: str) -> OTPSendResponse:
-        """Send OTP to email address"""
+    def send_otp_email(
+        self,
+        email: str,
+        *,
+        subject: Optional[str] = None,
+        body_template: Optional[str] = None,
+    ) -> OTPSendResponse:
+        """Send OTP to email address.
+
+        `body_template` may include `{otp}` and `{seconds}` placeholders.
+        """
         try:
             otp_code = self.generate_otp()
             expires_at = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_EXPIRE_SECONDS)
@@ -135,8 +144,12 @@ class OTPService:
             self.db.commit()
             self.db.refresh(otp_record)
 
-            subject = "Your Autobus verification code"
-            body = f"Your verification code is: {otp_code}. Valid for {settings.OTP_EXPIRE_SECONDS} seconds."
+            seconds = int(settings.OTP_EXPIRE_SECONDS)
+            subject = subject or "Your Autobus verification code"
+            if body_template:
+                body = body_template.format(otp=otp_code, seconds=seconds)
+            else:
+                body = f"Your verification code is: {otp_code}. Valid for {seconds} seconds."
 
             smtp_host = settings.ZEPTOMAIL_SMTP_HOST
             smtp_port = settings.ZEPTOMAIL_SMTP_PORT

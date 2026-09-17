@@ -92,9 +92,13 @@ def delete_merchant(
 
 
 @admin_routes.get("/customers", response_model=List[CustomerResponse])
-def list_customers(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+def list_customers(
+    merchant_id: Optional[str] = Query(None),
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     _ = admin
-    return AdminService(db).list_customers()
+    return AdminService(db).list_customers(merchant_id)
 
 
 @admin_routes.get("/customers/{customer_id}", response_model=CustomerResponse)
@@ -298,7 +302,7 @@ def list_admins(admin: User = Depends(require_admin), db: Session = Depends(get_
 @admin_routes.post("/admins", response_model=AdminUserResponse)
 def invite_admin(
     payload: AdminInviteRequest,
-    admin: User = Depends(require_super_admin),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     return AdminService(db).invite_admin(payload, admin)
@@ -307,7 +311,7 @@ def invite_admin(
 @admin_routes.post("/admins/{admin_id}/resend")
 def resend_admin_invite(
     admin_id: str,
-    admin: User = Depends(require_super_admin),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     _ = admin
@@ -328,7 +332,7 @@ def update_admin_role(
 @admin_routes.delete("/admins/{admin_id}")
 def remove_admin(
     admin_id: str,
-    admin: User = Depends(require_super_admin),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     AdminService(db).remove_admin(admin_id, admin)

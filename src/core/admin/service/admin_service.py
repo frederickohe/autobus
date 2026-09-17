@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import secrets
 import string
 import uuid
@@ -356,8 +357,11 @@ class AdminService:
             joined=_fmt_date(customer.created_at),
         )
 
-    def list_customers(self) -> List[CustomerResponse]:
-        customers = self.db.query(Customer).order_by(Customer.created_at.desc()).all()
+    def list_customers(self, merchant_id: Optional[str] = None) -> List[CustomerResponse]:
+        query = self.db.query(Customer)
+        if merchant_id:
+            query = query.filter(Customer.user_id == merchant_id)
+        customers = query.order_by(Customer.created_at.desc()).all()
         merchant_ids = {c.user_id for c in customers}
         merchants = {
             u.id: u
@@ -725,15 +729,42 @@ class AdminService:
             )
         return out
 
+    def _send_invite_email(self, user: User) -> None:
+        role = platform_role_of(user) or "admin"
+        role_label = ROLE_TO_LABEL.get(role, "Admin")
+        portal = (os.getenv("ADMIN_PORTAL_URL") or "https://admin.useautobus.com").rstrip("/")
+        result = OTPService(self.db).send_otp_email(
+            user.email,
+            subject="You're invited to Autobus Admin",
+            body_template=(
+                f"Hi {user.fullname},\n\n"
+                f"You've been invited to the Autobus admin portal as {role_label}.\n\n"
+                "Your verification code is: {otp}\n"
+                "It is valid for {seconds} seconds.\n\n"
+                f"Open {portal}/forgot-password, enter {user.email}, verify this code, "
+                "and set your password to sign in.\n"
+            ),
+        )
+        if not result.success:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=result.message or "Could not send the invite email. Check email settings and try Resend invite.",
+            )
+
     def invite_admin(self, payload: AdminInviteRequest, current: User) -> AdminUserResponse:
         role = LABEL_TO_ROLE[payload.role]
+        if role == "super_admin" and platform_role_of(current) != "super_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can invite another super admin",
+            )
         email = str(payload.email).strip().lower()
         existing = self.db.query(User).filter(func.lower(User.email) == email).first()
         if existing and platform_role_of(existing):
             raise HTTPException(status_code=400, detail="An admin with this email already exists")
+        created_new = False
         if existing:
             existing.platform_role = role
-            existing.enabled = True
             self.db.commit()
             self.db.refresh(existing)
             user = existing
@@ -749,7 +780,7 @@ class AdminService:
                 email=email,
                 hashed_password=self.auth.hash_password(temp_password),
                 platform_role=role,
-                enabled=True,
+                enabled=False,
                 onboarding_completed=True,
                 company="Autobus Admin",
                 created_at=datetime.now(timezone.utc),
@@ -757,13 +788,14 @@ class AdminService:
             self.db.add(user)
             self.db.commit()
             self.db.refresh(user)
-        OTPService(self.db).send_otp_email(user.email)
+            created_new = True
+        self._send_invite_email(user)
         return AdminUserResponse(
             id=user.id,
             fullName=user.fullname,
             email=user.email,
             role=payload.role,
-            status="invited",
+            status="invited" if created_new or not user.enabled else "active",
             invitedOn="Today",
             isCurrentUser=False,
             envLocked=False,
@@ -773,9 +805,7 @@ class AdminService:
         user = self.db.query(User).filter(User.id == admin_id).first()
         if not user or not platform_role_of(user):
             raise HTTPException(status_code=404, detail="Admin not found")
-        result = OTPService(self.db).send_otp_email(user.email)
-        if not result.success:
-            raise HTTPException(status_code=500, detail=result.message)
+        self._send_invite_email(user)
 
     def update_admin_role(self, admin_id: str, role_label: AdminRoleLabel, current: User) -> AdminUserResponse:
         user = self.db.query(User).filter(User.id == admin_id).first()
@@ -798,7 +828,14 @@ class AdminService:
         env_locked = user.id in _admin_id_set() or (user.email or "").lower() in _admin_email_set()
         if env_locked:
             raise HTTPException(status_code=400, detail="This admin is locked by server configuration")
-        if platform_role_of(user) == "super_admin" and self._super_admin_count() <= 1:
+        target_role = platform_role_of(user)
+        current_role = platform_role_of(current)
+        if current_role != "super_admin" and target_role == "super_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can remove a super admin",
+            )
+        if target_role == "super_admin" and self._super_admin_count() <= 1:
             raise HTTPException(status_code=400, detail="Cannot remove the last super admin")
         user.platform_role = None
         self.db.commit()

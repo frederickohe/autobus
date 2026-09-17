@@ -471,6 +471,10 @@ class AuthService:
                 )
 
             db_user.hashed_password = self.hash_password(request.new_password)
+            from core.auth.dependencies import platform_role_of
+
+            if platform_role_of(db_user):
+                db_user.enabled = True
             self.unlink_managed_account(db_user)
             self.db.commit()
             if db_user.email:
