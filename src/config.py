@@ -157,9 +157,10 @@ class Settings(BaseSettings):
     USD_GHS_RATE: float = float(os.environ.get("USD_GHS_RATE", "0") or 0)
 
     # Apple In-App Purchase (StoreKit 2)
-    APPLE_BUNDLE_ID: str = os.environ.get("APPLE_BUNDLE_ID", "").strip()
+    APPLE_BUNDLE_ID: str = os.environ.get("APPLE_BUNDLE_ID", "com.autobus.app").strip()
     APPLE_IAP_PRODUCT_PREFIX: str = os.environ.get("APPLE_IAP_PRODUCT_PREFIX", "autobus").strip()
     APPLE_IAP_PRODUCT_MAP: str = os.environ.get("APPLE_IAP_PRODUCT_MAP", "").strip()
+    APPLE_IAP_ALLOW_SANDBOX: str = os.environ.get("APPLE_IAP_ALLOW_SANDBOX", "").strip()
 
     # Google Play Billing (Android consumable credits)
     GOOGLE_PLAY_PACKAGE_NAME: str = os.environ.get(

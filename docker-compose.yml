@@ -259,6 +259,10 @@ services:
       # Keep gunicorn RSS bounded on the shared 8GB VPS (see startup.sh).
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
 
+      # StoreKit 2. Sandbox/TestFlight receipts must not grant production credits.
+      APPLE_BUNDLE_ID: ${APPLE_BUNDLE_ID:-com.autobus.app}
+      APPLE_IAP_ALLOW_SANDBOX: ${APPLE_IAP_ALLOW_SANDBOX:-false}
+
     # Cap the API so a leak cannot take down Postgres/Redis/Caddy.
     mem_limit: 1536m
 

@@ -19,6 +19,28 @@ _REFUND_NOTIFICATIONS = {
     "REFUND_REVERSED",
 }
 
+# StoreKit Testing / sandbox never charges a real Apple ID.
+_UNPAID_ENVIRONMENTS = {"SANDBOX", "XCODE", "LOCALTESTING"}
+_CONSUMABLE_TYPES = {"CONSUMABLE"}
+
+
+def _truthy_env(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _sandbox_grants_allowed() -> bool:
+    """Sandbox receipts are valid Apple signatures but are not real charges.
+
+    Production must reject them or TestFlight/sandbox Apple IDs get free credits.
+    Set APPLE_IAP_ALLOW_SANDBOX=true only for App Review or a staging API.
+    """
+    raw = (os.getenv("APPLE_IAP_ALLOW_SANDBOX") or "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return _truthy_env("DEBUG")
+
 
 class AppleIapService:
     def __init__(self, db: Session):
@@ -26,13 +48,15 @@ class AppleIapService:
         self.credits = CreditService(db)
 
     def _expected_bundle_id(self) -> str:
-        return (os.getenv("APPLE_BUNDLE_ID") or "").strip()
+        return (os.getenv("APPLE_BUNDLE_ID") or "com.autobus.app").strip()
 
     def decode_transaction(self, signed_transaction: str) -> dict[str, Any]:
         payload = decode_signed_data(signed_transaction)
         bundle_id = str(payload.get("bundleId") or "")
         expected = self._expected_bundle_id()
-        if expected and bundle_id and bundle_id != expected:
+        if not bundle_id:
+            raise AppleJwsError("Transaction is missing bundleId")
+        if expected and bundle_id != expected:
             raise AppleJwsError(
                 f"Transaction bundleId {bundle_id!r} does not match APPLE_BUNDLE_ID"
             )
@@ -50,11 +74,38 @@ class AppleIapService:
         original_transaction_id = str(payload.get("originalTransactionId") or "")
         transaction_id = str(payload.get("transactionId") or original_transaction_id)
         environment = str(payload.get("environment") or "")
+        env_key = environment.strip().upper()
+        txn_type = str(payload.get("type") or "").strip().upper()
 
         if not product_id or not transaction_id:
             return {
                 "success": False,
                 "message": "App Store transaction is missing product or transaction id",
+            }
+
+        if env_key in _UNPAID_ENVIRONMENTS and not _sandbox_grants_allowed():
+            return {
+                "success": False,
+                "message": (
+                    "This App Store purchase is a sandbox/TestFlight transaction and "
+                    "was not charged. Production credits are granted only after a "
+                    "paid App Store purchase."
+                ),
+                "product_id": product_id,
+                "original_transaction_id": original_transaction_id,
+                "environment": environment,
+            }
+
+        if txn_type and txn_type not in _CONSUMABLE_TYPES:
+            return {
+                "success": False,
+                "message": (
+                    f"App Store product '{product_id}' is {txn_type or 'unknown'}, "
+                    "not a consumable credit pack"
+                ),
+                "product_id": product_id,
+                "original_transaction_id": original_transaction_id,
+                "environment": environment,
             }
 
         if payload.get("revocationDate"):
@@ -90,6 +141,14 @@ class AppleIapService:
                 amount = float(raw_price) / 1000.0
         except (TypeError, ValueError):
             pass
+        if amount <= 0:
+            return {
+                "success": False,
+                "message": "App Store transaction has no payable price",
+                "product_id": product_id,
+                "original_transaction_id": original_transaction_id,
+                "environment": environment,
+            }
 
         result = self.credits.grant_pack(
             user_id=user_id,
