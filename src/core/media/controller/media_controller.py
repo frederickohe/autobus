@@ -19,10 +19,17 @@ from core.agent.tools.google_veo.google_veo_service import (
     GoogleVeoService,
     GoogleVeoTimeoutError,
 )
+from core.media.dto.automedia_dto import (
+    AutomediaAssetDto,
+    AutomediaAssetPatch,
+    AutomediaCampaignDto,
+    AutomediaCampaignUpsert,
+)
 from core.media.dto.media_generation_response import (
     ImageGenerationResponse,
     VideoGenerationResponse,
 )
+from core.media.service import automedia_library
 from core.media.service.media_generation_options import (
     apply_kind_brief,
     media_kind_for,
@@ -264,3 +271,78 @@ async def generate_video(
     except Exception as e:
         logger.error("Video generation failed: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Video generation failed")
+
+
+@media_routes.get("/automedia/campaigns", response_model=list[AutomediaCampaignDto])
+def list_automedia_campaigns(
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.list_campaigns(db, user_id)
+
+
+@media_routes.get("/automedia/campaigns/{campaign_id}", response_model=AutomediaCampaignDto)
+def get_automedia_campaign(
+    campaign_id: str,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.get_campaign(db, user_id, campaign_id)
+
+
+@media_routes.put("/automedia/campaigns/{campaign_id}", response_model=AutomediaCampaignDto)
+def upsert_automedia_campaign(
+    campaign_id: str,
+    payload: AutomediaCampaignUpsert,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.upsert_campaign(db, user_id, campaign_id, payload)
+
+
+@media_routes.post(
+    "/automedia/campaigns/{campaign_id}/assets",
+    response_model=AutomediaAssetDto,
+)
+def create_automedia_asset(
+    campaign_id: str,
+    payload: AutomediaAssetDto,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.create_asset(db, user_id, campaign_id, payload)
+
+
+@media_routes.patch("/automedia/assets/{asset_id}", response_model=AutomediaAssetDto)
+def patch_automedia_asset(
+    asset_id: str,
+    payload: AutomediaAssetPatch,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.patch_asset(db, user_id, asset_id, payload)
+
+
+@media_routes.delete("/automedia/assets/{asset_id}")
+def delete_automedia_asset(
+    asset_id: str,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    automedia_library.delete_asset(db, user_id, asset_id)
+    return {"ok": True}
+
+
+@media_routes.get("/automedia/characters", response_model=list[AutomediaAssetDto])
+def list_automedia_characters(
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    user_id = automedia_library.resolve_library_user_id(db, authjwt)
+    return automedia_library.list_characters(db, user_id)
