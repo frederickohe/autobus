@@ -68,8 +68,9 @@ class MediaReferenceHelpersTest(unittest.TestCase):
                 (base64.b64encode(b"b").decode(), "image/jpeg"),
             ],
         )
-        self.assertNotIn("image", instance)
-        self.assertEqual(len(instance["referenceImages"]), 2)
+        self.assertIn("image", instance)
+        self.assertEqual(len(instance["referenceImages"]), 1)
+        self.assertEqual(instance["image"]["mimeType"], "image/png")
         self.assertEqual(instance["referenceImages"][0]["referenceType"], "asset")
 
     def test_veo_instance_does_not_send_user_video_as_extension(self):

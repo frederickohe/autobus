@@ -320,12 +320,12 @@ def build_veo_instance(
         )
     if not images:
         return instance
-    if len(images) == 1:
-        instance["image"] = images[0]
-        return instance
-    instance["referenceImages"] = [
-        {"image": image, "referenceType": "asset"} for image in images[:MAX_REFERENCES]
-    ]
+    instance["image"] = images[0]
+    extra = images[1:MAX_REFERENCES]
+    if extra:
+        instance["referenceImages"] = [
+            {"image": image, "referenceType": "asset"} for image in extra
+        ]
     return instance
 
 
