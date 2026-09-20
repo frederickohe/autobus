@@ -7,6 +7,8 @@ import logging
 from typing import Protocol
 from urllib.parse import urlparse
 
+from core.media.service.media_generation_options import image_generation_config, veo_parameters
+
 logger = logging.getLogger(__name__)
 
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
@@ -255,6 +257,7 @@ def build_image_generate_payload(
     references: list[tuple[str, str]] | None = None,
     reference_base64: str | None = None,
     reference_mime_type: str | None = None,
+    aspect_ratio: str | None = None,
 ) -> dict:
     """Gemini generateContent payload; optional inline reference images/videos."""
     parts: list[dict] = [{"text": prompt}]
@@ -281,9 +284,7 @@ def build_image_generate_payload(
                 "parts": parts,
             }
         ],
-        "generationConfig": {
-            "responseModalities": ["TEXT", "IMAGE"],
-        },
+        "generationConfig": image_generation_config(aspect_ratio),
     }
 
 
@@ -334,7 +335,21 @@ def build_veo_payload(
     references: list[tuple[str, str]] | None = None,
     reference_base64: str | None = None,
     reference_mime_type: str | None = None,
+    aspect_ratio: str | None = None,
+    duration_seconds: int | None = None,
+    resolution: str | None = None,
 ) -> dict:
+    parameters: dict = {
+        "sampleCount": 1,
+        "durationSeconds": 8,
+    }
+    parameters.update(
+        veo_parameters(
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
+        )
+    )
     return {
         "instances": [
             build_veo_instance(
@@ -344,8 +359,5 @@ def build_veo_payload(
                 reference_mime_type=reference_mime_type,
             )
         ],
-        "parameters": {
-            "sampleCount": 1,
-            "durationSeconds": 8,
-        },
+        "parameters": parameters,
     }

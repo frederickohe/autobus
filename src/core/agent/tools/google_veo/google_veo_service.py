@@ -127,6 +127,9 @@ class GoogleVeoService:
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
         references: list[tuple[str, str]] | None = None,
+        aspect_ratio: str | None = None,
+        duration_seconds: int | None = None,
+        resolution: str | None = None,
     ) -> str:
         result = await self._generate_video_result(
             prompt,
@@ -134,6 +137,9 @@ class GoogleVeoService:
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
             references=references,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
         )
         if result.uri:
             return result.uri
@@ -147,6 +153,9 @@ class GoogleVeoService:
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
         references: list[tuple[str, str]] | None = None,
+        aspect_ratio: str | None = None,
+        duration_seconds: int | None = None,
+        resolution: str | None = None,
     ) -> VeoVideoResult:
         # Veo does not accept arbitrary user_id on the request body.
         headers, params = self._auth()
@@ -157,6 +166,9 @@ class GoogleVeoService:
             references=references,
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
         )
 
         timeout = self._http_timeout()
@@ -241,6 +253,9 @@ class GoogleVeoService:
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
         references: list[tuple[str, str]] | None = None,
+        aspect_ratio: str | None = None,
+        duration_seconds: int | None = None,
+        resolution: str | None = None,
     ) -> str:
         """
         Generates a video with Veo, downloads it, uploads to Contabo storage,
@@ -252,6 +267,9 @@ class GoogleVeoService:
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
             references=references,
+            aspect_ratio=aspect_ratio,
+            duration_seconds=duration_seconds,
+            resolution=resolution,
         )
         if not result.has_media:
             raise GoogleVeoGenerationError(missing_video_error(result))

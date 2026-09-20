@@ -107,6 +107,7 @@ class GoogleImageService:
         reference_base64: str | None = None,
         reference_mime_type: str | None = None,
         references: list[tuple[str, str]] | None = None,
+        aspect_ratio: str | None = None,
     ) -> str:
         url = f"{self._base_url}/models/{self._model}:generateContent"
 
@@ -117,6 +118,7 @@ class GoogleImageService:
             references=references,
             reference_base64=reference_base64,
             reference_mime_type=reference_mime_type,
+            aspect_ratio=aspect_ratio,
         )
         # Note: Google's Generative Language `generateContent` does not accept an
         # arbitrary `user_id` field; passing it causes INVALID_ARGUMENT.

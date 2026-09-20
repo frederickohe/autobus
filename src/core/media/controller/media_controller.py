@@ -23,6 +23,14 @@ from core.media.dto.media_generation_response import (
     ImageGenerationResponse,
     VideoGenerationResponse,
 )
+from core.media.service.media_generation_options import (
+    apply_kind_brief,
+    media_kind_for,
+    normalize_duration,
+    normalize_image_aspect,
+    normalize_resolution,
+    normalize_video_aspect,
+)
 from core.media.service.media_rag_prompt import enrich_media_generation_prompt
 from core.media.service.media_reference import (
     MediaReferenceError,
@@ -117,6 +125,16 @@ def _grounded_media_prompt(
     )
 
 
+def _store_generated_image(b64: str, mime_type: str, user_id: str | None) -> str | None:
+    try:
+        from core.intelligence.service.owner_agent_campaign import upload_image_bytes
+
+        return upload_image_bytes(user_id or "automedia", b64, mime_type)
+    except Exception as e:
+        logger.warning("Could not store generated image: %s", e)
+        return None
+
+
 @media_routes.post("/generate-image", response_model=ImageGenerationResponse)
 async def generate_image(
     req: MediaGenerationRequest,
@@ -128,6 +146,7 @@ async def generate_image(
     Uses GOOGLE_API_KEY, NANA_BANANA_BASE_URL, and NANA_BANANA_MODEL from the environment.
     The user prompt is grounded with RAG-indexed business documents, website knowledge,
     and the merchant product catalog before it is sent to the image model.
+    Accepts Flow-style references, aspect_ratio, and kind (image|character).
     """
     try:
         references = await resolve_generation_references(req)
@@ -138,16 +157,28 @@ async def generate_image(
     )
     try:
         service = GoogleImageService()
-        grounded_prompt = _grounded_media_prompt(req, db, authjwt, "image")
+        kind = media_kind_for(req.kind, "image")
+        grounded_prompt = _grounded_media_prompt(req, db, authjwt, kind)
+        grounded_prompt = apply_kind_brief(grounded_prompt, req.kind)
         if references:
             grounded_prompt = reference_prompt_prefix(references) + grounded_prompt
+        aspect = normalize_image_aspect(req.aspect_ratio)
         b64 = await service.generate_image_base64(
             grounded_prompt,
             user_id=req.user_id,
             references=references,
+            aspect_ratio=aspect,
         )
         mime_type = service.last_mime_type or "image/png"
-        return ImageGenerationResponse(prompt=req.prompt, image_base64=b64, mime_type=mime_type)
+        image_url = _store_generated_image(b64, mime_type, req.user_id)
+        return ImageGenerationResponse(
+            prompt=req.prompt,
+            image_base64=b64,
+            mime_type=mime_type,
+            image_url=image_url,
+            aspect_ratio=aspect,
+            kind=req.kind,
+        )
     except GoogleImageTimeoutError as e:
         raise HTTPException(status_code=504, detail=str(e))
     except GoogleImageGenerationError as e:
@@ -172,6 +203,7 @@ async def generate_video(
     By default returns the direct Google video URL. Set store=true to also persist on Contabo.
     The user prompt is grounded with RAG-indexed business documents, website knowledge,
     and the merchant product catalog before it is sent to Veo.
+    Accepts Flow-style image references, aspect_ratio, duration_seconds, resolution, and kind (video|scene).
     """
     try:
         references = await resolve_generation_references(req)
@@ -182,29 +214,48 @@ async def generate_video(
     )
     try:
         service = GoogleVeoService()
-        grounded_prompt = _grounded_media_prompt(req, db, authjwt, "video")
+        kind = media_kind_for(req.kind, "video")
+        grounded_prompt = _grounded_media_prompt(req, db, authjwt, kind)
+        grounded_prompt = apply_kind_brief(grounded_prompt, req.kind)
         if references:
             grounded_prompt = reference_prompt_prefix(references) + grounded_prompt
+        aspect = normalize_video_aspect(req.aspect_ratio)
+        duration = normalize_duration(req.duration_seconds)
+        resolution = normalize_resolution(req.resolution)
         if store:
             stored_url = await service.generate_video_and_store(
                 grounded_prompt,
                 user_id=req.user_id,
                 references=references,
+                aspect_ratio=aspect,
+                duration_seconds=duration,
+                resolution=resolution,
             )
             return VideoGenerationResponse(
                 prompt=req.prompt,
                 video_url=stored_url,
                 stored_url=stored_url,
+                aspect_ratio=aspect,
+                duration_seconds=duration,
+                resolution=resolution,
+                kind=req.kind,
             )
         video_url = await service.generate_video_url(
             grounded_prompt,
             user_id=req.user_id,
             references=references,
+            aspect_ratio=aspect,
+            duration_seconds=duration,
+            resolution=resolution,
         )
         return VideoGenerationResponse(
             prompt=req.prompt,
             video_url=video_url,
             stored_url=None,
+            aspect_ratio=aspect,
+            duration_seconds=duration,
+            resolution=resolution,
+            kind=req.kind,
         )
     except GoogleVeoTimeoutError as e:
         raise HTTPException(status_code=504, detail=str(e))
