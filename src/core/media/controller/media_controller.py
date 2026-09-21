@@ -25,6 +25,7 @@ from core.media.dto.automedia_dto import (
     AutomediaCampaignDto,
     AutomediaCampaignUpsert,
 )
+from core.media.dto.video_concat_dto import VideoConcatRequest, VideoConcatResponse
 from core.media.dto.media_generation_response import (
     ImageGenerationResponse,
     VideoGenerationResponse,
@@ -271,6 +272,26 @@ async def generate_video(
     except Exception as e:
         logger.error("Video generation failed: %s", str(e), exc_info=True)
         raise HTTPException(status_code=500, detail="Video generation failed")
+
+
+@media_routes.post("/automedia/concat", response_model=VideoConcatResponse)
+async def concat_automedia_videos(
+    payload: VideoConcatRequest,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Stitch generated scene clips into one MP4 for preview and social posting."""
+    automedia_library.resolve_library_user_id(db, authjwt)
+    from core.media.service.video_concat import VideoConcatError, concat_video_urls
+
+    try:
+        url = await concat_video_urls(payload.urls, payload.aspect_ratio)
+    except VideoConcatError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except Exception as error:
+        logger.error("Scene concat failed: %s", error, exc_info=True)
+        raise HTTPException(status_code=500, detail="Could not assemble the scene video.") from error
+    return VideoConcatResponse(video_url=url, clip_count=len([item for item in payload.urls if item.strip()]))
 
 
 @media_routes.get("/automedia/campaigns", response_model=list[AutomediaCampaignDto])

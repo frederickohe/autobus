@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     bash \
     postgresql-client \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
