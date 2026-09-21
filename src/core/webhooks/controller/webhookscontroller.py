@@ -506,7 +506,24 @@ async def start_dialog(
                 db=db
             )
 
-        # 3. Handle other webhook types
+        # 3. Partner / WABA lifecycle (Embedded Signup). Autobus still needs
+        # the OAuth code to store a token; log enough to debug missed links.
+        elif field == "account_update":
+            waba_info = value.get("waba_info") if isinstance(value, dict) else None
+            if not isinstance(waba_info, dict):
+                waba_info = {}
+            logger.info(
+                "[WA] account_update entry_id=%s event=%s waba_id=%s keys=%s",
+                entry.get("id"),
+                value.get("event") or waba_info.get("event"),
+                value.get("waba_id")
+                or waba_info.get("waba_id")
+                or waba_info.get("waba_business_id"),
+                list(value.keys()) if isinstance(value, dict) else type(value).__name__,
+            )
+            return {"status": "ok", "message": "account_update acknowledged"}
+
+        # 4. Handle other webhook types
         else:
             logger.info(f"Unsupported webhook field: {field}")
             return {"status": "ok", "message": "Webhook type not handled"}
