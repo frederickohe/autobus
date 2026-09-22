@@ -240,26 +240,54 @@ class InstagramOAuthService:
         return data
 
     def exchange_long_lived(self, short_token: str) -> Dict[str, Any]:
-        """Exchange short-lived token for ~60-day long-lived token."""
+        """Exchange a 1-hour token for a 60-day token.
+
+        Meta's documented call is an unversioned
+        ``GET https://graph.instagram.com/access_token``. The versioned
+        ``/v21.0/access_token`` path often returns
+        ``Unsupported request - method type: get``. A failed exchange must not
+        be stored as a long-lived token.
+        """
         self.require_config()
-        url = f"{self._versioned_graph()}/access_token"
         params = {
             "grant_type": "ig_exchange_token",
             "client_secret": self.app_secret,
             "access_token": short_token,
         }
-        resp = requests.get(url, params=params, timeout=30)
-        if resp.status_code >= 400:
+        urls = [f"{self.graph_base}/access_token", f"{self._versioned_graph()}/access_token"]
+        last_status = 0
+        last_body = ""
+        seen = set()
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            resp = requests.get(url, params=params, timeout=30)
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                if isinstance(data, dict) and data.get("access_token") and data.get("expires_in"):
+                    return data
+                last_status = resp.status_code
+                last_body = resp.text[:300]
+                logger.warning(
+                    "[IG] long-lived exchange missing token or expiry (%s) %s: %s",
+                    resp.status_code,
+                    url,
+                    last_body,
+                )
+                continue
+            last_status = resp.status_code
+            last_body = resp.text[:300]
             logger.warning(
-                "[IG] long-lived exchange failed (%s): %s — keeping short-lived token",
+                "[IG] long-lived exchange failed (%s) %s: %s",
                 resp.status_code,
-                resp.text[:300],
+                url,
+                last_body,
             )
-            return {"access_token": short_token}
-        data = resp.json()
-        if not data.get("access_token"):
-            return {"access_token": short_token}
-        return data
+        raise RuntimeError(
+            "Instagram did not issue a 60-day access token "
+            f"({last_status}): {last_body or 'empty response'}"
+        )
 
     def fetch_profile(self, access_token: str, ig_user_id: Optional[str] = None) -> Dict[str, Any]:
         """Load Instagram profile.
@@ -466,6 +494,6 @@ class InstagramOAuthService:
             seconds = int(expires_in) if expires_in is not None else None
         except (TypeError, ValueError):
             seconds = None
-        if not seconds:
-            seconds = 60 * 24 * 3600
+        if not seconds or seconds <= 0:
+            return None
         return datetime.now(timezone.utc) + timedelta(seconds=seconds)

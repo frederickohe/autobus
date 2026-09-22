@@ -169,8 +169,10 @@ def complete_instagram_onboarding(db: Session, *, user_id: str, code: str) -> In
     user_id_from_token = short.get("user_id")
 
     long_data = svc.exchange_long_lived(short_token)
-    access_token = long_data.get("access_token") or short_token
-    expires_at = svc.token_expiry(long_data.get("expires_in") or short.get("expires_in"))
+    access_token = str(long_data.get("access_token") or "").strip()
+    expires_at = svc.token_expiry(long_data.get("expires_in"))
+    if not access_token or expires_at is None:
+        raise RuntimeError("Instagram did not return a 60-day access token.")
 
     profile: dict = {}
     try:

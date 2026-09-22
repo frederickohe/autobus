@@ -325,6 +325,25 @@ def _embedded_signup_launch_html(
     const REDIRECT_URI = {redirect_js};
     const OAUTH_DIALOG_URL = {oauth_js};
     const GRAPH_VERSION = {version_js};
+    // FB.login uses the current page URL as redirect_uri. Meta whitelists the
+    // callback with no query string, so ?state=... is reported as not whitelisted.
+    let stayOnPage = true;
+    try {{
+      const canonical = new URL(REDIRECT_URI);
+      if (window.location.origin !== canonical.origin) {{
+        stayOnPage = false;
+        const next = new URL(window.location.href);
+        next.protocol = canonical.protocol;
+        next.host = canonical.host;
+        window.location.replace(next.toString());
+      }} else if (
+        window.location.pathname !== canonical.pathname
+        || window.location.search
+        || window.location.hash
+      ) {{
+        window.history.replaceState(null, '', canonical.pathname);
+      }}
+    }} catch (e) {{}}
     const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
     const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent || '');
@@ -380,7 +399,7 @@ def _embedded_signup_launch_html(
     }});
 
     function launchSignup() {{
-      if (launched) return;
+      if (!stayOnPage || launched) return;
       launched = true;
       setErr('');
       document.getElementById('btn').disabled = true;
@@ -407,6 +426,7 @@ def _embedded_signup_launch_html(
     }}
 
     window.fbAsyncInit = function () {{
+      if (!stayOnPage) return;
       FB.init({{
         appId: APP_ID,
         autoLogAppEvents: true,
@@ -422,7 +442,9 @@ def _embedded_signup_launch_html(
 
     document.getElementById('btn').disabled = false;
     document.getElementById('btn').addEventListener('click', launchSignup);
-    if (IS_IOS) {{
+    if (!stayOnPage) {{
+      setStatus('Opening the WhatsApp link…');
+    }} else if (IS_IOS) {{
       setStatus('Tap Continue with Meta to open Facebook.');
     }} else {{
       setTimeout(launchSignup, 400);
