@@ -68,10 +68,36 @@ class MediaReferenceHelpersTest(unittest.TestCase):
                 (base64.b64encode(b"b").decode(), "image/jpeg"),
             ],
         )
-        self.assertIn("image", instance)
-        self.assertEqual(len(instance["referenceImages"]), 1)
-        self.assertEqual(instance["image"]["mimeType"], "image/png")
+        self.assertNotIn("image", instance)
+        self.assertEqual(len(instance["referenceImages"]), 2)
+        self.assertEqual(instance["referenceImages"][0]["image"]["mimeType"], "image/png")
         self.assertEqual(instance["referenceImages"][0]["referenceType"], "asset")
+        self.assertEqual(instance["referenceImages"][1]["image"]["mimeType"], "image/jpeg")
+
+    def test_veo_reference_images_force_eight_second_duration(self):
+        payload = build_veo_payload(
+            "Keep these products",
+            references=[
+                (base64.b64encode(b"a").decode(), "image/png"),
+                (base64.b64encode(b"b").decode(), "image/jpeg"),
+            ],
+            duration_seconds=4,
+        )
+        self.assertNotIn("image", payload["instances"][0])
+        self.assertEqual(payload["parameters"]["durationSeconds"], 8)
+
+    def test_veo_single_image_keeps_requested_duration(self):
+        payload = build_veo_payload(
+            "Continue from this frame",
+            reference_base64=base64.b64encode(b"frame").decode(),
+            reference_mime_type="image/jpeg",
+            duration_seconds=6,
+            resolution="720p",
+        )
+        self.assertIn("image", payload["instances"][0])
+        self.assertNotIn("referenceImages", payload["instances"][0])
+        self.assertEqual(payload["parameters"]["durationSeconds"], 6)
+        self.assertNotIn("resolution", payload["parameters"])
 
     def test_veo_instance_does_not_send_user_video_as_extension(self):
         instance = build_veo_instance(

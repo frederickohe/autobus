@@ -296,7 +296,11 @@ def build_veo_instance(
     reference_mime_type: str | None = None,
 ) -> dict:
     """
-    Veo instance: text plus optional first-frame / reference images.
+    Veo instance: text plus one supported image mode.
+
+    A single image is the first frame (image-to-video). Several images are
+    asset references only. Veo rejects a request that sets both ``image`` and
+    ``referenceImages`` ("Unsupported video generation request").
 
     User-uploaded videos are not sent as ``video`` — Veo extension only accepts
     a URI from a previous Veo output, and sending bytes leaves an empty result.
@@ -320,12 +324,12 @@ def build_veo_instance(
         )
     if not images:
         return instance
-    instance["image"] = images[0]
-    extra = images[1:MAX_REFERENCES]
-    if extra:
-        instance["referenceImages"] = [
-            {"image": image, "referenceType": "asset"} for image in extra
-        ]
+    if len(images) == 1:
+        instance["image"] = images[0]
+        return instance
+    instance["referenceImages"] = [
+        {"image": image, "referenceType": "asset"} for image in images[:MAX_REFERENCES]
+    ]
     return instance
 
 
@@ -350,14 +354,20 @@ def build_veo_payload(
             resolution=resolution,
         )
     )
+    instance = build_veo_instance(
+        prompt,
+        references=references,
+        reference_base64=reference_base64,
+        reference_mime_type=reference_mime_type,
+    )
+    if instance.get("referenceImages"):
+        # Reference-image video only supports an 8 second output.
+        parameters["durationSeconds"] = 8
+    if instance.get("image"):
+        # Gemini's Veo endpoint rejects image-to-video when resolution is set.
+        # 720p is the default, so the field is unnecessary for a start frame.
+        parameters.pop("resolution", None)
     return {
-        "instances": [
-            build_veo_instance(
-                prompt,
-                references=references,
-                reference_base64=reference_base64,
-                reference_mime_type=reference_mime_type,
-            )
-        ],
+        "instances": [instance],
         "parameters": parameters,
     }
