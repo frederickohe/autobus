@@ -273,22 +273,20 @@ def _embedded_signup_launch_html(
     state: str,
     extras_json: str,
     redirect_uri: str,
-    oauth_dialog_url: str,
     graph_version: str = "v21.0",
 ) -> str:
-    """Hosted Embedded Signup start page.
+    """Hosted Facebook JS SDK bridge — Meta's supported Embedded Signup launch path.
 
-    In-app browsers (Safari View / Chrome Custom Tabs) cannot return an
-    FB.login popup code. Mobile therefore continues in this same tab via
-    Facebook Login for Business (config_id + whitelisted redirect_uri).
-    Desktop still prefers the JS SDK, then falls back to the same dialog.
+    Do not send the user to the Facebook OAuth dialog. That dialog requires
+    redirect_uri to be listed under Valid OAuth Redirect URIs, and this app
+    only whitelists the Postiz Facebook callback. Embedded Signup uses
+    FB.login with config_id on the JavaScript SDK domain instead.
     """
     app_id_js = json.dumps(app_id)
     config_id_js = json.dumps(config_id)
     state_js = json.dumps(state)
     extras_js = extras_json
     redirect_js = json.dumps(redirect_uri)
-    oauth_js = json.dumps(oauth_dialog_url)
     version_js = json.dumps(graph_version)
 
     return f"""<!DOCTYPE html>
@@ -323,32 +321,10 @@ def _embedded_signup_launch_html(
     const STATE = {state_js};
     const EXTRAS = {extras_js};
     const REDIRECT_URI = {redirect_js};
-    const OAUTH_DIALOG_URL = {oauth_js};
     const GRAPH_VERSION = {version_js};
-    // FB.login uses the current page URL as redirect_uri. Meta whitelists the
-    // callback with no query string, so ?state=... is reported as not whitelisted.
-    let stayOnPage = true;
-    try {{
-      const canonical = new URL(REDIRECT_URI);
-      if (window.location.origin !== canonical.origin) {{
-        stayOnPage = false;
-        const next = new URL(window.location.href);
-        next.protocol = canonical.protocol;
-        next.host = canonical.host;
-        window.location.replace(next.toString());
-      }} else if (
-        window.location.pathname !== canonical.pathname
-        || window.location.search
-        || window.location.hash
-      ) {{
-        window.history.replaceState(null, '', canonical.pathname);
-      }}
-    }} catch (e) {{}}
     const IS_IOS = /iPad|iPhone|iPod/.test(navigator.userAgent || '')
       || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-    const IS_MOBILE = IS_IOS || /Android/i.test(navigator.userAgent || '');
     let session = {{ waba_id: null, phone_number_id: null, business_id: null }};
-    let launched = false;
 
     function setStatus(t) {{
       const el = document.getElementById('status');
@@ -361,14 +337,11 @@ def _embedded_signup_launch_html(
       el.hidden = false; el.textContent = t;
     }}
 
-    function goToOauthDialog() {{
-      setStatus('Opening Meta WhatsApp signup…');
-      window.location.replace(OAUTH_DIALOG_URL);
-    }}
-
     function finishWithCode(code) {{
       if (!code) {{
-        goToOauthDialog();
+        setErr('Meta did not return an authorization code. Try again.');
+        document.getElementById('btn').disabled = false;
+        setStatus('Ready when you are.');
         return;
       }}
       const u = new URL(REDIRECT_URI);
@@ -399,24 +372,27 @@ def _embedded_signup_launch_html(
     }});
 
     function launchSignup() {{
-      if (!stayOnPage || launched) return;
-      launched = true;
       setErr('');
       document.getElementById('btn').disabled = true;
       setStatus('Opening Meta WhatsApp signup…');
-      // Custom Tabs / Safari View cannot return FB.login popup codes. Stay in
-      // this tab so Meta redirects back here with ?code= and Autobus can save.
-      if (IS_MOBILE || !window.FB) {{
-        goToOauthDialog();
+      if (!window.FB) {{
+        setErr('Facebook did not load. Disable content blockers for this page and try again.');
+        document.getElementById('btn').disabled = false;
+        setStatus('Ready when you are.');
         return;
       }}
+      // Embedded Signup must use FB.login + config_id. A Facebook OAuth
+      // dialog with redirect_uri is what triggers "not whitelisted in
+      // Client OAuth Settings" — do not fall back to that.
       FB.login(function (response) {{
         const code = response && response.authResponse && response.authResponse.code;
         if (code) {{
           finishWithCode(code);
           return;
         }}
-        goToOauthDialog();
+        setErr('Meta login did not complete. If you closed the popup, tap Continue again.');
+        document.getElementById('btn').disabled = false;
+        setStatus('Ready when you are.');
       }}, {{
         config_id: CONFIG_ID,
         response_type: 'code',
@@ -426,28 +402,22 @@ def _embedded_signup_launch_html(
     }}
 
     window.fbAsyncInit = function () {{
-      if (!stayOnPage) return;
       FB.init({{
         appId: APP_ID,
         autoLogAppEvents: true,
         xfbml: true,
         version: GRAPH_VERSION
       }});
-      if (!IS_MOBILE) {{
-        setStatus('Ready — tap Continue with Meta.');
-        document.getElementById('btn').disabled = false;
-        setTimeout(launchSignup, 400);
-      }}
+      setStatus('Ready — tap Continue with Meta.');
+      document.getElementById('btn').disabled = false;
+      // Auto-launch on Android/desktop only. iOS needs a user tap.
+      if (!IS_IOS) setTimeout(launchSignup, 400);
     }};
 
     document.getElementById('btn').disabled = false;
     document.getElementById('btn').addEventListener('click', launchSignup);
-    if (!stayOnPage) {{
-      setStatus('Opening the WhatsApp link…');
-    }} else if (IS_IOS) {{
+    if (IS_IOS) {{
       setStatus('Tap Continue with Meta to open Facebook.');
-    }} else {{
-      setTimeout(launchSignup, 400);
     }}
   </script>
   <script async defer crossorigin="anonymous"
@@ -486,9 +456,9 @@ async def whatsapp_connect(
         if raw_meta:
             url = svc.build_onboard_url(state)
         else:
-            # Start on META_WHATSAPP_REDIRECT_URI so Facebook's redirect_uri
-            # matches Client OAuth Settings. The launch page then continues
-            # in the same tab on mobile so Custom Tabs receive ?code=.
+            # Start on the JavaScript SDK domain (useautobus.com). Do not 302
+            # into Facebook's OAuth dialog: that redirect_uri is not in
+            # Valid OAuth Redirect URIs.
             url = svc.build_launch_bridge_url(state)
         if launch_mode in {"redirect", "oauth", "ios"}:
             logger.info("[WA] connect launch=%s using callback launch page", launch_mode)
@@ -549,7 +519,6 @@ def _whatsapp_launch_page(state: str) -> HTMLResponse:
             state=state,
             extras_json=json.dumps(svc.embedded_signup_extras()),
             redirect_uri=svc.redirect_uri,
-            oauth_dialog_url=svc.build_oauth_dialog_url(state),
             graph_version=svc.graph_version(),
         )
     )
