@@ -118,6 +118,15 @@ class EmbedService:
         self.db.refresh(row)
         return row, raw
 
+    def revoke_key(self, user_id: str) -> EmbedIntegration:
+        row = self.get_or_create(user_id)
+        row.key_hash = None
+        row.key_prefix = None
+        row.updated_at = datetime.utcnow()
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
     def authenticate(self, raw_key: str) -> EmbedIntegration:
         key = (raw_key or "").strip()
         if not key.startswith(_KEY_PREFIX):

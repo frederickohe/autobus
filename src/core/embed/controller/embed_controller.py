@@ -122,6 +122,12 @@ def rotate_key(current_user: User = Depends(get_current_user), db: Session = Dep
     return payload
 
 
+@portal_embed_routes.delete("/settings/keys")
+def revoke_key(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    service = EmbedService(db)
+    return service.public_settings(service.revoke_key(current_user.id))
+
+
 @embed_routes.post("/messages")
 def post_message(body: EmbedTurnRequest, integration=Depends(_integration), db: Session = Depends(get_db)):
     service = EmbedService(db)

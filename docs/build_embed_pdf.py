@@ -294,7 +294,7 @@ def build():
     story.append(stack([
         card("Web portal only", [
             "Sign in at the Autobus web portal.",
-            "Open Settings, then Embedded chat.",
+            "Open Business Manager, then Embedded chat.",
             "Choose the catalog mode, paste your webhook URL, issue the API key, and turn messages on.",
         ], w, s),
         card("Train the business memory first", [
@@ -308,7 +308,7 @@ def build():
     story.append(Paragraph("What you send, in order", s["h2"]))
     story.append(stack([
         card("A. Issue the key", [
-            "Settings → Embedded chat on the web portal.",
+            "Business Manager → Embedded chat on the web portal.",
             "The full key is shown once. Send it as Authorization: Bearer ab_live_…",
         ], w, s),
         card("B. Optional catalog push", [
