@@ -876,9 +876,7 @@ class IntentProcessor:
             label = product_name or product_id or "that product"
             if is_customer:
                 listing = format_customer_catalog(
-                    catalog_items_from_products(
-                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    ),
+                    catalog_items_from_products(_owned(50)),
                     currency=self._catalog_currency(user_data),
                 )
                 return (
@@ -987,6 +985,16 @@ class IntentProcessor:
         if line_quantity <= 0:
             return "❌ Quantity must be greater than 0."
 
+        from core.embed.scope import for_sub_business, sub_business_from_session
+
+        sub_business_id = sub_business_from_session(user_id or "")
+
+        def _owned(limit: int = 100):
+            return for_sub_business(
+                product_service.get_products_by_user(owner_id, skip=0, limit=limit),
+                sub_business_id,
+            )
+
         matches = []
         product_id = slots.get("product_id")
         if product_id:
@@ -994,21 +1002,17 @@ class IntentProcessor:
             if by_id:
                 matches = [by_id]
         if not matches:
-            matches = product_service.find_products_for_user(str(item_name), owner_id)
-        if not matches:
-            catalog = catalog_items_from_products(
-                product_service.get_products_by_user(owner_id, skip=0, limit=100)
+            matches = for_sub_business(
+                product_service.find_products_for_user(str(item_name), owner_id),
+                sub_business_id,
             )
+        if not matches:
+            owned = _owned(100)
+            catalog = catalog_items_from_products(owned)
             resolved = resolve_catalog_query(str(item_name), catalog)
             if resolved:
                 ids = {item.product_id for item in resolved}
-                matches = [
-                    item
-                    for item in product_service.get_products_by_user(
-                        owner_id, skip=0, limit=100
-                    )
-                    if str(item.product_id) in ids
-                ]
+                matches = [item for item in owned if str(item.product_id) in ids]
         matched_product = matches[0] if len(matches) == 1 else None
         if len(matches) > 1:
             heading = "Which product did you mean?"
@@ -1025,9 +1029,7 @@ class IntentProcessor:
         if is_customer:
             if not matched_product:
                 listing = format_customer_catalog(
-                    catalog_items_from_products(
-                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    ),
+                    catalog_items_from_products(_owned(50)),
                     currency=self._catalog_currency(user_data),
                 )
                 return (
@@ -1037,9 +1039,7 @@ class IntentProcessor:
             stock = getattr(matched_product, "number_in_stock", None)
             if stock is not None and int(stock) <= 0:
                 listing = format_customer_catalog(
-                    catalog_items_from_products(
-                        product_service.get_products_by_user(owner_id, skip=0, limit=50)
-                    ),
+                    catalog_items_from_products(_owned(50)),
                     currency=self._catalog_currency(user_data),
                 )
                 return (
@@ -1062,6 +1062,9 @@ class IntentProcessor:
             metadata["channel"] = "embed"
             metadata["conversation_id"] = turn.get("conversation_id") or ""
             metadata["external_customer_id"] = turn.get("external_customer_id") or ""
+            if turn.get("sub_business_id"):
+                metadata["sub_business_id"] = turn.get("sub_business_id")
+                metadata["sub_business_name"] = turn.get("sub_business_name") or ""
             if matched_product is not None and getattr(matched_product, "external_id", None):
                 metadata["external_id"] = matched_product.external_id
 
@@ -1124,6 +1127,12 @@ class IntentProcessor:
                             "source": "embed",
                             "external_customer_id": metadata.get("external_customer_id") or "",
                             "conversation_id": metadata.get("conversation_id") or "",
+                            "sub_business": {
+                                "external_id": metadata.get("sub_business_id") or "",
+                                "name": metadata.get("sub_business_name") or "",
+                            }
+                            if metadata.get("sub_business_id")
+                            else None,
                             "items": [
                                 {
                                     "external_id": metadata.get("external_id") or "",

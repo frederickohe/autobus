@@ -1,7 +1,7 @@
 """Portal settings use the business login. Partner calls use the embed API key."""
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -21,6 +21,11 @@ class EmbedSettingsUpdate(BaseModel):
     handoff_enabled: Optional[bool] = None
 
 
+class EmbedSubBusiness(BaseModel):
+    external_id: str = Field(..., min_length=1, max_length=128)
+    name: Optional[str] = None
+
+
 class EmbedCustomer(BaseModel):
     external_id: str = Field(..., min_length=1, max_length=128)
     name: Optional[str] = None
@@ -35,12 +40,14 @@ class EmbedMessageBody(BaseModel):
 
 class EmbedTurnRequest(BaseModel):
     conversation_id: Optional[str] = None
+    sub_business: Optional[EmbedSubBusiness] = None
     customer: EmbedCustomer
     message: EmbedMessageBody
 
 
 class EmbedCatalogItem(BaseModel):
     external_id: str
+    sub_business: Optional[EmbedSubBusiness] = None
     kind: str = "product"
     name: str
     description: Optional[str] = None
@@ -53,6 +60,7 @@ class EmbedCatalogItem(BaseModel):
 
 
 class EmbedCatalogSync(BaseModel):
+    sub_business: Optional[EmbedSubBusiness] = None
     items: List[EmbedCatalogItem] = Field(..., min_length=1, max_length=200)
 
 
@@ -62,6 +70,7 @@ class EmbedOrderUpdate(BaseModel):
     order_status: Optional[str] = None
     payment_reference: Optional[str] = None
     external_customer_id: Optional[str] = None
+    sub_business: Optional[EmbedSubBusiness] = None
 
 
 def _bearer(authorization: Optional[str], x_api_key: Optional[str]) -> str:
@@ -126,14 +135,19 @@ def post_message(body: EmbedTurnRequest, integration=Depends(_integration), db: 
 def put_catalog(body: EmbedCatalogSync, integration=Depends(_integration), db: Session = Depends(get_db)):
     service = EmbedService(db)
     try:
-        return service.upsert_catalog(integration, [item.model_dump() for item in body.items])
+        parent = body.sub_business.model_dump() if body.sub_business else None
+        return service.upsert_catalog(integration, [item.model_dump() for item in body.items], parent)
     except PermissionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @embed_routes.get("/catalog")
-def get_catalog(integration=Depends(_integration), db: Session = Depends(get_db)):
-    return {"items": EmbedService(db).list_catalog(integration)}
+def get_catalog(
+    integration=Depends(_integration),
+    db: Session = Depends(get_db),
+    sub_business: Optional[str] = Query(None),
+):
+    return {"items": EmbedService(db).list_catalog(integration, (sub_business or "").strip())}
 
 
 @embed_routes.post("/orders/{order_number}")

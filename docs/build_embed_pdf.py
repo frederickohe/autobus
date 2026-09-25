@@ -8,6 +8,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     CondPageBreak,
+    Flowable,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -15,36 +16,126 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-INK = Color(0.11, 0.13, 0.12)
-GREEN = Color(0.12, 0.42, 0.28)
-SOFT = Color(0.94, 0.97, 0.95)
-LINE = Color(0.75, 0.82, 0.78)
-MUTED = Color(0.33, 0.38, 0.35)
-CREAM = Color(0.98, 0.97, 0.94)
+INK = Color(0.08, 0.14, 0.12)
+GREEN = Color(0.10, 0.52, 0.36)
+DEEP = Color(0.06, 0.22, 0.16)
+SOFT = Color(0.91, 0.96, 0.93)
+LINE = Color(0.82, 0.88, 0.85)
+MUTED = Color(0.36, 0.44, 0.40)
+CREAM = Color(0.97, 0.96, 0.93)
+GOLD = Color(0.72, 0.55, 0.22)
+PAPER = Color(0.985, 0.988, 0.984)
 
 OUT = Path(__file__).with_name("embed-integration.pdf")
 
 
 def styles():
     return {
-        "h1": ParagraphStyle("h1", fontName="Times-Bold", fontSize=20, leading=24, textColor=INK, spaceAfter=4),
-        "h2": ParagraphStyle("h2", fontName="Times-Bold", fontSize=14, leading=18, textColor=GREEN, spaceBefore=8, spaceAfter=6),
-        "body": ParagraphStyle("body", fontName="Times-Roman", fontSize=11, leading=15, textColor=INK, spaceAfter=6),
-        "title": ParagraphStyle("title", fontName="Times-Bold", fontSize=12, leading=15, textColor=GREEN, alignment=TA_LEFT),
-        "card": ParagraphStyle("card", fontName="Times-Roman", fontSize=10, leading=13, textColor=INK),
-        "center": ParagraphStyle("center", fontName="Times-Bold", fontSize=12, leading=14, textColor=GREEN, alignment=TA_CENTER),
-        "th": ParagraphStyle("th", fontName="Times-Bold", fontSize=9, leading=12, textColor=white),
-        "td": ParagraphStyle("td", fontName="Times-Roman", fontSize=9, leading=12, textColor=INK),
-        "code": ParagraphStyle("code", fontName="Courier", fontSize=8, leading=11, textColor=INK),
+        "h1": ParagraphStyle("h1", fontName="Helvetica-Bold", fontSize=22, leading=26, textColor=DEEP, spaceAfter=3),
+        "h2": ParagraphStyle("h2", fontName="Helvetica-Bold", fontSize=13, leading=17, textColor=DEEP, spaceBefore=10, spaceAfter=4),
+        "body": ParagraphStyle("body", fontName="Helvetica", fontSize=10, leading=14, textColor=INK, spaceAfter=6),
+        "title": ParagraphStyle("title", fontName="Helvetica-Bold", fontSize=11, leading=14, textColor=DEEP, alignment=TA_LEFT),
+        "card": ParagraphStyle("card", fontName="Helvetica", fontSize=9, leading=12, textColor=MUTED),
+        "center": ParagraphStyle("center", fontName="Helvetica-Bold", fontSize=11, leading=13, textColor=GREEN, alignment=TA_CENTER),
+        "th": ParagraphStyle("th", fontName="Helvetica-Bold", fontSize=8, leading=11, textColor=white),
+        "td": ParagraphStyle("td", fontName="Helvetica", fontSize=8.5, leading=11, textColor=INK),
+        "code": ParagraphStyle("code", fontName="Courier", fontSize=7.5, leading=10, textColor=DEEP),
     }
+
+
+class SequenceChart(Flowable):
+    """Opening turn diagram: customer, your software, Autobus, your webhook."""
+
+    def __init__(self, width):
+        super().__init__()
+        self.width = width
+        self.height = 108 * mm
+        self.actors = ["Customer", "Your software", "Autobus", "Your webhook"]
+
+    def _head(self, c, x1, y, x2, color):
+        c.setStrokeColor(color)
+        c.setFillColor(color)
+        c.setLineWidth(1.15)
+        c.setLineCap(1)
+        c.line(x1, y, x2, y)
+        direction = 1 if x2 >= x1 else -1
+        path = c.beginPath()
+        tip = x2
+        path.moveTo(tip, y)
+        path.lineTo(tip - direction * 2.4 * mm, y + 1.15 * mm)
+        path.lineTo(tip - direction * 2.4 * mm, y - 1.15 * mm)
+        path.close()
+        c.drawPath(path, fill=1, stroke=0)
+
+    def _pill(self, c, x, y, label, fill, text=DEEP):
+        c.setFont("Helvetica", 7)
+        pad = 2.2 * mm
+        tw = c.stringWidth(label, "Helvetica", 7)
+        w = tw + pad * 2
+        h = 4.6 * mm
+        c.setFillColor(fill)
+        c.roundRect(x - w / 2, y - h / 2, w, h, 2, fill=1, stroke=0)
+        c.setFillColor(text)
+        c.drawCentredString(x, y - 1.1 * mm, label)
+
+    def draw(self):
+        c = self.canv
+        c.setFillColor(PAPER)
+        c.setStrokeColor(LINE)
+        c.setLineWidth(0.6)
+        c.roundRect(0, 0, self.width, self.height, 6, fill=1, stroke=1)
+        n = len(self.actors)
+        col = self.width / n
+        top = self.height - 16 * mm
+        xs = []
+        for i, name in enumerate(self.actors):
+            x = col * i + col / 2
+            xs.append(x)
+            c.setFillColor(DEEP if i == 2 else GREEN)
+            c.roundRect(x - 16 * mm, self.height - 12 * mm, 32 * mm, 7 * mm, 3.5 * mm, fill=1, stroke=0)
+            c.setFillColor(white)
+            c.setFont("Helvetica-Bold", 7.5)
+            c.drawCentredString(x, self.height - 9.4 * mm, name)
+        c.setStrokeColor(LINE)
+        c.setDash(1, 2)
+        c.setLineWidth(0.7)
+        for x in xs:
+            c.line(x, 4 * mm, x, top)
+        c.setDash()
+        messages = [
+            (0, 1, "Says what they want", False),
+            (1, 2, "POST /messages", False),
+            (2, 2, "Match catalog, place order", False),
+            (2, 1, "Reply, cards, actions", True),
+            (1, 0, "Shows the reply", True),
+            (2, 3, "order.created", False),
+        ]
+        y = top - 7 * mm
+        for src, dst, label, reply in messages:
+            color = GOLD if reply else GREEN
+            if src == dst:
+                c.setStrokeColor(color)
+                c.setLineWidth(1.15)
+                c.line(xs[src], y, xs[src] + 12 * mm, y)
+                c.line(xs[src] + 12 * mm, y, xs[src] + 12 * mm, y - 5 * mm)
+                self._head(c, xs[src] + 12 * mm, y - 5 * mm, xs[src], color)
+                self._pill(c, xs[src], y + 3.4 * mm, label, white)
+                y -= 13 * mm
+                continue
+            x1, x2 = xs[src], xs[dst]
+            end = x2 - (2.2 * mm if x2 > x1 else -2.2 * mm)
+            self._head(c, x1, y, end, color)
+            self._pill(c, (x1 + x2) / 2, y + 3.6 * mm, label, white)
+            y -= 11.5 * mm
 
 
 def _box(flowables, width, fill=SOFT):
     table = Table([[flowables]], colWidths=[width])
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), fill),
-        ("BOX", (0, 0), (-1, -1), 0.8, GREEN),
-        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("BOX", (0, 0), (-1, -1), 0.4, LINE),
+        ("LINEBEFORE", (0, 0), (0, 0), 3, GREEN),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
         ("RIGHTPADDING", (0, 0), (-1, -1), 10),
         ("TOPPADDING", (0, 0), (-1, -1), 8),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
@@ -101,9 +192,10 @@ def grid(headers, rows, width, s, widths):
         data.append([Paragraph(cell, s["td"]) for cell in row])
     table = Table(data, colWidths=widths, repeatRows=1)
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), GREEN),
+        ("BACKGROUND", (0, 0), (-1, 0), DEEP),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, SOFT]),
-        ("GRID", (0, 0), (-1, -1), 0.3, LINE),
+        ("GRID", (0, 0), (-1, -1), 0.25, LINE),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
@@ -120,14 +212,21 @@ def code_block(text, width, s):
 
 def header_footer(canvas, doc):
     canvas.saveState()
+    canvas.setFillColor(DEEP)
+    canvas.rect(0, A4[1] - 14 * mm, A4[0], 14 * mm, fill=1, stroke=0)
     canvas.setFillColor(GREEN)
-    canvas.rect(0, A4[1] - 12 * mm, A4[0], 12 * mm, fill=1, stroke=0)
+    canvas.circle(22 * mm, A4[1] - 7 * mm, 2.2 * mm, fill=1, stroke=0)
     canvas.setFillColor(white)
-    canvas.setFont("Times-Bold", 9)
-    canvas.drawString(16 * mm, A4[1] - 8 * mm, "Autobus  ·  Embedded chat")
-    canvas.setFillColor(MUTED)
-    canvas.setFont("Times-Roman", 8)
-    canvas.drawRightString(A4[0] - 16 * mm, 8 * mm, str(doc.page))
+    canvas.setFont("Helvetica-Bold", 9)
+    canvas.drawString(28 * mm, A4[1] - 8.2 * mm, "Autobus")
+    canvas.setFont("Helvetica", 8)
+    canvas.setFillColor(Color(0.78, 0.88, 0.82))
+    canvas.drawString(48 * mm, A4[1] - 8.2 * mm, "Embedded chat")
+    canvas.setFillColor(GREEN)
+    canvas.circle(A4[0] - 22 * mm, 10 * mm, 4 * mm, fill=1, stroke=0)
+    canvas.setFillColor(white)
+    canvas.setFont("Helvetica-Bold", 8)
+    canvas.drawCentredString(A4[0] - 22 * mm, 8.6 * mm, str(doc.page))
     canvas.restoreState()
 
 
@@ -135,7 +234,7 @@ def build():
     s = styles()
     doc = SimpleDocTemplate(
         str(OUT), pagesize=A4,
-        leftMargin=16 * mm, rightMargin=16 * mm, topMargin=18 * mm, bottomMargin=16 * mm,
+        leftMargin=16 * mm, rightMargin=16 * mm, topMargin=20 * mm, bottomMargin=18 * mm,
         title="Autobus embedded chat", author="Autobus",
     )
     w = A4[0] - 32 * mm
@@ -144,23 +243,33 @@ def build():
 
     story.append(Paragraph("Connect your software to Autobus", s["h1"]))
     story.append(Paragraph(
-        "Your product keeps the chat screen. Autobus answers the customer and can place the order. "
+        "The customer talks to your product. Your product asks Autobus. Autobus answers from the catalog and, when the customer confirms, creates the order.",
+        s["body"],
+    ))
+    story.append(Spacer(1, 2 * mm))
+    story.append(SequenceChart(w))
+    story.append(Spacer(1, 4 * mm))
+    story.append(Paragraph(
         "You connect from the Autobus web portal. The mobile app does not manage this integration.",
         s["body"],
     ))
+    story.append(Paragraph("Many stores under one business", s["h2"]))
+    story.append(Paragraph(
+        "A platform such as Shopify keeps one API key. Each call names the store. Autobus answers from that store only, and sends the same store id back.",
+        s["body"],
+    ))
     story.append(stack([
-        card("1. Your software", [
-            "The customer types in your app or site.",
-            "You already know who they are.",
+        card("Your platform", [
+            "One API key for the parent business.",
+            "You already know which store the customer is in.",
         ], w, s),
-        card("2. Autobus", [
-            "Your server sends that message with an API key.",
-            "Autobus reads the business catalog and the business memory.",
+        card("Mark the store", [
+            "Send sub_business.external_id, for example store_12, with the catalog and with each message.",
         ], w, s),
-        card("3. Back to your software", [
-            "You show the reply.",
-            "If an order was placed, the response includes it, and Autobus also calls your webhook.",
-        ], w, s),
+        card("Reply for that store", [
+            "The response, the order, and the webhook all include the same sub_business.",
+            "Route that payload back to store_12. Another store never sees this catalog or this chat.",
+        ], w, s, fill=CREAM),
     ], s, w))
 
     story.append(Paragraph("Two kinds of answers", s["h2"]))

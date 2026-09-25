@@ -54,6 +54,21 @@ Authorization: Bearer ab_live_...
 
 `X-Api-Key: ab_live_...` is accepted as well.
 
+## Stores under one business
+
+A platform that hosts many stores, such as Shopify, uses one Autobus API key for the parent business. Every catalog push, chat message, and order update names the store. Autobus keeps that store’s catalog and conversation separate, and returns the same store on the reply and the webhook so you can route it back.
+
+```json
+{
+  "sub_business": { "external_id": "store_12", "name": "Ama's Shop" },
+  "conversation_id": "thread_441",
+  "customer": { "external_id": "cust_8841", "name": "Ama Mensah" },
+  "message": { "id": "msg_91", "text": "I want 2 bags of rice" }
+}
+```
+
+The response and `order.created` include the same `sub_business`. Omit `sub_business` when the parent business is the only seller. The same product SKU may exist on two stores; Autobus treats them as different items.
+
 ## 2. Catalog
 
 Push this only when catalog mode is **synced**. A managed catalog returns `409`.

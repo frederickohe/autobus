@@ -173,16 +173,19 @@ async def lifespan(app: FastAPI):
                 ("kind", "VARCHAR(16) NOT NULL DEFAULT 'product'"),
                 ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
                 ("stock_tracked", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("sub_business_id", "VARCHAR(128)"),
             ):
                 if col_name not in product_cols:
                     with engine.begin() as conn:
                         conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_sql}"))
                     logger.info("[APP_STARTUP] Added products.%s column", col_name)
             with engine.begin() as conn:
+                conn.execute(text("DROP INDEX IF EXISTS uq_products_user_external_id"))
                 conn.execute(
                     text(
-                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_user_external_id "
-                        "ON products (user_id, external_id) WHERE external_id IS NOT NULL"
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_user_sub_external "
+                        "ON products (user_id, COALESCE(sub_business_id, ''), external_id) "
+                        "WHERE external_id IS NOT NULL"
                     )
                 )
 

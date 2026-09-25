@@ -19,6 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from core.embed.model.embed import EmbedIntegration, EmbedMessageReceipt
+from core.embed.scope import for_sub_business, session_user_id
 from core.embed.turn_context import begin_embed_turn, end_embed_turn
 from core.nlu.nlu import get_nlu_system
 from core.nlu.service.customer_shop import CUSTOMER_SHOP_INTENTS, catalog_items_from_products
@@ -41,6 +42,16 @@ def hash_api_key(raw: str) -> str:
 def sign_webhook_body(secret: str, body: bytes) -> str:
     digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
     return f"sha256={digest}"
+
+
+def _sub_business(body: Dict[str, Any]) -> Dict[str, str]:
+    raw = body.get("sub_business") if isinstance(body, dict) else None
+    if not isinstance(raw, dict):
+        return {"external_id": "", "name": ""}
+    return {
+        "external_id": str(raw.get("external_id") or "").strip(),
+        "name": str(raw.get("name") or "").strip(),
+    }
 
 
 def _slug(value: str) -> str:
@@ -120,14 +131,16 @@ class EmbedService:
             raise PermissionError("Invalid API key")
         return row
 
-    def upsert_catalog(self, row: EmbedIntegration, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def upsert_catalog(self, row: EmbedIntegration, items: List[Dict[str, Any]], sub_business: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         if (row.catalog_mode or "managed") != "synced":
             raise PermissionError("Catalog sync is off. Set catalog mode to synced in the portal.")
+        parent = sub_business or {"external_id": "", "name": ""}
         upserted = []
         failed = []
         for item in items:
             try:
-                product = self._upsert_one(row.user_id, item)
+                item_sub = _sub_business(item) if isinstance(item, dict) and item.get("sub_business") else parent
+                product = self._upsert_one(row.user_id, item, item_sub.get("external_id") or "")
                 upserted.append(self._product_card(product, self._currency(row.user_id)))
             except Exception as exc:
                 failed.append({"external_id": (item or {}).get("external_id"), "error": str(exc)})
@@ -137,17 +150,21 @@ class EmbedService:
             self.deliver(
                 row,
                 "catalog.sync_failed",
-                {"failed": failed, "upserted_count": len(upserted)},
+                {"failed": failed, "upserted_count": len(upserted), "sub_business": parent},
             )
+        if parent.get("external_id"):
+            result["sub_business"] = parent
         return result
 
-    def list_catalog(self, row: EmbedIntegration) -> List[Dict[str, Any]]:
+    def list_catalog(self, row: EmbedIntegration, sub_business_id: str = "") -> List[Dict[str, Any]]:
         products = (
             self.db.query(Product)
             .filter(Product.user_id == row.user_id, Product.external_id.isnot(None))
             .order_by(Product.name)
             .all()
         )
+        if sub_business_id:
+            products = for_sub_business(products, sub_business_id)
         currency = self._currency(row.user_id)
         return [self._product_card(p, currency) for p in products]
 
@@ -160,24 +177,28 @@ class EmbedService:
         conversation_id = str(body.get("conversation_id") or "").strip()
         if not message_id or not text or not external_id:
             raise ValueError("conversation customer.external_id, message.id, and message.text are required")
+        sub = _sub_business(body)
+        receipt_id = f"{sub['external_id']}:{message_id}" if sub["external_id"] else message_id
 
         existing = (
             self.db.query(EmbedMessageReceipt)
             .filter(
                 EmbedMessageReceipt.integration_id == row.id,
-                EmbedMessageReceipt.message_id == message_id,
+                EmbedMessageReceipt.message_id == receipt_id,
             )
             .first()
         )
         if existing and isinstance(existing.response_json, dict):
             return existing.response_json
 
-        nlu_user_id = f"{row.user_id}:{external_id}"
+        nlu_user_id = session_user_id(row.user_id, external_id, sub["external_id"])
         self._seed_customer_slots(nlu_user_id, customer)
         tokens = begin_embed_turn(
             {
                 "conversation_id": conversation_id,
                 "external_customer_id": external_id,
+                "sub_business_id": sub["external_id"],
+                "sub_business_name": sub["name"],
                 "channel": "embed",
             }
         )
@@ -196,21 +217,28 @@ class EmbedService:
                         "type": "conversation.handoff",
                         "conversation_id": conversation_id,
                         "external_customer_id": external_id,
+                        "sub_business": sub if sub["external_id"] else None,
                     }
                 )
 
         products = self._products_for_turn(
-            row.user_id, getattr(state, "current_intent", ""), reply, self._currency(row.user_id)
+            row.user_id,
+            getattr(state, "current_intent", ""),
+            reply,
+            self._currency(row.user_id),
+            sub["external_id"],
         )
         response = {
             "conversation_id": conversation_id or nlu_user_id,
             "reply": {"text": reply, "products": products},
             "actions": actions,
         }
+        if sub["external_id"]:
+            response["sub_business"] = sub
         self.db.add(
             EmbedMessageReceipt(
                 integration_id=row.id,
-                message_id=message_id,
+                message_id=receipt_id,
                 response_json=response,
             )
         )
@@ -222,7 +250,7 @@ class EmbedService:
                 self.db.query(EmbedMessageReceipt)
                 .filter(
                     EmbedMessageReceipt.integration_id == row.id,
-                    EmbedMessageReceipt.message_id == message_id,
+                    EmbedMessageReceipt.message_id == receipt_id,
                 )
                 .first()
             )
@@ -244,6 +272,11 @@ class EmbedService:
             .first()
         )
         if not order:
+            raise LookupError("Order not found")
+        sub = _sub_business(body)
+        metadata = order.custom_metadata if isinstance(order.custom_metadata, dict) else {}
+        stored_sub = str(metadata.get("sub_business_id") or "")
+        if sub["external_id"] and stored_sub and stored_sub != sub["external_id"]:
             raise LookupError("Order not found")
         payload = {}
         for field in ("payment_status", "fulfillment_status", "order_status", "payment_reference"):
@@ -316,13 +349,14 @@ class EmbedService:
         code = getattr(user, "currency_code", None) if user else None
         return (code or "GHS").upper()
 
-    def _products_for_turn(self, user_id: str, intent: str, reply: str, currency: str) -> List[Dict[str, Any]]:
+    def _products_for_turn(self, user_id: str, intent: str, reply: str, currency: str, sub_business_id: str = "") -> List[Dict[str, Any]]:
         products = (
             self.db.query(Product)
             .filter(Product.user_id == user_id)
             .limit(100)
             .all()
         )
+        products = for_sub_business(products, sub_business_id)
         active = [p for p in products if getattr(p, "is_active", True) is not False]
         if intent == "view_products":
             return [self._product_card(p, currency) for p in active[:30]]
@@ -332,7 +366,7 @@ class EmbedService:
             return [self._product_card(p, currency) for p in matched[:12]]
         return []
 
-    def _upsert_one(self, user_id: str, item: Dict[str, Any]) -> Product:
+    def _upsert_one(self, user_id: str, item: Dict[str, Any], sub_business_id: str = "") -> Product:
         external_id = str(item.get("external_id") or "").strip()
         name = str(item.get("name") or "").strip()
         if not external_id or not name:
@@ -368,10 +402,14 @@ class EmbedService:
         product = (
             self.db.query(Product)
             .filter(Product.user_id == user_id, Product.external_id == external_id)
-            .first()
+            .all()
+        )
+        product = next(
+            (row for row in product if (row.sub_business_id or "") == (sub_business_id or "")),
+            None,
         )
         if product is None:
-            inventory_id = f"EXT-{user_id}-{_slug(external_id)}"[:100]
+            inventory_id = f"EXT-{user_id}-{_slug(sub_business_id or 'root')}-{_slug(external_id)}"[:100]
             if self.db.query(Product).filter(Product.inventory_id == inventory_id).first():
                 inventory_id = f"{inventory_id[:90]}-{uuid.uuid4().hex[:8]}"
             product = Product(
@@ -386,6 +424,7 @@ class EmbedService:
                 number_in_stock=stock_qty,
                 link=link,
                 external_id=external_id,
+                sub_business_id=sub_business_id or None,
                 kind=kind,
                 is_active=active,
                 stock_tracked=tracked,
@@ -424,6 +463,7 @@ class EmbedService:
         stock = items[0].stock if items else product.number_in_stock
         return {
             "external_id": product.external_id or "",
+            "sub_business_id": product.sub_business_id or "",
             "product_id": str(product.product_id),
             "kind": product.kind or "product",
             "name": product.name,
@@ -444,6 +484,12 @@ class EmbedService:
             "source": "embed" if metadata.get("channel") == "embed" else (order.order_source or "chat"),
             "external_customer_id": external_customer_id or metadata.get("external_customer_id") or "",
             "conversation_id": metadata.get("conversation_id") or "",
+            "sub_business": {
+                "external_id": metadata.get("sub_business_id") or "",
+                "name": metadata.get("sub_business_name") or "",
+            }
+            if metadata.get("sub_business_id")
+            else None,
             "items": items,
             "total": str(order.total_amount),
             "currency": order.currency_code,

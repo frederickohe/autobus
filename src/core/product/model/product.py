@@ -44,6 +44,7 @@ class Product(Base):
     link: Mapped[Optional[str]] = mapped_column(String(2048), nullable=True)
     # Partner catalog projection. external_id is the caller's SKU.
     external_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
+    sub_business_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True, index=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False, default="product", server_default="product")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     stock_tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")

@@ -590,6 +590,9 @@ class AutobusNLUSystem:
             products = ProductService(db).get_products_by_user(
                 str(owner_id), skip=0, limit=100
             )
+            from core.embed.scope import for_sub_business, sub_business_from_session
+
+            products = for_sub_business(products, sub_business_from_session(user_id))
             return catalog_items_from_products(products)
         except Exception as e:
             logger.warning("[SHOP] Failed to load customer catalog for %s: %s", user_id, e)
