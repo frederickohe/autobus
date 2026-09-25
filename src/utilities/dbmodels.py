@@ -46,6 +46,7 @@ _model_modules = [
 	"core.media.model.automedia",
 	"core.product.model.product",
 	"core.orders.model.order",
+	"core.embed.model.embed",
  
 ]
 

@@ -44,6 +44,7 @@ from core.interventions.controller.intervention_controller import intervention_r
 from core.conversationmanager.controller.conversation_controller import conversation_routes
 from core.intelligence.controller.intelligence_controller import intelligence_routes
 from core.admin.controller.admin_controller import admin_routes, public_ads_routes
+from core.embed.controller.embed_controller import embed_routes, portal_embed_routes
 
 from utilities.dbconfig import Base, engine
 from config import settings
@@ -164,6 +165,26 @@ async def lifespan(app: FastAPI):
                         )
                     )
                 logger.info("[APP_STARTUP] Added users.managed_by_user_id column")
+
+        if "products" in insp.get_table_names():
+            product_cols = {c["name"] for c in insp.get_columns("products")}
+            for col_name, col_sql in (
+                ("external_id", "VARCHAR(128)"),
+                ("kind", "VARCHAR(16) NOT NULL DEFAULT 'product'"),
+                ("is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                ("stock_tracked", "BOOLEAN NOT NULL DEFAULT TRUE"),
+            ):
+                if col_name not in product_cols:
+                    with engine.begin() as conn:
+                        conn.execute(text(f"ALTER TABLE products ADD COLUMN {col_name} {col_sql}"))
+                    logger.info("[APP_STARTUP] Added products.%s column", col_name)
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_user_external_id "
+                        "ON products (user_id, external_id) WHERE external_id IS NOT NULL"
+                    )
+                )
 
         if "otps" in insp.get_table_names():
             try:
@@ -320,6 +341,8 @@ app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["C
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
 app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
 app.include_router(public_ads_routes, prefix="/api/v1/ads", tags=["Platform Ads"])
+app.include_router(portal_embed_routes, prefix="/api/v1/embed/portal", tags=["Embedded chat (portal)"])
+app.include_router(embed_routes, prefix="/api/v1/embed", tags=["Embedded chat"])
 
 # JWT Authentication Settings
 class JWTSettings(BaseSettings):

@@ -1054,6 +1054,17 @@ class IntentProcessor:
             slots.get("subtotal_amount"), default=(unit_price * line_quantity)
         )
 
+        from core.embed.turn_context import embed_turn, record_embed_action
+
+        turn = embed_turn()
+        metadata = dict(slots.get("custom_metadata") or {})
+        if turn:
+            metadata["channel"] = "embed"
+            metadata["conversation_id"] = turn.get("conversation_id") or ""
+            metadata["external_customer_id"] = turn.get("external_customer_id") or ""
+            if matched_product is not None and getattr(matched_product, "external_id", None):
+                metadata["external_id"] = matched_product.external_id
+
         try:
             order_data = OrderCreateDTO(
                 customer_name=customer_name,
@@ -1076,7 +1087,7 @@ class IntentProcessor:
                 payment_details=slots.get("payment_details"),
                 notes=slots.get("notes"),
                 tags=slots.get("tags"),
-                custom_metadata=slots.get("custom_metadata")
+                custom_metadata=metadata or slots.get("custom_metadata"),
             )
         except Exception as e:
             return f"❌ Invalid order details: {str(e)}"
@@ -1103,6 +1114,32 @@ class IntentProcessor:
             price_bit = ""
             if unit_price and unit_price > 0:
                 price_bit = f" at {self._catalog_currency(user_data)} {unit_price} each"
+            if turn:
+                record_embed_action(
+                    {
+                        "type": "order.created",
+                        "order": {
+                            "order_id": str(order.order_id),
+                            "order_number": order.order_number,
+                            "source": "embed",
+                            "external_customer_id": metadata.get("external_customer_id") or "",
+                            "conversation_id": metadata.get("conversation_id") or "",
+                            "items": [
+                                {
+                                    "external_id": metadata.get("external_id") or "",
+                                    "name": item_name,
+                                    "quantity": line_quantity,
+                                    "unit_price": str(unit_price),
+                                }
+                            ],
+                            "total": str(order.total_amount),
+                            "currency": order.currency_code,
+                            "status": "pending",
+                            "payment_status": "pending",
+                            "fulfillment_status": "unfulfilled",
+                        },
+                    }
+                )
             return (
                 f"✅ Order placed for {line_quantity} x {item_name}{price_bit}. "
                 f"Order number: {order.order_number}. "

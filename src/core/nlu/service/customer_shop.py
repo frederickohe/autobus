@@ -313,11 +313,14 @@ class CatalogItem:
 def catalog_items_from_products(products: Iterable[Any]) -> List[CatalogItem]:
     items: List[CatalogItem] = []
     for product in products or []:
+        if getattr(product, "is_active", True) is False:
+            continue
         name = (getattr(product, "name", None) or "").strip()
         if not name:
             continue
         price = getattr(product, "price", None)
-        stock = getattr(product, "number_in_stock", None)
+        stock_tracked = getattr(product, "stock_tracked", True)
+        stock = None if stock_tracked is False else getattr(product, "number_in_stock", None)
         try:
             stock_int = int(stock) if stock is not None else None
         except (TypeError, ValueError):
