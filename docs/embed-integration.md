@@ -31,7 +31,9 @@ sequenceDiagram
 
 ## 1. Turn it on in the portal
 
-In the Autobus app, open **Settings → Embedded chat**.
+On the Autobus **web portal**, open **Settings → Embedded chat**. The mobile app does not manage this integration.
+
+Questions about the business (hours, policies, how you work) are answered from memory you train under **AI Intelligence** on that same web portal. The chat API does not take a dump of business facts on each message. Product prices and stock come from the catalog.
 
 1. Choose a catalog mode.
    - **Managed in Autobus.** Products are entered in the portal. Skip catalog sync.
