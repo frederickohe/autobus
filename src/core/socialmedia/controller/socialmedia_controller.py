@@ -45,6 +45,10 @@ from core.socialmedia.service.tiktok_direct_post import (
     load_tiktok_creator_info,
     load_tiktok_publish_status,
 )
+from core.socialmedia.service.facebook_page_review import (
+    FacebookPageReviewError,
+    load_facebook_page_activity,
+)
 from core.socialmedia.service.postiz_marketing_extract import (
     extract_marketing_text_and_links,
     normalize_digital_marketing_agent_name,
@@ -893,6 +897,31 @@ async def postiz_tiktok_publish_status(
     except PostizAPIError as e:
         status_code = e.status_code if e.status_code in {400, 401, 404} else 502
         raise HTTPException(status_code=status_code, detail=str(e)) from e
+
+
+@social_routes.get("/facebook/page-activity")
+async def facebook_page_activity(
+    integration_id: str = Query("", description="One Postiz Facebook integration. Empty loads every linked Page."),
+    jwt_subject: str = Depends(validate_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Meta businesses and recent Page posts for the linked Facebook Page.
+
+    Used by Marketing → Facebook Page so a person can see which business owns
+    the Page and how people responded to recent posts.
+    """
+    internal_user_id = resolve_internal_user_id(db, jwt_subject)
+    org = PostizOrgService(db).get_for_user(internal_user_id)
+    if not org or not (org.postiz_org_id or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No Postiz workspace for this account yet. Link Facebook Page from Marketing first.",
+        )
+    try:
+        return await load_facebook_page_activity(org.postiz_org_id, integration_id.strip())
+    except FacebookPageReviewError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=exc.message) from exc
 
 
 @social_routes.get("/postiz/posts")
