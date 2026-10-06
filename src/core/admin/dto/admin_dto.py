@@ -202,3 +202,43 @@ class PasswordResetRequest(BaseModel):
     email: EmailStr
     otp: str = Field(..., min_length=4, max_length=12)
     new_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH)
+
+
+ResourceKind = Literal["video", "news", "guide", "other"]
+
+
+class ResourceItemResponse(BaseModel):
+    id: str
+    kind: ResourceKind
+    title: str
+    summary: Optional[str] = None
+    url: Optional[str] = None
+    youtubeId: Optional[str] = None
+    thumbnailUrl: Optional[str] = None
+    industry: Optional[str] = None
+    sourceName: Optional[str] = None
+    body: Optional[str] = None
+    active: bool = True
+    sortOrder: int = 0
+    publishedAt: Optional[str] = None
+
+
+class ResourceUpsertRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    kind: ResourceKind
+    summary: Optional[str] = Field(None, max_length=600)
+    url: Optional[str] = None
+    thumbnailUrl: Optional[str] = None
+    industry: Optional[str] = None
+    sourceName: Optional[str] = Field(None, max_length=120)
+    body: Optional[str] = Field(None, max_length=8000)
+    active: bool = True
+    sortOrder: int = 0
+
+
+class OwnerFeedResponse(BaseModel):
+    industry: Optional[str] = None
+    videos: List[ResourceItemResponse]
+    news: List[ResourceItemResponse]
+    guides: List[ResourceItemResponse]
+    others: List[ResourceItemResponse]

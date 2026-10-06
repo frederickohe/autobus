@@ -43,6 +43,7 @@ _model_modules = [
 	"core.instagram.model.InstagramAccount",
 	"core.sms_sender_id.model.SmsSenderIdRegistration",
 	"core.admin.model.platform_ad",
+	"core.admin.model.owner_resource",
 	"core.media.model.automedia",
 	"core.product.model.product",
 	"core.orders.model.order",

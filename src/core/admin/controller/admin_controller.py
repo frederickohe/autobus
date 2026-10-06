@@ -14,6 +14,9 @@ from core.admin.dto.admin_dto import (
     AdminUserResponse,
     AdResponse,
     AdUpsertRequest,
+    OwnerFeedResponse,
+    ResourceItemResponse,
+    ResourceUpsertRequest,
     CustomerResponse,
     CustomerUpdateRequest,
     DashboardResponse,
@@ -25,11 +28,13 @@ from core.admin.dto.admin_dto import (
     TransactionAdminResponse,
 )
 from core.admin.service.admin_service import AdminService
-from core.auth.dependencies import get_db, require_admin, require_super_admin
+from core.auth.dependencies import get_current_user, get_db, require_admin, require_super_admin
+from core.admin.service.owner_resource_service import OwnerResourceService
 from core.user.model.User import User
 
 admin_routes = APIRouter()
 public_ads_routes = APIRouter()
+owner_resource_routes = APIRouter()
 
 
 @admin_routes.post("/auth/signin", response_model=AdminAuthResponse)
@@ -342,3 +347,59 @@ def remove_admin(
 ):
     AdminService(db).remove_admin(admin_id, admin)
     return {"message": "Admin removed"}
+
+
+@admin_routes.get("/resources", response_model=List[ResourceItemResponse])
+def list_resources(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
+    _ = admin
+    return OwnerResourceService(db).list_all()
+
+
+@admin_routes.post("/resources", response_model=ResourceItemResponse)
+def create_resource(
+    payload: ResourceUpsertRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return OwnerResourceService(db).create(payload)
+
+
+@admin_routes.put("/resources/{resource_id}", response_model=ResourceItemResponse)
+def update_resource(
+    resource_id: str,
+    payload: ResourceUpsertRequest,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return OwnerResourceService(db).update(resource_id, payload)
+
+
+@admin_routes.patch("/resources/{resource_id}/active", response_model=ResourceItemResponse)
+def toggle_resource(
+    resource_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    return OwnerResourceService(db).toggle(resource_id)
+
+
+@admin_routes.delete("/resources/{resource_id}")
+def delete_resource(
+    resource_id: str,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    _ = admin
+    OwnerResourceService(db).delete(resource_id)
+    return {"message": "Resource deleted"}
+
+
+@owner_resource_routes.get("/feed", response_model=OwnerFeedResponse)
+def owner_resource_feed(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return OwnerResourceService(db).feed_for(user)

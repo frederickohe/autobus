@@ -43,7 +43,11 @@ from core.orders.controller.order_controller import order_routes
 from core.interventions.controller.intervention_controller import intervention_routes
 from core.conversationmanager.controller.conversation_controller import conversation_routes
 from core.intelligence.controller.intelligence_controller import intelligence_routes
-from core.admin.controller.admin_controller import admin_routes, public_ads_routes
+from core.admin.controller.admin_controller import (
+    admin_routes,
+    owner_resource_routes,
+    public_ads_routes,
+)
 from core.embed.controller.embed_controller import embed_routes, portal_embed_routes
 
 from utilities.dbconfig import Base, engine
@@ -219,6 +223,14 @@ async def lifespan(app: FastAPI):
                 if seeded:
                     db.commit()
                     logger.info("[APP_STARTUP] Seeded platform_role for %s env admin(s)", seeded)
+            try:
+                from core.admin.service.owner_resource_service import seed_owner_resources
+
+                added = seed_owner_resources(db)
+                if added:
+                    logger.info("[APP_STARTUP] Seeded %s owner resources", added)
+            except Exception as seed_err:
+                logger.warning("[APP_STARTUP] Owner resource seed skipped: %s", seed_err)
         finally:
             db.close()
     except Exception as e:
@@ -344,6 +356,7 @@ app.include_router(conversation_routes, prefix="/api/v1/conversations", tags=["C
 app.include_router(intelligence_routes, prefix="/api/v1/intelligence", tags=["Intelligence / My AI"])
 app.include_router(admin_routes, prefix="/api/v1/admin", tags=["Platform Admin"])
 app.include_router(public_ads_routes, prefix="/api/v1/ads", tags=["Platform Ads"])
+app.include_router(owner_resource_routes, prefix="/api/v1/resources", tags=["Owner Resources"])
 app.include_router(portal_embed_routes, prefix="/api/v1/embed/portal", tags=["Embedded chat (portal)"])
 app.include_router(embed_routes, prefix="/api/v1/embed", tags=["Embedded chat"])
 
