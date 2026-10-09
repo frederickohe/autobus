@@ -202,10 +202,11 @@ class EventNotificationService:
         """Notify the business owner by SMS and in-app that a customer needs attention."""
         merchant_id, customer_channel = self._split_conversation_user_id(user_id)
         customer_label = self._customer_label_for_sms(customer_channel)
-        sms_body = (
-            f"AutoBus: {customer_label} needs your attention. "
-            "Open Live Chats to respond."
-        )
+        ask = " ".join((reason or "").split())
+        if len(ask) > 90:
+            ask = ask[:87].rstrip() + "..."
+        detail = f' They said: "{ask}".' if ask else ""
+        sms_body = f"AutoBus: {customer_label} needs you.{detail} Open Live Chats."
         display_reason = (reason or trigger or "Agent handover").strip()
         data = {
             "event": "intervention_active",
@@ -279,7 +280,8 @@ class EventNotificationService:
         customer = (order.customer_name or "a customer").strip()
         qty = quantity or order.total_quantity
         sms_body = (
-            f"AutoBus: New order {order.order_number} from {customer}. "
+            f"AutoBus: New order {order.order_number} from {customer} "
+            f"({order.customer_phone or 'no phone'}). "
             f"{item_name or 'Item'} x{qty} — "
             f"{order.total_amount} {order.currency_code}. Open Orders to view."
         )

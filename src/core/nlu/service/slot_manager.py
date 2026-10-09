@@ -131,16 +131,25 @@ class SlotManager:
         
         return None
     
-    def _quantity_prompt(self, intent: str) -> str:
+    def _quantity_prompt(self, intent: str, *, for_customer: bool = False) -> str:
         if intent in ("add_product", "update_product"):
             return "How many units are you adding?"
         if intent in ("create_order", "update_order"):
+            if for_customer:
+                return "How many would you like?"
             return "How many units should be ordered?"
         return "How many units?"
 
-    def _slot_description(self, intent: str, slot: str, bill_providers: Dict[str, str]) -> str:
+    def _slot_description(
+        self,
+        intent: str,
+        slot: str,
+        bill_providers: Dict[str, str],
+        *,
+        for_customer: bool = False,
+    ) -> str:
         if slot == "quantity":
-            return self._quantity_prompt(intent)
+            return self._quantity_prompt(intent, for_customer=for_customer)
 
         slot_descriptions = {
             "recipient": "Who would you like to send money to? Please provide the phone number.",
@@ -163,10 +172,10 @@ class SlotManager:
             "period": "For what period?",
             "time_period": "For what time period?",
             "customer_name": "What is the name of the customer (from your saved contacts)?",
-            "item_name": "What product or item is being ordered?",
+            "item_name": "Which one would you like?" if for_customer else "What product or item is being ordered?",
             "order_number": "Which order number should I invoice (e.g. ORD-20260318-12345)?",
             "order_id": "Which order ID should I invoice?",
-            "product_name": "What is the product name?",
+            "product_name": "Which one are you asking about?" if for_customer else "What is the product name?",
             "product_id": "Which product (ID or name)?",
             "price": "What is the price?",
             "condition": "What is the product condition? (e.g. new, used)",
@@ -184,10 +193,14 @@ class SlotManager:
         label = format_slot_label(slot)
         return f"What is the {label.lower()}?"
 
-    def generate_slot_prompt(self, intent: str, missing_slots: List[str]) -> str:
+    def generate_slot_prompt(
+        self, intent: str, missing_slots: List[str], *, for_customer: bool = False
+    ) -> str:
         """Generate natural language prompt for missing slots with intent-aware context"""
 
         if not missing_slots:
+            if for_customer:
+                return "Tell me a bit more so I can help you pick something."
             return "can you be more detailed about your request?"
 
         bill_providers = {
@@ -202,7 +215,16 @@ class SlotManager:
         }
 
         if len(missing_slots) == 1:
-            return self._slot_description(intent, missing_slots[0], bill_providers)
+            return self._slot_description(
+                intent, missing_slots[0], bill_providers, for_customer=for_customer
+            )
+
+        if for_customer:
+            asks = [
+                self._slot_description(intent, slot, bill_providers, for_customer=True)
+                for slot in missing_slots
+            ]
+            return " ".join(asks)
 
         lines = [f"• {format_slot_label(slot)}" for slot in missing_slots]
         return "I still need the following:\n" + "\n".join(lines)

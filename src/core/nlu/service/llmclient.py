@@ -258,6 +258,7 @@ class LLMClient:
                     "You describe retail product photos for a shop assistant. "
                     "Reply with one short line: product type, color, material, and style. "
                     "Ignore shop watermarks, phone numbers, and captions overlaid on the photo. "
+                    "If a code like AB-XXXX is printed on the image, put that code first. "
                     "If the image is not a product, reply exactly NOT_A_PRODUCT."
                 ),
                 user_message="What product is shown in this photo?",

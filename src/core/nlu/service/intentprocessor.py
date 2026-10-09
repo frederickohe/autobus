@@ -138,7 +138,10 @@ class IntentProcessor:
                 + "in the knowledge base (or that a human agent can help)."
             )
 
-        temperature = 0.2 if intent == "business_conversation" else 0.7
+        if self._is_customer_session(user_data):
+            temperature = 0.6
+        else:
+            temperature = 0.2 if intent == "business_conversation" else 0.7
         response = self.llm_client.chat_completion(
             system_prompt=system_prompt,
             user_message=user_message,
@@ -827,6 +830,11 @@ class IntentProcessor:
         owner_id = self._catalog_owner_id(user_id, user_data)
         products = product_service.get_products_by_user(owner_id, category=category)
         if self._is_customer_session(user_data):
+            related_reply = self._related_image_reply(
+                slots, product_service, owner_id, user_data, user_message
+            )
+            if related_reply:
+                return related_reply
             products = self._owned_products(
                 product_service, owner_id, user_id, limit=50, category=category
             )
@@ -916,7 +924,7 @@ class IntentProcessor:
                     currency=self._catalog_currency(user_data),
                 )
                 return self._append_size_note(
-                    f'We do not currently have "{label}" in our listed products.\n\n{listing}',
+                    f'I don\'t have "{label}" on the shelf right now.\n\n{listing}',
                     user_message,
                     owned,
                 )
@@ -1077,7 +1085,7 @@ class IntentProcessor:
                     currency=self._catalog_currency(user_data),
                 )
                 return (
-                    f'We do not currently have "{item_name}" in our listed products.\n\n'
+                    f'I don\'t have "{item_name}" on the shelf right now.\n\n'
                     f"{listing}"
                 )
             stock = getattr(matched_product, "number_in_stock", None)
@@ -1087,7 +1095,7 @@ class IntentProcessor:
                     currency=self._catalog_currency(user_data),
                 )
                 return (
-                    f"{matched_product.name} is currently out of stock.\n\n{listing}"
+                    f"{matched_product.name} just sold out. Here's what we still have:\n\n{listing}"
                 )
             item_name = matched_product.name
 
@@ -1194,9 +1202,10 @@ class IntentProcessor:
                     }
                 )
             return (
-                f"✅ Order placed for {line_quantity} x {item_name}{price_bit}. "
-                f"Order number: {order.order_number}. "
-                f"Total: {order.total_amount} {order.currency_code}."
+                f"Done, I've put {line_quantity} {item_name} aside for you{price_bit}. "
+                f"Your order number is {order.order_number}, "
+                f"total {order.total_amount} {order.currency_code}. "
+                f"We'll confirm the rest with you shortly."
             )
 
         response_lines = [
@@ -1346,6 +1355,43 @@ class IntentProcessor:
                 break
         self._remember_reply_images(urls[:total_limit])
 
+    def _related_image_reply(
+        self,
+        slots: Dict[str, Any],
+        product_service: ProductService,
+        owner_id: str,
+        user_data: Optional[Dict],
+        user_message: str,
+    ) -> Optional[str]:
+        """Reply with the products a customer photo looked like."""
+        raw = str((slots or {}).get("related_product_ids") or "").strip()
+        if not raw:
+            return None
+        resolved_owner = product_service._resolve_user_db_id(owner_id) or owner_id
+        picked = []
+        for product_id in raw.split(","):
+            product_id = product_id.strip()
+            if not product_id:
+                continue
+            product = product_service.get_product_by_id(product_id)
+            if not product or not product.is_active:
+                continue
+            if product.user_id and resolved_owner and product.user_id != resolved_owner:
+                continue
+            picked.append(product)
+        if not picked:
+            return None
+        self._queue_product_images(picked, product_service, per_product=1, total_limit=4)
+        heading = str(slots.get("image_match_heading") or "").strip() or (
+            "These look closest to the photo you sent:"
+        )
+        listing = format_customer_catalog(
+            catalog_items_from_products(picked),
+            heading=heading,
+            currency=self._catalog_currency(user_data),
+        )
+        return self._append_size_note(listing, user_message, picked)
+
     def _append_size_note(self, text: str, user_message: str, products) -> str:
         size = mentioned_size(user_message)
         if not size:
@@ -1363,8 +1409,8 @@ class IntentProcessor:
         if size.lower() in blob:
             return text
         return (
-            f"{text}\n\nI can't confirm size {size} from the listing. "
-            "The shop needs to check whether that size is available."
+            f"{text}\n\nI can't confirm size {size} from what we have listed. "
+            "I'll have the shop check that. I can still hold one while they confirm, if you want."
         )
 
     @staticmethod

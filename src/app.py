@@ -193,6 +193,28 @@ async def lifespan(app: FastAPI):
                     )
                 )
 
+        if "product_images" in insp.get_table_names():
+            image_cols = {c["name"] for c in insp.get_columns("product_images")}
+            for col_name, col_sql in (
+                ("match_code", "VARCHAR(16)"),
+                ("phash", "VARCHAR(32)"),
+                ("published_phash", "VARCHAR(32)"),
+                ("visual_vector", "TEXT"),
+            ):
+                if col_name not in image_cols:
+                    with engine.begin() as conn:
+                        conn.execute(
+                            text(f"ALTER TABLE product_images ADD COLUMN {col_name} {col_sql}")
+                        )
+                    logger.info("[APP_STARTUP] Added product_images.%s column", col_name)
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_product_images_match_code "
+                        "ON product_images (match_code) WHERE match_code IS NOT NULL"
+                    )
+                )
+
         if "otps" in insp.get_table_names():
             try:
                 with engine.begin() as conn:

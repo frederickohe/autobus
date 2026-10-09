@@ -270,6 +270,17 @@ def _looks_like_image(data: bytes) -> bool:
     return False
 
 
+def _stamp_product_code(jpeg: bytes, source_url: str) -> bytes:
+    """Print the catalogue code on images Autobus publishes. Failures stay unstamped."""
+    try:
+        from core.product.service.image_match_service import stamp_outbound_jpeg
+
+        return stamp_outbound_jpeg(jpeg, source_url)
+    except Exception as exc:
+        logger.warning("[IG media] Product code stamp skipped: %s", exc)
+        return jpeg
+
+
 def _download(url: str) -> Tuple[bytes, str]:
     headers = {
         "User-Agent": "AutobusInstagramMediaPrepare/1.0",
@@ -352,6 +363,7 @@ class InstagramMediaPrepareService:
                 else:
                     raise
             else:
+                jpeg = _stamp_product_code(jpeg, source)
                 file_name = f"{uuid.uuid4()}.jpg"
                 public = self._upload(jpeg, file_name, "image/jpeg")
                 self._cache[cache_key] = public

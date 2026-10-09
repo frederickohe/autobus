@@ -114,15 +114,35 @@ class ProductService:
         if replace:
             self.db.query(ProductImage).filter(ProductImage.product_id == product_id).delete()
 
+        created = []
         for index, url in enumerate(urls):
-            self.db.add(
-                ProductImage(
-                    product_id=product_id,
-                    url=url,
-                    sort_order=index,
-                    is_primary=index == 0,
-                )
+            image = ProductImage(
+                product_id=product_id,
+                url=url,
+                sort_order=index,
+                is_primary=index == 0,
             )
+            self.db.add(image)
+            created.append(image)
+        self._assign_image_match_codes(created)
+
+    def _assign_image_match_codes(self, images: List[ProductImage]) -> None:
+        if not images:
+            return
+        try:
+            from core.product.service.image_match_service import ImageMatchService
+
+            ImageMatchService(self.db).assign_codes(images)
+        except Exception as exc:
+            logger.warning("[PRODUCT_SERVICE] Match code assignment skipped: %s", exc)
+
+    def _schedule_image_index(self, product_id: str) -> None:
+        try:
+            from core.product.service.image_match_service import schedule_product_image_index
+
+            schedule_product_image_index(product_id)
+        except Exception as exc:
+            logger.warning("[PRODUCT_SERVICE] Image index schedule skipped: %s", exc)
 
     def add_product_image(
         self,
@@ -131,6 +151,7 @@ class ProductService:
         user_id: Optional[str] = None,
         *,
         set_primary: bool = False,
+        image_bytes: Optional[bytes] = None,
     ) -> Tuple[bool, Optional[ProductImage], Optional[Product], str]:
         """Append an image URL to a product gallery."""
         try:
@@ -160,10 +181,26 @@ class ProductService:
                 is_primary=make_primary,
             )
             self.db.add(image)
+            self._assign_image_match_codes([image])
             self._sync_primary_photo(product)
             self.db.commit()
             self.db.refresh(image)
             product = self.get_product_by_id(product_id)
+            if image_bytes:
+                try:
+                    from core.product.service.image_match_service import (
+                        schedule_product_image_index,
+                    )
+
+                    schedule_product_image_index(
+                        str(product.product_id) if product else product_id,
+                        data=image_bytes,
+                        image_id=str(image.image_id),
+                    )
+                except Exception as exc:
+                    logger.warning("[PRODUCT_SERVICE] Image index schedule skipped: %s", exc)
+            else:
+                self._schedule_image_index(str(product.product_id) if product else product_id)
             return True, image, product, "Product image added successfully"
         except Exception as e:
             self.db.rollback()
@@ -354,6 +391,7 @@ class ProductService:
             )
 
             logger.info(f"[PRODUCT_SERVICE] Product created successfully: {product.inventory_id} with inventory_id: {inventory.inventory_id}")
+            self._schedule_image_index(str(product.product_id))
             return True, product, f"Product {product.inventory_id} created successfully with automatic inventory!"
 
         except Exception as e:
@@ -560,14 +598,14 @@ class ProductService:
                 self.db.query(ProductImage).filter(
                     ProductImage.product_id == product.product_id
                 ).update({ProductImage.is_primary: False})
-                self.db.add(
-                    ProductImage(
-                        product_id=product.product_id,
-                        url=update_data.photo,
-                        sort_order=existing_count,
-                        is_primary=True,
-                    )
+                added = ProductImage(
+                    product_id=product.product_id,
+                    url=update_data.photo,
+                    sort_order=existing_count,
+                    is_primary=True,
                 )
+                self.db.add(added)
+                self._assign_image_match_codes([added])
                 self._sync_primary_photo(product)
 
             if update_data.name:
@@ -597,6 +635,12 @@ class ProductService:
             self.db.refresh(product)
 
             logger.info(f"[PRODUCT_SERVICE] Product updated successfully: {product.inventory_id}")
+            if (
+                update_data.photos is not None
+                or update_data.videos is not None
+                or update_data.photo is not None
+            ):
+                self._schedule_image_index(str(product.product_id))
             return True, product, f"Product {product.inventory_id} updated successfully!"
 
         except Exception as e:
@@ -625,6 +669,17 @@ class ProductService:
                 return False, None, None, permission_error
 
             safe_name = os.path.basename(file_name or "product.jpg")
+            is_video = (content_type or "").startswith("video/") or (
+                safe_name.lower().endswith((".mp4", ".mov", ".m4v", ".webm"))
+            )
+            raw_bytes = None
+            if not is_video:
+                try:
+                    file_obj.seek(0)
+                    raw_bytes = file_obj.read()
+                    file_obj.seek(0)
+                except Exception:
+                    raw_bytes = None
             owner_prefix = (product.user_id or user_id or "unknown").replace("/", "_")
             image_count = (
                 self.db.query(ProductImage)
@@ -634,9 +689,6 @@ class ProductService:
             storage_key = f"{owner_prefix}/{product_id}_{image_count}_{safe_name}"
 
             storage_service = StorageService()
-            is_video = (content_type or "").startswith("video/") or (
-                safe_name.lower().endswith((".mp4", ".mov", ".m4v", ".webm"))
-            )
             photo_url = storage_service.upload_file(
                 file_obj=file_obj,
                 file_name=storage_key,
@@ -646,7 +698,11 @@ class ProductService:
             )
 
             return self.add_product_image(
-                product_id, photo_url, user_id=user_id, set_primary=set_primary
+                product_id,
+                photo_url,
+                user_id=user_id,
+                set_primary=set_primary,
+                image_bytes=raw_bytes,
             )
         except Exception as e:
             self.db.rollback()

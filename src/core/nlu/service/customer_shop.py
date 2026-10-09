@@ -349,9 +349,9 @@ def format_customer_catalog(
     from core.user.currency import format_money
 
     if not catalog:
-        return "We do not have products listed in our catalog yet."
+        return "We don't have anything listed just yet. Tell me what you're after and I'll check with the shop."
     ordered = sorted(catalog, key=lambda item: (not item.in_stock, item.name.lower()))
-    lines = [heading or "Here is what we currently have listed:"]
+    lines = [heading or "Here's what we've got right now:"]
     for index, item in enumerate(ordered[:30], 1):
         bits = [f"{index}. {item.name}"]
         if item.price is not None:
@@ -360,6 +360,7 @@ def format_customer_catalog(
         lines.append(" — ".join(bits))
     if len(ordered) > 30:
         lines.append(f"...and {len(ordered) - 30} more.")
+    lines.append("Tell me which one you want and how many, and I'll set it aside.")
     return "\n".join(lines)
 
 
@@ -370,7 +371,7 @@ def format_customer_product(item: CatalogItem, *, currency: Optional[str] = None
     if item.price is not None:
         bits.append(f"price {format_money(item.price, currency)}")
     bits.append(_stock_phrase(item.stock))
-    line = f"{bits[0]}: {', '.join(bits[1:])}."
+    line = f"{bits[0]} is {', '.join(bits[1:])}."
     extra = []
     if item.category:
         extra.append(item.category)
@@ -379,18 +380,20 @@ def format_customer_product(item: CatalogItem, *, currency: Optional[str] = None
     if extra:
         line = f"{line} {' '.join(extra)}"
     if item.in_stock:
-        line += " Reply with the product name and quantity to place an order."
+        line += " Want me to put some aside for you? Just tell me how many."
     else:
-        line += " It is currently out of stock."
+        line += " That one's sold out right now. I can show you what we still have."
     return line
 
 
 def _stock_phrase(stock: Optional[int]) -> str:
     if stock is None:
-        return "stock not specified"
+        return "ready when you are"
     if stock <= 0:
-        return "out of stock"
-    return f"{stock} in stock"
+        return "sold out"
+    if stock == 1:
+        return "1 left"
+    return f"{stock} ready"
 
 
 def normalize_shop_text(text: str) -> str:

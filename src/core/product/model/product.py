@@ -83,6 +83,11 @@ class ProductImage(Base):
         index=True,
     )
     url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # Short code stamped on copies Autobus publishes, plus fingerprints for matching.
+    match_code: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+    phash: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    published_phash: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    visual_vector: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

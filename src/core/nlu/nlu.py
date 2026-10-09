@@ -40,6 +40,16 @@ from core.nlu.service.customer_shop import (
     looks_like_product_or_order_utterance,
     resolve_catalog_query,
 )
+from core.product.service.image_fingerprint import find_match_code
+from core.product.service.image_match import (
+    MatchDecision,
+    customer_image_intent,
+    photo_should_identify_product,
+)
+from core.product.service.image_match_service import (
+    lookup_match_code,
+    match_customer_image,
+)
 from core.nlu.service.conversation_manager import ConversationManager
 from core.nlu.service.intent_handler_result import IntentHandlerResult
 from core.nlu.service.security import SecurityManager
@@ -69,6 +79,17 @@ from core.intelligence.service.onboarding_index_service import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _customer_image_bytes(media_context: Optional[Dict[str, Any]]) -> Optional[bytes]:
+    encoded = (media_context or {}).get("image_base64")
+    if not encoded:
+        return None
+    try:
+        return base64.b64decode(encoded)
+    except Exception:
+        logger.warning("[IMAGE_MATCH] Customer image was not valid base64")
+        return None
 
 _nlu_system_lock = threading.Lock()
 _nlu_system_instance = None
@@ -829,6 +850,12 @@ class AutobusNLUSystem:
             reason=reason,
             metadata=metadata or {},
         )
+        return self._hold_for_human_reply(user_id)
+
+    def _hold_for_human_reply(self, user_id: str) -> str:
+        """What the customer sees after we pause the bot and text the owner."""
+        if self._is_customer_inbox_user(user_id):
+            return "Give us a few minutes and someone from the shop will get back to you."
         return self.response_formatter.format_response("", "intervention_created")
 
     @classmethod
@@ -879,8 +906,11 @@ class AutobusNLUSystem:
         self, assistant_message: str, user_message: str = ""
     ) -> bool:
         t = (assistant_message or "").strip().lower()
-        empty = "we do not have products listed in our catalog yet"
-        if empty not in t:
+        empty_markers = (
+            "we do not have products listed in our catalog yet",
+            "we don't have anything listed",
+        )
+        if not any(marker in t for marker in empty_markers):
             return False
         # Browse/list with an empty catalog is still a valid AI answer.
         # Ordering (or naming a missing item with no catalog) is not.
@@ -1008,11 +1038,29 @@ class AutobusNLUSystem:
             state.current_intent,
             bool(merchant_id),
         )
+        image_decision = MatchDecision()
+        detect_media = media_context
+        if merchant_id and (media_context.get("image_base64") or media_context.get("image_url")):
+            image_bytes = _customer_image_bytes(media_context)
+            if image_bytes:
+                image_decision = match_customer_image(
+                    merchant_id,
+                    image_bytes,
+                    allowed_product_ids=[item.product_id for item in customer_catalog],
+                )
+                if image_decision.kind == "exact" and photo_should_identify_product(
+                    user_message, customer_catalog
+                ):
+                    detect_media = {
+                        key: value
+                        for key, value in (media_context or {}).items()
+                        if not str(key).startswith("image")
+                    }
         intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
             user_message,
             state.conversation_history,
             state.current_intent,
-            media_context,
+            detect_media,
             customer_session=bool(merchant_id),
         )
         if merchant_id:
@@ -1025,6 +1073,7 @@ class AutobusNLUSystem:
             except Exception:
                 stated_phones = []
             phone_only = bool(stated_phones) and len((user_message or "").split()) <= 4
+            image_override = None
             if looks_like_existing_order_question(user_message) or (
                 phone_only and (state.current_intent or "") != "create_order"
             ):
@@ -1032,6 +1081,23 @@ class AutobusNLUSystem:
                 extracted_slots = {}
                 missing_slots = []
                 state.collected_slots = {}
+            else:
+                code = find_match_code(photo_description)
+                if code and image_decision.kind != "exact":
+                    coded = lookup_match_code(
+                        merchant_id,
+                        code,
+                        allowed_product_ids=[item.product_id for item in customer_catalog],
+                    )
+                    if coded:
+                        image_decision = MatchDecision(kind="exact", hits=[coded])
+                image_override = customer_image_intent(
+                    user_message, customer_catalog, image_decision
+                )
+                if image_override:
+                    intent, extracted_slots, missing_slots = image_override
+            if image_override:
+                pass
             elif photo_description and intent in {"view_product", "view_products", "business_conversation", "create_order"}:
                 matches = resolve_catalog_query(photo_description, customer_catalog)
                 if len(matches) == 1:
@@ -1099,7 +1165,7 @@ class AutobusNLUSystem:
                 trigger="explicit_user_request",
                 reason=(extracted_slots or {}).get("reason") or user_message or "",
             )
-            response = self.response_formatter.format_response("", "intervention_created")
+            response = self._hold_for_human_reply(user_id)
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
         # Customer images the model cannot read → human (the agent can view the photo).
@@ -1129,7 +1195,7 @@ class AutobusNLUSystem:
                 trigger="intent_not_clear",
                 reason=user_message or "intent not clear",
             )
-            response = self.response_formatter.format_response("", "intervention_created")
+            response = self._hold_for_human_reply(user_id)
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
 
@@ -1142,7 +1208,7 @@ class AutobusNLUSystem:
                 reason=user_message or "unknown intent",
                 metadata={"intent": intent},
             )
-            response = self.response_formatter.format_response("", "intervention_created")
+            response = self._hold_for_human_reply(user_id)
             self.conversation_manager.update_conversation_history(user_id, "assistant", response)
             return response
         
@@ -1239,7 +1305,9 @@ class AutobusNLUSystem:
 
         handler_outcome = None
         if current_missing or (len(state.collected_slots) == 1 and 'amount' in state.collected_slots):
-            prompt = self.slot_manager.generate_slot_prompt(intent, current_missing)
+            prompt = self.slot_manager.generate_slot_prompt(
+                intent, current_missing, for_customer=bool(merchant_id)
+            )
             if merchant_id and intent == "create_order" and "item_name" in (current_missing or []):
                 if not customer_catalog:
                     response = self._handoff_because_ai_cannot_handle(
@@ -1260,7 +1328,7 @@ class AutobusNLUSystem:
                 candidates = state.collected_slots.get("item_candidates")
                 guessed = extract_product_query_name(user_message) or (user_message or "").strip()
                 if candidates:
-                    prompt = f"Which one did you mean: {candidates}?"
+                    prompt = f"A couple of those match. Which one do you want: {candidates}?"
                 elif (
                     guessed
                     and not looks_like_order_request(user_message)
@@ -1270,8 +1338,8 @@ class AutobusNLUSystem:
                     and not resolve_catalog_query(guessed, customer_catalog)
                 ):
                     prompt = (
-                        f'We do not currently have "{guessed}" in our listed products.\n\n'
-                        f"{catalog_text}\nWhich product would you like to order?"
+                        f'I don\'t have "{guessed}" on the shelf right now.\n\n'
+                        f"{catalog_text}"
                     )
                 else:
                     prompt = f"{prompt}\n\n{catalog_text}"
@@ -1613,7 +1681,7 @@ class AutobusNLUSystem:
                 reason=str(e),
                 metadata={"intent": intent},
             )
-            return IntentHandlerResult(self.response_formatter.format_response("", "intervention_created"), None)
+            return IntentHandlerResult(self._hold_for_human_reply(user_id), None)
 
     def _process_payment_intent(self, user_id: str, intent: str, slots: Dict, user_message: str = "") -> IntentHandlerResult:
         """Process payment intents through PaymentService"""

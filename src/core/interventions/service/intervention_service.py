@@ -30,7 +30,7 @@ class InterventionService:
     ) -> Intervention:
         conv_date = conversation_date or date.today()
 
-        # If there is already an open intervention for the day, just return it.
+        # An open intervention for today is reused, and the owner is still texted.
         existing = (
             self.db.query(Intervention)
             .filter(
@@ -42,6 +42,13 @@ class InterventionService:
             .first()
         )
         if existing:
+            self._notify_owner(
+                user_id=user_id,
+                intervention_id=int(existing.id),
+                trigger=trigger,
+                reason=reason,
+                conversation_date=conv_date,
+            )
             return existing
 
         intervention = Intervention(
@@ -56,26 +63,43 @@ class InterventionService:
         self.db.commit()
         self.db.refresh(intervention)
 
+        self._notify_owner(
+            user_id=user_id,
+            intervention_id=int(intervention.id),
+            trigger=trigger,
+            reason=reason,
+            conversation_date=conv_date,
+        )
+        return intervention
+
+    def _notify_owner(
+        self,
+        *,
+        user_id: str,
+        intervention_id: int,
+        trigger: str,
+        reason: Optional[str],
+        conversation_date: date,
+    ) -> None:
+        """Text the business owner. Failures stay in the log and do not block the chat."""
         try:
             notify_db = SessionLocal()
             try:
                 EventNotificationService(notify_db).notify_intervention_active(
                     user_id=user_id,
-                    intervention_id=int(intervention.id),
+                    intervention_id=intervention_id,
                     trigger=trigger,
                     reason=reason,
-                    conversation_date=str(conv_date),
+                    conversation_date=str(conversation_date),
                 )
             finally:
                 notify_db.close()
         except Exception:
             logger.exception(
                 "[INTERVENTIONS] Failed to notify owner for intervention %s (%s)",
-                intervention.id,
+                intervention_id,
                 user_id,
             )
-
-        return intervention
 
     def close_intervention(self, *, intervention_id: int, user_id: str) -> Intervention:
         intervention = (

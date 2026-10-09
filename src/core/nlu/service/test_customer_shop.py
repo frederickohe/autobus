@@ -95,6 +95,13 @@ class ExistingOrderQuestionTests(unittest.TestCase):
         self.assertEqual(mentioned_size("Pls is this available in size 39?"), "39")
         self.assertFalse(is_questionish_product_name("Naa"))
 
+    def test_catalog_copy_invites_a_purchase(self):
+        from core.nlu.service.customer_shop import format_customer_catalog
+
+        text = format_customer_catalog([_item("Naa")])
+        self.assertIn("Here's what we've got", text)
+        self.assertIn("how many", text.lower())
+
 
 if __name__ == "__main__":
     unittest.main()

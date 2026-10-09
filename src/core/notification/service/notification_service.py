@@ -30,7 +30,7 @@ class NotificationService:
         
         # If message is provided in data, use it
         if message_template:
-            return message_template[:160]  # SMS length limit
+            return message_template[:320]
         
         # Otherwise, create a default message based on notification type
         type_messages = {
@@ -58,7 +58,7 @@ class NotificationService:
             **data
         )
         
-        return message[:160]  # Ensure SMS length limit
+        return message[:320]
 
     def create_notification(
         self,
