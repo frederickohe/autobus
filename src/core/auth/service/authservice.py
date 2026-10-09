@@ -94,7 +94,7 @@ class AuthService:
     def create_user(self, request: BaseModel):
         """Create a new user in the database."""
         email = self.resolve_signup_email(request.email, request.phone)
-        if self._green_account_email_exists(email):
+        if self._green_account_presence(email) is True:
             adopted = self._adopt_green_account(email, request.password)
             if adopted is None:
                 raise GreenAccountExistsError()
@@ -210,8 +210,6 @@ class AuthService:
             else "User account created successfully, but we couldn't send your OTP. Please request a new OTP."
         )
 
-        self._publish_green_account(db_user)
-
         return {
             "message": otp_message,
             "user_id": db_user.id,
@@ -245,6 +243,7 @@ class AuthService:
         user.updated_at = datetime.now(timezone.utc)
         self.db.commit()
         self.db.refresh(user)
+        self._publish_green_account(user)
 
         payload = {
             "success": True,
@@ -304,14 +303,27 @@ class AuthService:
 
     def signin(self, user: BaseModel):
         """Login the user by generating a JWT token and returning tokens."""
-        try:
-            db_user = self.authenticate_user(user.login_identifier, user.password)
-        except InvalidCredentialsError:
-            db_user = self._adopt_green_account(user.login_identifier, user.password)
+        identifier = (user.login_identifier or "").strip()
+        password = user.password
+        email = self._email_for_green_lookup(identifier)
+        exists = self._green_account_presence(email) if email else None
+        if exists is True:
+            db_user = self._adopt_green_account(email, password)
             if db_user is None:
-                raise
+                raise InvalidCredentialsError()
         else:
-            self._publish_green_account(db_user)
+            try:
+                db_user = self.authenticate_user(identifier, password)
+            except InvalidCredentialsError:
+                if exists is None and email:
+                    db_user = self._adopt_green_account(email, password)
+                    if db_user is None:
+                        raise
+                else:
+                    raise
+            else:
+                if db_user.enabled:
+                    self._publish_green_account(db_user)
         payload = self.issue_session_tokens(db_user, db_user.id)
         return JSONResponse(status_code=200, content=payload)
 
@@ -337,16 +349,35 @@ class AuthService:
         self.db.refresh(db_user)
         self._publish_green_account(db_user)
 
-    def _green_account_email_exists(self, email: str) -> bool:
+    def _email_for_green_lookup(self, identifier: str) -> Optional[str]:
+        cleaned = (identifier or "").strip()
+        if "@" in cleaned:
+            if cleaned.lower().endswith("@phone.useautobus.com"):
+                return None
+            return cleaned
+        if not cleaned:
+            return None
+        local = (
+            self.db.query(User)
+            .filter(func.lower(User.fullname) == cleaned.lower())
+            .first()
+        )
+        email = (getattr(local, "email", None) or "").strip()
+        if "@" not in email or email.lower().endswith("@phone.useautobus.com"):
+            return None
+        return email
+
+    def _green_account_presence(self, email: str) -> Optional[bool]:
+        """True or False when Green Account answers. None when the check cannot run."""
         if "@" not in (email or "") or email.lower().endswith("@phone.useautobus.com"):
             return False
         try:
             from core.auth.service.green_account_client import email_exists
 
-            return email_exists(email) is True
+            return email_exists(email)
         except Exception as exc:
-            logger.warning("Green account lookup failed for signup: %s", exc)
-            return False
+            logger.warning("Green account lookup failed: %s", exc)
+            return None
 
     def _publish_green_account(self, db_user: User) -> None:
         try:
@@ -380,6 +411,10 @@ class AuthService:
                 raise LinkedBusinessLoginError()
             db_user.hashed_password = self.hash_password(password)
             db_user.enabled = True
+            if not (db_user.phone or "").strip() and account.get("phone"):
+                db_user.phone = account.get("phone")
+            if not (db_user.ghana_card or "").strip() and account.get("ghana_card"):
+                db_user.ghana_card = account.get("ghana_card")
             db_user.updated_at = datetime.now(timezone.utc)
             self.db.commit()
             self.db.refresh(db_user)
@@ -575,7 +610,8 @@ class AuthService:
             db_user.hashed_password = self.hash_password(request.new_password)
             self.unlink_managed_account(db_user)
             self.db.commit()
-            self._publish_green_account(db_user)
+            if db_user.enabled:
+                self._publish_green_account(db_user)
             
             # Invalidate all existing tokens
             self.session_driver.remove_tokens(email)
@@ -650,7 +686,8 @@ class AuthService:
                 db_user.enabled = True
             self.unlink_managed_account(db_user)
             self.db.commit()
-            self._publish_green_account(db_user)
+            if db_user.enabled:
+                self._publish_green_account(db_user)
             if db_user.email:
                 self.session_driver.remove_tokens(db_user.email)
 
