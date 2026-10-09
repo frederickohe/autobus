@@ -5,6 +5,9 @@ from core.nlu.service.customer_shop import (
     classify_customer_shop_intent,
     extract_product_query_name,
     extract_quantity,
+    is_questionish_product_name,
+    looks_like_existing_order_question,
+    mentioned_size,
     resolve_catalog_query,
 )
 
@@ -74,6 +77,23 @@ class CustomerShopOrderParsingTests(unittest.TestCase):
         )
         self.assertEqual(intent, "view_product")
         self.assertEqual(slots.get("product_name"), "Mango Juice")
+
+
+class ExistingOrderQuestionTests(unittest.TestCase):
+    def test_delivery_and_past_order_are_not_new_purchases(self):
+        self.assertTrue(looks_like_existing_order_question("When do I receive my order"))
+        self.assertTrue(looks_like_existing_order_question("Did you create my order from yesterday?"))
+        self.assertTrue(looks_like_existing_order_question("I placed an order for 2 shoes yesterday"))
+        self.assertTrue(looks_like_existing_order_question("I asked for 3"))
+
+    def test_a_new_purchase_is_not_an_existing_order_question(self):
+        self.assertFalse(looks_like_existing_order_question("I want mango juice 20pcs"))
+        self.assertFalse(looks_like_existing_order_question("What products are available"))
+
+    def test_size_question_is_not_a_product_name(self):
+        self.assertTrue(is_questionish_product_name("Pls is this available in size 39?"))
+        self.assertEqual(mentioned_size("Pls is this available in size 39?"), "39")
+        self.assertFalse(is_questionish_product_name("Naa"))
 
 
 if __name__ == "__main__":

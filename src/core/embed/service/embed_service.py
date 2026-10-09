@@ -181,11 +181,14 @@ class EmbedService:
         message = body.get("message") if isinstance(body.get("message"), dict) else {}
         message_id = str(message.get("id") or "").strip()
         text = str(message.get("text") or "").strip()
+        image_url = str(message.get("image_url") or "").strip()
         customer = body.get("customer") if isinstance(body.get("customer"), dict) else {}
         external_id = str(customer.get("external_id") or "").strip()
         conversation_id = str(body.get("conversation_id") or "").strip()
-        if not message_id or not text or not external_id:
-            raise ValueError("conversation customer.external_id, message.id, and message.text are required")
+        if not message_id or not external_id or (not text and not image_url):
+            raise ValueError("conversation customer.external_id, message.id, and message.text or message.image_url are required")
+        if not text and image_url:
+            text = "I am providing you with an image."
         sub = _sub_business(body)
         receipt_id = f"{sub['external_id']}:{message_id}" if sub["external_id"] else message_id
 
@@ -212,7 +215,9 @@ class EmbedService:
             }
         )
         try:
-            reply = get_nlu_system().process_message(nlu_user_id, text) or ""
+            nlu = get_nlu_system()
+            reply = nlu.process_message(nlu_user_id, text, image_url=image_url or None) or ""
+            reply_images = nlu.take_reply_images()
             actions = end_embed_turn(tokens)
         except Exception:
             end_embed_turn(tokens)
@@ -239,7 +244,7 @@ class EmbedService:
         )
         response = {
             "conversation_id": conversation_id or nlu_user_id,
-            "reply": {"text": reply, "products": products},
+            "reply": {"text": reply, "products": products, "images": reply_images},
             "actions": actions,
         }
         if sub["external_id"]:
@@ -470,6 +475,11 @@ class EmbedService:
     def _product_card(self, product: Product, currency: str = "GHS") -> Dict[str, Any]:
         items = catalog_items_from_products([product])
         stock = items[0].stock if items else product.number_in_stock
+        from core.cloudstorage.service.storageservice import refresh_public_object_url
+
+        photo = refresh_public_object_url(product.photo or "")
+        if photo and "placeholder" in photo.lower():
+            photo = ""
         return {
             "external_id": product.external_id or "",
             "sub_business_id": product.sub_business_id or "",
@@ -482,6 +492,7 @@ class EmbedService:
             "stock": stock,
             "active": bool(product.is_active),
             "category": product.category or "",
+            "image_url": photo,
         }
 
     def _order_card(self, order: Order, external_customer_id: Optional[str] = None) -> Dict[str, Any]:

@@ -1,5 +1,6 @@
 # core/nlu/service/intent_processor.py
 import json
+import threading
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Any, Optional
 from core.customers.service.customer_service import CustomerService
@@ -19,12 +20,13 @@ from core.nlu.service.customer_shop import (
     catalog_items_from_products,
     format_customer_catalog,
     format_customer_product,
+    mentioned_size,
     resolve_catalog_query,
 )
 from core.nlu.service.datapipe.dataconfig import FINANCIAL_INSIGHTS_SYSTEM_PROMPT, INSIGHTS_SYSTEM_PROMPT
 from core.nlu.service.datapipe.user_rag import UserRAGManager
 from core.user.controller.usercontroller import get_db
-from utilities.phone_utils import normalize_ghana_phone_number
+from utilities.phone_utils import extract_ghana_phone_numbers_from_text, normalize_ghana_phone_number
 from utilities.plain_text import strip_markdown_formatting
 import logging
 from core.nlu.service.datapipe.dataengine import EnhancedUserRAGManager
@@ -41,6 +43,25 @@ class IntentProcessor:
         self.rag_manager = UserRAGManager()  # Initialize RAG manager
         self.db_session = db_session
         self._email_tool = None
+        self._reply_images = threading.local()
+
+    def begin_reply_images(self) -> None:
+        self._reply_images.urls = []
+
+    def take_reply_images(self) -> List[str]:
+        urls = list(getattr(self._reply_images, "urls", None) or [])
+        self._reply_images.urls = []
+        return urls
+
+    def _remember_reply_images(self, urls: List[str]) -> None:
+        bucket = getattr(self._reply_images, "urls", None)
+        if bucket is None:
+            bucket = []
+            self._reply_images.urls = bucket
+        for url in urls:
+            cleaned = (url or "").strip()
+            if cleaned and cleaned not in bucket:
+                bucket.append(cleaned)
 
     @property
     def email_tool(self):
@@ -621,13 +642,19 @@ class IntentProcessor:
             elif intent == "delete_product":
                 return self._handle_delete_product(user_id, slots)
             elif intent == "view_products":
-                return self._handle_view_products(user_id, slots, user_data=user_data)
+                return self._handle_view_products(
+                    user_id, slots, user_data=user_data, user_message=user_message
+                )
             elif intent == "view_product":
-                return self._handle_view_product(user_id, slots, user_data=user_data)
+                return self._handle_view_product(
+                    user_id, slots, user_data=user_data, user_message=user_message
+                )
             else:
                 return f"❌ Product management intent '{intent}' not supported"
         except Exception as e:
             logger.error(f"Error processing product management intent: {e}", exc_info=True)
+            if self._is_customer_session(user_data):
+                return "Sorry, I couldn't look that product up just now. Please try again in a moment."
             return f"❌ Error processing product: {str(e)[:100]}"
 
     def _resolved_photo_urls_from_slots(self, slots: Dict[str, Any]) -> List[str]:
@@ -790,6 +817,7 @@ class IntentProcessor:
         user_id: str,
         slots: Dict[str, Any],
         user_data: Optional[Dict] = None,
+        user_message: str = "",
     ) -> str:
         """Handle view_products intent"""
         db = next(get_db())
@@ -799,10 +827,15 @@ class IntentProcessor:
         owner_id = self._catalog_owner_id(user_id, user_data)
         products = product_service.get_products_by_user(owner_id, category=category)
         if self._is_customer_session(user_data):
-            return format_customer_catalog(
+            products = self._owned_products(
+                product_service, owner_id, user_id, limit=50, category=category
+            )
+            self._queue_product_images(products, product_service, per_product=1, total_limit=4)
+            listing = format_customer_catalog(
                 catalog_items_from_products(products),
                 currency=self._catalog_currency(user_data),
             )
+            return self._append_size_note(listing, user_message, products)
         if not products:
             return "📦 No products found in your inventory yet."
 
@@ -829,6 +862,7 @@ class IntentProcessor:
         user_id: str,
         slots: Dict[str, Any],
         user_data: Optional[Dict] = None,
+        user_message: str = "",
     ) -> str:
         """Handle view_product intent"""
         product_id = slots.get("product_id")
@@ -875,12 +909,16 @@ class IntentProcessor:
         if not product:
             label = product_name or product_id or "that product"
             if is_customer:
+                owned = self._owned_products(product_service, owner_id, user_id, limit=50)
+                self._queue_product_images(owned, product_service, per_product=1, total_limit=4)
                 listing = format_customer_catalog(
-                    catalog_items_from_products(_owned(50)),
+                    catalog_items_from_products(owned),
                     currency=self._catalog_currency(user_data),
                 )
-                return (
-                    f'We do not currently have "{label}" in our listed products.\n\n{listing}'
+                return self._append_size_note(
+                    f'We do not currently have "{label}" in our listed products.\n\n{listing}',
+                    user_message,
+                    owned,
                 )
             if product_id:
                 return f"❌ Product '{product_id}' not found"
@@ -889,11 +927,13 @@ class IntentProcessor:
         if is_customer:
             items = catalog_items_from_products([product])
             currency = self._catalog_currency(user_data)
-            return (
+            self._queue_product_images([product], product_service, per_product=3, total_limit=3)
+            body = (
                 format_customer_product(items[0], currency=currency)
                 if items
                 else format_customer_catalog([], currency=currency)
             )
+            return self._append_size_note(body, user_message, [product])
 
         photos_block = self._format_product_photos(product, product_service)
         photos_line = photos_block or f"Photo: {product.photo or 'N/A'}"
@@ -936,10 +976,14 @@ class IntentProcessor:
                 return self._handle_update_order(user_id, slots)
             elif intent == "send_order_invoice":
                 return self._handle_send_order_invoice(user_id, slots, user_data)
+            elif intent == "check_order_status":
+                return self._handle_check_order_status(user_id, user_message, user_data)
             else:
                 return f"❌ Order management intent '{intent}' not supported"
         except Exception as e:
             logger.error(f"Error processing order management intent: {e}", exc_info=True)
+            if self._is_customer_session(user_data):
+                return "Sorry, I couldn't check that order just now. Please try again in a moment."
             return f"❌ Error processing order: {str(e)[:100]}"
 
     def _handle_create_order(
@@ -1255,6 +1299,152 @@ class IntentProcessor:
             f"Order Number: {order.order_number}\n"
             f"Status: {order.order_status} | Payment: {order.payment_status} | Fulfillment: {order.fulfillment_status}"
         )
+
+    def _owned_products(self, product_service, owner_id: str, user_id: str, limit: int = 100, category: Optional[str] = None):
+        from core.embed.scope import for_sub_business, sub_business_from_session
+        from core.embed.turn_context import embed_turn
+
+        products = product_service.get_products_by_user(
+            owner_id, category=category, skip=0, limit=limit
+        )
+        sub_business_id = sub_business_from_session(user_id or "")
+        if not sub_business_id:
+            turn = embed_turn() or {}
+            sub_business_id = str(turn.get("sub_business_id") or "")
+        return for_sub_business(products, sub_business_id)
+
+    def _public_product_image_urls(self, product, product_service: ProductService, limit: int = 1) -> List[str]:
+        from core.cloudstorage.service.storageservice import refresh_public_object_url
+
+        raw: List[str] = []
+        photo = getattr(product, "photo", None)
+        if photo:
+            raw.append(str(photo))
+        try:
+            for image in product_service.list_product_images(str(product.product_id)):
+                url = getattr(image, "url", None)
+                if url:
+                    raw.append(str(url))
+        except Exception as exc:
+            logger.warning("Could not list product images: %s", exc)
+        urls: List[str] = []
+        for item in raw:
+            url = refresh_public_object_url(item)
+            if not url or "placeholder" in url.lower():
+                continue
+            if url not in urls:
+                urls.append(url)
+            if len(urls) >= limit:
+                break
+        return urls
+
+    def _queue_product_images(self, products, product_service: ProductService, per_product: int = 1, total_limit: int = 4) -> None:
+        urls: List[str] = []
+        for product in products or []:
+            urls.extend(self._public_product_image_urls(product, product_service, limit=per_product))
+            if len(urls) >= total_limit:
+                break
+        self._remember_reply_images(urls[:total_limit])
+
+    def _append_size_note(self, text: str, user_message: str, products) -> str:
+        size = mentioned_size(user_message)
+        if not size:
+            return text
+        blob = " ".join(
+            " ".join(
+                [
+                    str(getattr(product, "name", "") or ""),
+                    str(getattr(product, "description", "") or ""),
+                    str(getattr(product, "category", "") or ""),
+                ]
+            )
+            for product in products or []
+        ).lower()
+        if size.lower() in blob:
+            return text
+        return (
+            f"{text}\n\nI can't confirm size {size} from the listing. "
+            "The shop needs to check whether that size is available."
+        )
+
+    @staticmethod
+    def _phone_variants(phone: str) -> List[str]:
+        import re
+
+        raw = re.sub(r"\D", "", phone or "")
+        variants = {str(phone or "").strip(), raw}
+        try:
+            normalized = normalize_ghana_phone_number(phone)
+        except Exception:
+            normalized = raw
+        if normalized:
+            variants.add(normalized)
+            if normalized.startswith("233") and len(normalized) >= 12:
+                variants.add("0" + normalized[3:])
+                variants.add("+" + normalized)
+        return [item for item in variants if item]
+
+    def _handle_check_order_status(
+        self,
+        user_id: str,
+        user_message: str,
+        user_data: Optional[Dict] = None,
+    ) -> str:
+        """Tell a customer the status of an order already placed. Never invent a delivery date."""
+        if not self._is_customer_session(user_data):
+            return "Open your orders list to check status."
+
+        stated = extract_ghana_phone_numbers_from_text(user_message or "")
+        phone = stated[0] if stated else str((user_data or {}).get("customer_phone") or "").strip()
+        if not phone:
+            return (
+                "I can look up an order from the phone number it was placed with. "
+                "Send that phone number and I will check."
+            )
+
+        from sqlalchemy import desc
+        from core.orders.model.order import Order
+
+        db = next(get_db())
+        owner_id = self._catalog_owner_id(user_id, user_data)
+        orders = (
+            db.query(Order)
+            .filter(Order.user_id == owner_id, Order.customer_phone.in_(self._phone_variants(phone)))
+            .order_by(desc(Order.order_date))
+            .limit(3)
+            .all()
+        )
+        if not orders:
+            return (
+                "I could not find an order for this number. "
+                "If you used a different phone, send that number and I will check again."
+            )
+
+        lines = ["Here is the latest I have for your order:"]
+        for order in orders:
+            status = order.order_status.value if hasattr(order.order_status, "value") else order.order_status
+            payment = order.payment_status.value if hasattr(order.payment_status, "value") else order.payment_status
+            fulfillment = (
+                order.fulfillment_status.value
+                if hasattr(order.fulfillment_status, "value")
+                else order.fulfillment_status
+            )
+            items = order.order_items if isinstance(order.order_items, list) else []
+            bits = []
+            for item in items[:3]:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("item_name") or "item"
+                    qty = item.get("quantity")
+                    bits.append(f"{qty} x {name}" if qty else str(name))
+            summary = ", ".join(bits) if bits else "items on file"
+            lines.append(
+                f"{order.order_number}: {summary}. Status: {status}. Payment: {payment}. Fulfillment: {fulfillment}."
+            )
+            if getattr(order, "delivery_date", None):
+                lines.append(f"Delivery date on file: {order.delivery_date:%d %b %Y}.")
+            else:
+                lines.append("There is no delivery date on file yet. The shop will confirm when it is ready.")
+        return "\n".join(lines)
 
     def _find_product(self, product_service: ProductService, slots: Dict[str, Any], user_id: Optional[str] = None):
         """Resolve a product from supported slot keys, scoped to the merchant when possible."""

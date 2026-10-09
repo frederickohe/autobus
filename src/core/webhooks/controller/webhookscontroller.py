@@ -26,6 +26,26 @@ def _nlu_reply_text(response_message: Optional[str]) -> str:
     return (response_message or "").strip()
 
 
+def _send_whatsapp_nlu_reply(
+    whatsapp_service: WhatsAppService,
+    phone_id: str,
+    phone: str,
+    outbound: str,
+    reply_images: Optional[list] = None,
+) -> bool:
+    """Send the text reply, then any catalog photos the turn queued."""
+    sent = True
+    if outbound:
+        sent = whatsapp_service.send_message(
+            phone_id=phone_id,
+            recipient_phone=phone,
+            message_text=outbound,
+        )
+    for image_url in reply_images or []:
+        whatsapp_service.send_message_receipt(phone_id, phone, image_url)
+    return sent
+
+
 def _whatsapp_show_typing(whatsapp_service: WhatsAppService, phone_id: str, message: dict) -> None:
     """Mark the inbound WhatsApp message read and show typing while the AI runs."""
     message_id = (message or {}).get("id") if isinstance(message, dict) else None
@@ -552,6 +572,25 @@ def _ig_message_text(message: Any) -> str:
     return ""
 
 
+def _ig_image_url(message: Any) -> str:
+    """First image attachment URL on an Instagram messaging event."""
+    if not isinstance(message, dict):
+        return ""
+    attachments = message.get("attachments") or []
+    if isinstance(attachments, dict):
+        attachments = [attachments]
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        if str(attachment.get("type") or "").lower() not in {"image", "story_mention"}:
+            continue
+        payload = attachment.get("payload") if isinstance(attachment.get("payload"), dict) else {}
+        url = str(payload.get("url") or attachment.get("url") or "").strip()
+        if url:
+            return url
+    return ""
+
+
 def _remember_customer_identity(
     nlu_user_id: str,
     *,
@@ -701,7 +740,11 @@ def handle_instagram_webhook(payload: dict, db: Session):
                 list(event.keys()) if isinstance(event, dict) else type(event).__name__,
             )
             continue
-        text = _ig_message_text(event.get("message") or event)
+        message_body = event.get("message") or event
+        text = _ig_message_text(message_body)
+        image_url = _ig_image_url(message_body)
+        if not text and image_url:
+            text = "I am providing you with an image."
         if not text:
             logger.info(
                 "[IG webhook] skip empty/echo sender=%s recipient=%s",
@@ -742,7 +785,7 @@ def handle_instagram_webhook(payload: dict, db: Session):
         svc.send_sender_action(token, sender_id, "mark_seen")
         svc.send_sender_action(token, sender_id, "typing_on")
         nlu_system = get_nlu_system()
-        reply = nlu_system.process_message(nlu_user_id, text)
+        reply = nlu_system.process_message(nlu_user_id, text, image_url=image_url or None)
         username, display_name = _ig_event_profile(event)
         if not username:
             profile = svc.fetch_igsid_profile(token, sender_id)
@@ -752,11 +795,16 @@ def handle_instagram_webhook(payload: dict, db: Session):
             nlu_user_id, username=username, display_name=display_name
         )
         outbound = _nlu_reply_text(reply)
-        if not outbound:
+        reply_images = nlu_system.take_reply_images()
+        if not outbound and not reply_images:
             svc.send_sender_action(token, sender_id, "typing_off")
             handled += 1
             continue
-        sent = svc.send_text(token, sender_id, outbound)
+        sent = True
+        if outbound:
+            sent = svc.send_text(token, sender_id, outbound)
+        for reply_image in reply_images:
+            svc.send_image(token, sender_id, reply_image)
         if not sent:
             logger.error("[IG webhook] failed to send reply to %s", sender_id)
             raise HTTPException(
@@ -1017,16 +1065,15 @@ def handle_text_message(
     response_message = nlu_system.process_message(nlu_user_id, message_text)
     _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
     outbound = _nlu_reply_text(response_message)
+    reply_images = nlu_system.take_reply_images()
 
     logger.info("Generated response: %s", outbound[:200])
 
-    if not outbound:
+    if not outbound and not reply_images:
         return {"status": "success", "message": "Message recorded; no automated reply"}
 
-    message_sent = whatsapp_service.send_message(
-        phone_id=phone_id,
-        recipient_phone=phone,
-        message_text=outbound
+    message_sent = _send_whatsapp_nlu_reply(
+        whatsapp_service, phone_id, phone, outbound, reply_images
     )
 
     if not message_sent:
@@ -1263,16 +1310,15 @@ def handle_image_message(
         )
         _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
+        reply_images = nlu_system.take_reply_images()
 
         logger.info("Generated response for image message: %s", outbound[:200])
 
-        if not outbound:
+        if not outbound and not reply_images:
             return {"status": "success", "message": "Image recorded; no automated reply"}
 
-        message_sent = whatsapp_service.send_message(
-            phone_id=phone_id,
-            recipient_phone=phone,
-            message_text=outbound
+        message_sent = _send_whatsapp_nlu_reply(
+            whatsapp_service, phone_id, phone, outbound, reply_images
         )
 
         if not message_sent:
@@ -1332,16 +1378,15 @@ def handle_audio_message(
         )
         _remember_customer_identity(nlu_user_id, phone=phone, display_name=display_name)
         outbound = _nlu_reply_text(response_message)
+        reply_images = nlu_system.take_reply_images()
 
         logger.info("Generated response for audio message: %s", outbound[:200])
 
-        if not outbound:
+        if not outbound and not reply_images:
             return {"status": "success", "message": "Audio recorded; no automated reply"}
 
-        message_sent = whatsapp_service.send_message(
-            phone_id=phone_id,
-            recipient_phone=phone,
-            message_text=outbound
+        message_sent = _send_whatsapp_nlu_reply(
+            whatsapp_service, phone_id, phone, outbound, reply_images
         )
 
         if not message_sent:

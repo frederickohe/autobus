@@ -242,6 +242,38 @@ class LLMClient:
         except Exception as e:
             logger.error(f"Error extracting text from image: {e}")
             return None
+
+    def describe_product_image(
+        self,
+        image_base64: Optional[str] = None,
+        image_url: Optional[str] = None,
+        image_media_type: str = "image/jpeg",
+    ) -> Optional[str]:
+        """Describe the product in a customer photo so it can be matched to the catalog."""
+        if not image_base64 and not image_url:
+            return None
+        try:
+            response = self.chat_completion(
+                system_prompt=(
+                    "You describe retail product photos for a shop assistant. "
+                    "Reply with one short line: product type, color, material, and style. "
+                    "Ignore shop watermarks, phone numbers, and captions overlaid on the photo. "
+                    "If the image is not a product, reply exactly NOT_A_PRODUCT."
+                ),
+                user_message="What product is shown in this photo?",
+                temperature=0.1,
+                max_tokens=120,
+                image_base64=image_base64,
+                image_url=image_url,
+                image_media_type=image_media_type,
+            )
+            text = (response or "").strip()
+            if not text or "not_a_product" in text.lower():
+                return None
+            return text
+        except Exception as e:
+            logger.error(f"Error describing product image: {e}")
+            return None
     
     def chat_completion_with_audio(
         self,

@@ -13,7 +13,14 @@ class IntentDetector:
         model = MODEL if use_advanced_model else None
         self.llm_client = LLMClient(model=model)
 
-    def detect_intent_and_slots(self, user_message: str, conversation_history: List[Dict], current_intent: str = None, media_context: Dict = None) -> Tuple[str, Dict, List[str]]:
+    def detect_intent_and_slots(
+        self,
+        user_message: str,
+        conversation_history: List[Dict],
+        current_intent: str = None,
+        media_context: Dict = None,
+        customer_session: bool = False,
+    ) -> Tuple[str, Dict, List[str]]:
         """
         Detect user intent and extract slots from message
         Returns: (intent, extracted_slots, missing_slots)
@@ -101,7 +108,19 @@ class IntentDetector:
 
             # If image is present, extract text and include in prompt (not as image parameter)
             extracted_phones_from_image = []
-            if media_context and (media_context.get("image_base64") or media_context.get("image_url")):
+            photo_description = ""
+            has_image = bool(
+                media_context and (media_context.get("image_base64") or media_context.get("image_url"))
+            )
+            if has_image and customer_session:
+                photo_description = self.llm_client.describe_product_image(
+                    image_base64=media_context.get("image_base64"),
+                    image_url=media_context.get("image_url"),
+                    image_media_type=media_context.get("image_mime_type", "image/jpeg"),
+                ) or ""
+                if photo_description:
+                    user_message = f"{user_message}\nPhoto shows this product: {photo_description}"
+            if has_image and not photo_description:
                 try:
                     logger.info("Extracting text from image for intent detection")
                     image_base64 = media_context.get("image_base64")
@@ -131,16 +150,32 @@ class IntentDetector:
                     logger.warning("Image text extraction failed: %s", ex)
 
             logger.info("Calling LLMClient for intent detection (model=%s)", self.llm_client.model)
-            
+
             # Create prompt with extracted phone numbers from image
-            prompt = self._create_enhanced_prompt(user_message, current_intent, extracted_phones_from_image)
-            
+            prompt = self._create_enhanced_prompt(
+                user_message,
+                current_intent,
+                extracted_phones_from_image,
+                customer_session=customer_session,
+            )
+
             response_text = self.llm_client.chat_completion(
                 system_prompt=system_prompt,
                 user_message=prompt,
                 conversation_history=conversation_history,
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
+                image_base64=(
+                    media_context.get("image_base64")
+                    if customer_session and media_context and not photo_description
+                    else None
+                ),
+                image_url=(
+                    media_context.get("image_url")
+                    if customer_session and media_context and not photo_description
+                    else None
+                ),
+                image_media_type=(media_context or {}).get("image_mime_type", "image/jpeg"),
             )
 
             logger.debug("Intent detection response text (truncated): %s", (response_text or '')[:1000])
@@ -159,7 +194,7 @@ class IntentDetector:
                 "i can't process images",
                 "i'm not able to process images"
             ]
-            if response_text:
+            if response_text and not photo_description:
                 low = response_text.lower()
                 if any(p in low for p in refusal_phrases) or "cannot_process_image" in low or "cannot_process_image" in (response_text or ""):
                     logger.info("Model reported it cannot process images; returning special intent")
@@ -167,6 +202,9 @@ class IntentDetector:
 
             # Parse the LLM response
             intent, slots, missing_slots = self._parse_response(response_text)
+            if photo_description:
+                slots = dict(slots or {})
+                slots["photo_description"] = photo_description
             
             # FALLBACK: If image phones were extracted but not found in slots, try to add them
             if extracted_phones_from_image and intent in ["send_money", "buy_airtime", "pay_bill"]:
@@ -204,7 +242,13 @@ class IntentDetector:
             print(f"Error in intent detection: {e}")
             return "unknown", {}, []
     
-    def _create_enhanced_prompt(self, user_message: str, current_intent: str = None, extracted_phones: List[str] = None) -> str:
+    def _create_enhanced_prompt(
+        self,
+        user_message: str,
+        current_intent: str = None,
+        extracted_phones: List[str] = None,
+        customer_session: bool = False,
+    ) -> str:
         """Create enhanced prompt with context awareness and precision"""
         
         if extracted_phones is None:
@@ -280,8 +324,23 @@ class IntentDetector:
         these extracted phone numbers are the RECIPIENTS. Use them for "recipient" or "phone_number" slots.
         """
         
+        customer_rules = ""
+        if customer_session:
+            customer_rules = """
+        CUSTOMER SESSION (this person is shopping, not the business owner):
+        - Use only: greeting, goodbye, business_conversation, view_products, view_product, create_order, check_order_status, request_intervention.
+        - Never use merchant admin intents (add_product, update_product, send_money, expense_report, update_order, generate_image, and similar).
+        - Questions about an order already placed (when will it arrive, did you create it, where is my order, I placed an order yesterday, I asked for 3) are check_order_status. They are never create_order. Do not put that sentence in item_name or product_name.
+        - create_order only when they are buying now and give a product and/or a quantity.
+        - If CURRENT_INTENT is create_order, keep it only when this message supplies a product name or a purchase quantity. Switch to check_order_status when they are talking about an order they already made.
+        - "Is this available", "do you have this", a size question, or a product photo is view_product. product_name must be the product, not the whole question.
+        - "What products are available" or "can you share pictures" is view_products.
+        - A line that starts with "Photo shows this product:" describes their picture. Use it as product_name when it matches something they could buy. Ignore watermarks and phone numbers in the photo.
+        """
+
         return f"""
         {intent_guidelines}
+        {customer_rules}
         
         {current_intent_context}
         You are an expert conversational AI that identifies user intent and extracts relevant slot information.

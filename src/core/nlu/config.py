@@ -218,6 +218,12 @@ INTENTS = {
         "required_slots": [],
         "category": "order_management"
     },
+    "check_order_status": {
+        "description": "Look up an order the customer already placed (delivery, status, whether it was created). Not a new purchase.",
+        "slots": [],
+        "required_slots": [],
+        "category": "order_management"
+    },
     #==== FINANCIAL TIPS AGENT INTENTS =====
     "financial_tips": {
         "description": "Provide general financial advice and tips",
@@ -537,7 +543,7 @@ INTENT_CATEGORIES = {
     "video_generation": ["generate_video"],
     "text_generation": ["generate_text"],
     "product_management": ["add_product", "update_product", "delete_product", "view_products", "view_product"],
-    "order_management": ["create_order", "update_order", "send_order_invoice"],
+    "order_management": ["create_order", "update_order", "send_order_invoice", "check_order_status"],
     "financial_tips": ["financial_tips", "budgeting_advice", "savings_tips", "investment_advice", "debt_management"],
     "transactional": ["send_money", "buy_airtime", "pay_bill", "check_balance", "get_loan", "track_expenses", "set_budget"],
     "expense_report": ["expense_report", "generate_expense_report", "monthly_expense_summary",  "annual_expense_report", "daily_expense_report","transaction_info"],

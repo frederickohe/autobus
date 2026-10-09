@@ -36,7 +36,9 @@ def _is_placeholder_item_name(name: str) -> bool:
         return True
     return n in _PLACEHOLDER_ORDER_ITEM_NAMES
 
-CUSTOMER_SHOP_INTENTS = frozenset({"view_products", "view_product", "create_order"})
+CUSTOMER_SHOP_INTENTS = frozenset(
+    {"view_products", "view_product", "create_order", "check_order_status"}
+)
 
 _WORD_NUMBERS = {
     "one": 1,
@@ -421,6 +423,87 @@ def is_shop_thanks(text: str) -> bool:
     if not t or looks_like_order_request(text):
         return False
     return bool(_THANKS_RE.match(t))
+
+
+_EXISTING_ORDER_PHRASES = (
+    "when do i receive",
+    "when will i receive",
+    "when will i get my",
+    "when do i get my",
+    "when will i get it",
+    "when do i get it",
+    "where is my order",
+    "where's my order",
+    "wheres my order",
+    "order status",
+    "status of my order",
+    "track my order",
+    "tracking my order",
+    "did you create my order",
+    "did you place my order",
+    "did you make my order",
+    "have you created my order",
+    "i placed an order",
+    "i made an order",
+    "i already ordered",
+    "i ordered yesterday",
+    "my order from",
+    "my order yesterday",
+    "about my order",
+    "has my order",
+    "receive my order",
+    "delivery of my order",
+    "when is my order",
+)
+
+_SIZE_RE = re.compile(r"\b(?:size|sz)\s*#?\s*(\d{2}(?:\.\d)?)\b", re.IGNORECASE)
+
+
+def looks_like_existing_order_question(text: str) -> bool:
+    """True when the customer is asking about an order already placed, not buying now."""
+    t = normalize_shop_text(text)
+    if not t:
+        return False
+    if re.search(r"\bi asked for \d+\b", t):
+        return True
+    return any(phrase in t for phrase in _EXISTING_ORDER_PHRASES)
+
+
+def is_questionish_product_name(name: str) -> bool:
+    """True when a slot value is a question, not a catalog product name."""
+    raw = name or ""
+    n = normalize_shop_text(raw)
+    if not n:
+        return True
+    if "?" in raw:
+        return True
+    starters = (
+        "pls ",
+        "plz ",
+        "please ",
+        "is ",
+        "are ",
+        "do ",
+        "does ",
+        "can ",
+        "when ",
+        "where ",
+        "did ",
+        "what ",
+        "how ",
+        "i placed",
+        "i asked",
+        "i want to know",
+        "this available",
+    )
+    if any(n.startswith(starter) for starter in starters):
+        return True
+    return "available in size" in n or "in size" in n
+
+
+def mentioned_size(text: str) -> str:
+    match = _SIZE_RE.search(text or "")
+    return match.group(1) if match else ""
 
 
 def looks_like_order_request(text: str) -> bool:

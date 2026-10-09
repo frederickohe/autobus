@@ -632,6 +632,82 @@ class ConversationListService:
         user_names = self._load_user_fullnames({row.user_id})
         return self._to_detail(row, user_names)
 
+    def activate_intervention_for_session(
+        self, user_identifier: str, session_id: int
+    ) -> Optional[ConversationDetailDTO]:
+        """Owner takes over a customer session so the assistant stays silent.
+
+        Raises ValueError when the session is already completed. A later customer
+        message starts a new assistant chat; this thread is not reopened.
+        """
+        row = self._session_owned_by_user(session_id, user_identifier)
+        if not row:
+            return None
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        from core.interventions.service.intervention_service import InterventionService
+
+        state = dict(row.conversation_state or {})
+        if str(state.get("conversation_lifecycle") or "").lower() == "completed":
+            raise ValueError("completed")
+
+        if not state.get("intervention_active"):
+            reason = "Owner is intervening in this conversation"
+            intervention = InterventionService(self.db).create_intervention(
+                user_id=row.user_id,
+                trigger="owner_takeover",
+                reason=reason,
+                conversation_date=row.conversation_date,
+                metadata={"source": "inbox", "session_id": int(row.id)},
+            )
+            state = dict(row.conversation_state or {})
+            state["intervention_active"] = True
+            state["intervention_id"] = int(intervention.id)
+            state["intervention_trigger"] = "owner_takeover"
+            state["intervention_reason"] = reason
+            state["intervention_created_at"] = (
+                intervention.created_at.isoformat()
+                if intervention.created_at
+                else datetime.utcnow().isoformat()
+            )
+            row.conversation_state = state
+            flag_modified(row, "conversation_state")
+            row.updated_at = datetime.utcnow()
+            self.db.commit()
+            self.db.refresh(row)
+            self._mark_nlu_intervening(row.user_id, int(row.id), state)
+
+        user_names = self._load_user_fullnames({row.user_id})
+        return self._to_detail(row, user_names)
+
+    def _mark_nlu_intervening(
+        self, conversation_user_id: str, session_id: int, state: dict
+    ) -> None:
+        """Flip the in-process assistant cache so the next turn does not reply."""
+        try:
+            from core.nlu.controller.nlucontroller import nlu_system
+
+            cached = nlu_system.conversation_manager.memory_cache.get(conversation_user_id)
+            if (
+                cached
+                and cached.session_db_id is not None
+                and int(cached.session_db_id) == int(session_id)
+            ):
+                cached.intervention_active = True
+                cached.intervention_id = state.get("intervention_id")
+                cached.intervention_trigger = state.get("intervention_trigger")
+                cached.intervention_reason = state.get("intervention_reason")
+                cached.intervention_created_at = state.get("intervention_created_at")
+                return
+            nlu_system.conversation_manager.memory_cache.pop(conversation_user_id, None)
+        except Exception:
+            logger.debug(
+                "[CONVERSATION] NLU cache not updated for intervention on %s",
+                conversation_user_id,
+                exc_info=True,
+            )
+
     def deactivate_intervention_for_session(
         self, user_identifier: str, session_id: int
     ) -> Optional[ConversationDetailDTO]:

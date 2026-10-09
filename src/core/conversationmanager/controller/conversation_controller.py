@@ -93,6 +93,37 @@ def get_conversation_for_order(
     return detail
 
 
+@conversation_routes.post("/session/{session_id}/activate-intervention")
+def activate_intervention_for_session(
+    session_id: int,
+    db: Session = Depends(get_db),
+    authjwt: AuthJWT = Depends(validate_token),
+):
+    """Owner takes over. The assistant stays silent until the conversation is completed."""
+    user_id = authjwt.get_jwt_subject()
+    service = ConversationListService(db)
+    try:
+        detail = service.activate_intervention_for_session(user_id, session_id)
+    except ValueError as exc:
+        if str(exc) == "completed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This conversation is already resolved. The next customer message starts a new chat.",
+            ) from exc
+        raise
+    if not detail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Conversation not found",
+        )
+    return {
+        "success": True,
+        "intervention_active": detail.intervention_active,
+        "conversation_lifecycle": detail.conversation_lifecycle,
+        "conversation": detail,
+    }
+
+
 @conversation_routes.post("/session/{session_id}/deactivate-intervention")
 def deactivate_intervention_for_session(
     session_id: int,

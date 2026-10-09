@@ -101,6 +101,39 @@ class ConversationManager:
         self.db = SessionLocal()
         self.memory_cache: Dict[str, ConversationState] = {}
 
+    def sync_intervention_from_db(self, user_id: str) -> bool:
+        """Copy an owner takeover from the database onto the in-memory session.
+
+        The inbox API and the message worker do not share memory. Without this
+        refresh, a cached session keeps ``intervention_active`` false and the
+        assistant still replies after the owner flags the chat.
+        """
+        state = self.memory_cache.get(user_id)
+        if state is None:
+            return bool(self.get_conversation_state(user_id).intervention_active)
+
+        session_id = state.session_db_id
+        if not session_id:
+            return bool(state.intervention_active)
+
+        self.db.expire_all()
+        row = (
+            self.db.query(DailyConversation)
+            .filter(DailyConversation.id == int(session_id))
+            .first()
+        )
+        if not row:
+            return bool(state.intervention_active)
+
+        raw = row.conversation_state or {}
+        if raw.get("intervention_active"):
+            state.intervention_active = True
+            state.intervention_id = raw.get("intervention_id")
+            state.intervention_trigger = raw.get("intervention_trigger")
+            state.intervention_reason = raw.get("intervention_reason")
+            state.intervention_created_at = raw.get("intervention_created_at")
+        return bool(state.intervention_active)
+
     def get_conversation_state(self, user_id: str) -> ConversationState:
         """Return the user's current (non-completed) conversation session, or start a new one."""
         if user_id in self.memory_cache:

@@ -468,6 +468,37 @@ class InstagramOAuthService:
             return False
         return True
 
+    def send_image(self, access_token: str, recipient_igsid: str, image_url: str) -> bool:
+        """Send a catalog photo in an Instagram DM. The URL must be publicly fetchable."""
+        token = (access_token or "").strip()
+        to = (recipient_igsid or "").strip()
+        url_value = (image_url or "").strip()
+        if not token or not to or not url_value:
+            return False
+        url = f"{self._versioned_graph()}/me/messages"
+        resp = requests.post(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "recipient": {"id": to},
+                "message": {
+                    "attachment": {
+                        "type": "image",
+                        "payload": {"url": url_value},
+                    }
+                },
+            },
+            timeout=30,
+        )
+        if resp.status_code >= 400:
+            logger.error(
+                "[IG] send image failed (%s): %s",
+                resp.status_code,
+                resp.text[:400],
+            )
+            return False
+        return True
+
     def encrypt_token(self, token: str) -> str:
         encrypted = encrypt_secret(token)
         if encrypted is None:

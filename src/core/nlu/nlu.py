@@ -27,7 +27,9 @@ from core.nlu.service.customer_shop import (
     catalog_items_from_products,
     classify_customer_shop_intent,
     format_customer_catalog,
+    is_questionish_product_name,
     is_shop_cancel,
+    looks_like_existing_order_question,
     is_shop_thanks,
     extract_product_query_name,
     leftover_is_generic_catalog_query,
@@ -112,10 +114,14 @@ class AutobusNLUSystem:
 
     @property
     def intent_detector(self):
-        """Merchant admin intent classification only. Customer sessions skip this."""
+        """LLM intent classification for merchant and customer sessions."""
         if self._intent_detector is None:
             self._intent_detector = IntentDetector()
         return self._intent_detector
+
+    def take_reply_images(self) -> List[str]:
+        """Product photos queued for this turn. Call once after process_message."""
+        return self.intent_processor.take_reply_images()
 
     FOLLOWUP_HELP_QUESTION = "Is there anything else I can help you with?"
     CONTINUE_HELP_PROMPT = "Sure — what else can I help you with?"
@@ -900,10 +906,12 @@ class AutobusNLUSystem:
             audio_media_id: WhatsApp media ID for audio
             audio_url: Direct URL to audio
         """
-        # Get conversation state
+        self.intent_processor.begin_reply_images()
+        # Get conversation state. Re-read the intervention flag from the database so an
+        # owner takeover made in the inbox pauses this process even if it cached the session.
         state = self.conversation_manager.get_conversation_state(user_id)
 
-        intervention_is_active = bool(getattr(state, "intervention_active", False))
+        intervention_is_active = self.conversation_manager.sync_intervention_from_db(user_id)
 
         # Flush agent replies before any history write — otherwise a stale in-memory
         # state can overwrite pending_customer_messages that the interventions API queued.
@@ -986,37 +994,68 @@ class AutobusNLUSystem:
         from core.nlu.config import INTENTS
 
         customer_catalog = []
+        if merchant_id and is_shop_cancel(user_message) and (state.current_intent or "") in CUSTOMER_SHOP_INTENTS:
+            state.current_intent = ""
+            state.collected_slots = {}
+            self.conversation_manager._save_conversation_state(state)
+            return self._ask_ending_question(user_id, "No problem — I cancelled that.")
         if merchant_id:
-            # Customer threads skip the large intent LLM. Shop questions use the
-            # live Product catalog; everything else stays on cheap conversational rules.
-            user_message = self._enrich_customer_channel_text(user_message, media_context)
-            if is_shop_cancel(user_message) and (state.current_intent or "") in CUSTOMER_SHOP_INTENTS:
-                state.current_intent = ""
-                state.collected_slots = {}
-                self.conversation_manager._save_conversation_state(state)
-                return self._ask_ending_question(user_id, "No problem — I cancelled that.")
             customer_catalog = self._load_customer_catalog(user_id)
-            intent, extracted_slots, missing_slots = self._classify_customer_channel_intent(
-                user_message,
-                media_context,
-                current_intent=state.current_intent,
-                collected_slots=state.collected_slots,
-                catalog=customer_catalog,
-            )
+
+        logger.info(
+            "Detecting intent for user %s (current_intent=%s customer=%s)",
+            user_id,
+            state.current_intent,
+            bool(merchant_id),
+        )
+        intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
+            user_message,
+            state.conversation_history,
+            state.current_intent,
+            media_context,
+            customer_session=bool(merchant_id),
+        )
+        if merchant_id:
+            photo_description = str((extracted_slots or {}).pop("photo_description", "") or "").strip()
+            stated_phones = []
+            try:
+                from utilities.phone_utils import extract_ghana_phone_numbers_from_text
+
+                stated_phones = extract_ghana_phone_numbers_from_text(user_message or "")
+            except Exception:
+                stated_phones = []
+            phone_only = bool(stated_phones) and len((user_message or "").split()) <= 4
+            if looks_like_existing_order_question(user_message) or (
+                phone_only and (state.current_intent or "") != "create_order"
+            ):
+                intent = "check_order_status"
+                extracted_slots = {}
+                missing_slots = []
+                state.collected_slots = {}
+            elif photo_description and intent in {"view_product", "view_products", "business_conversation", "create_order"}:
+                matches = resolve_catalog_query(photo_description, customer_catalog)
+                if len(matches) == 1:
+                    intent = "view_product"
+                    extracted_slots = {
+                        "product_name": matches[0].name,
+                        "product_id": matches[0].product_id,
+                    }
+                    missing_slots = []
+                elif is_questionish_product_name(str((extracted_slots or {}).get("product_name") or "")):
+                    intent = "view_products"
+                    extracted_slots = {}
+                    missing_slots = []
+            elif intent == "view_product" and is_questionish_product_name(
+                str((extracted_slots or {}).get("product_name") or "")
+            ):
+                intent = "view_products"
+                extracted_slots = {}
+                missing_slots = []
             logger.info(
-                "Customer session %s: skipped intent LLM, intent=%s slots=%s",
+                "Customer session %s: LLM intent=%s slots=%s",
                 user_id,
                 intent,
                 extracted_slots,
-            )
-        else:
-            logger.info(
-                "Detecting intent for user %s (current_intent=%s)",
-                user_id,
-                state.current_intent,
-            )
-            intent, extracted_slots, missing_slots = self.intent_detector.detect_intent_and_slots(
-                user_message, state.conversation_history, state.current_intent, media_context
             )
 
         if merchant_id:
@@ -1042,6 +1081,8 @@ class AutobusNLUSystem:
                 and intent in conversational_only
             ):
                 # Left the shop flow for greeting/FAQ — drop leftover order slots.
+                state.collected_slots = {}
+            if intent == "check_order_status":
                 state.collected_slots = {}
 
         if intent == "goodbye":
