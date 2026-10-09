@@ -25,6 +25,31 @@ def _headers(key: str) -> dict[str, str]:
     return {"X-Api-Key": key, "Content-Type": "application/json"}
 
 
+def email_exists(email: str) -> Optional[bool]:
+    """Whether this email is already a Green account.
+
+    None means the directory could not be checked, so signup can continue.
+    """
+    settings = _settings()
+    if settings is None or "@" not in (email or ""):
+        return None
+    base, key = settings
+    try:
+        response = requests.post(
+            f"{base}/v1/accounts/lookup",
+            json={"email": email.strip()},
+            headers=_headers(key),
+            timeout=5,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Green account lookup failed: %s", exc)
+        return None
+    if response.status_code != 200:
+        logger.warning("Green account lookup failed: %s", response.status_code)
+        return None
+    return bool(response.json().get("exists"))
+
+
 def authenticate(email: str, password: str) -> Optional[dict[str, Any]]:
     """Return account details when this email and password match a Green account."""
     settings = _settings()

@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 from core.auth.service.sessiondriver import SessionDriver
 from core.exceptions.AuthException import InvalidCredentialsError, LinkedBusinessLoginError
-from core.exceptions.UserException import UserAlreadyExistsError
+from core.exceptions.UserException import GreenAccountExistsError, UserAlreadyExistsError
 from core.user.model.User import User
 from core.notification.model.Notification import (
     Notification,
@@ -94,6 +94,8 @@ class AuthService:
     def create_user(self, request: BaseModel):
         """Create a new user in the database."""
         email = self.resolve_signup_email(request.email, request.phone)
+        if self._green_account_email_exists(email):
+            raise GreenAccountExistsError()
         username = (request.fullname or "").strip()
         existing_user = (
             self.db.query(User)
@@ -302,6 +304,17 @@ class AuthService:
             self._publish_green_account(db_user)
         payload = self.issue_session_tokens(db_user, db_user.id)
         return JSONResponse(status_code=200, content=payload)
+
+    def _green_account_email_exists(self, email: str) -> bool:
+        if "@" not in (email or "") or email.lower().endswith("@phone.useautobus.com"):
+            return False
+        try:
+            from core.auth.service.green_account_client import email_exists
+
+            return email_exists(email) is True
+        except Exception as exc:
+            logger.warning("Green account lookup failed for signup: %s", exc)
+            return False
 
     def _publish_green_account(self, db_user: User) -> None:
         try:
