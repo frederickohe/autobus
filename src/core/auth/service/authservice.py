@@ -198,6 +198,8 @@ class AuthService:
             else "User account created successfully, but we couldn't send your OTP. Please request a new OTP."
         )
 
+        self._publish_green_account(db_user)
+
         return {
             "message": otp_message,
             "user_id": db_user.id,
@@ -290,9 +292,92 @@ class AuthService:
 
     def signin(self, user: BaseModel):
         """Login the user by generating a JWT token and returning tokens."""
-        db_user = self.authenticate_user(user.login_identifier, user.password)
+        try:
+            db_user = self.authenticate_user(user.login_identifier, user.password)
+        except InvalidCredentialsError:
+            db_user = self._adopt_green_account(user.login_identifier, user.password)
+            if db_user is None:
+                raise
+        else:
+            self._publish_green_account(db_user)
         payload = self.issue_session_tokens(db_user, db_user.id)
         return JSONResponse(status_code=200, content=payload)
+
+    def _publish_green_account(self, db_user: User) -> None:
+        try:
+            from core.auth.service.green_account_client import publish_user
+
+            publish_user(db_user)
+        except Exception as exc:
+            logger.warning("Green account publish failed for %s: %s", getattr(db_user, "id", ""), exc)
+
+    def _adopt_green_account(self, identifier: str, password: str) -> Optional[User]:
+        """Create or unlock the local user when the Green account password matches."""
+        from core.auth.service.green_account_client import authenticate
+        from core.user.model.User import UserStatus
+
+        account = authenticate(identifier, password)
+        if account is None:
+            return None
+        email = (account.get("email") or "").strip()
+        if not email:
+            return None
+
+        db_user = (
+            self.db.query(User)
+            .filter(func.lower(User.email) == email.lower())
+            .first()
+        )
+        if db_user is not None:
+            if str(getattr(db_user, "status", "") or "").upper() == UserStatus.DELETED.value:
+                return None
+            if db_user.managed_by_user_id:
+                raise LinkedBusinessLoginError()
+            db_user.hashed_password = self.hash_password(password)
+            db_user.enabled = True
+            db_user.updated_at = datetime.now(timezone.utc)
+            self.db.commit()
+            self.db.refresh(db_user)
+            self._publish_green_account(db_user)
+            return db_user
+
+        fullname = self._unique_fullname(account.get("display_name") or email.split("@")[0])
+        db_user = User(
+            id=self.generate_user_id(),
+            fullname=fullname,
+            phone=account.get("phone"),
+            email=email,
+            hashed_password=self.hash_password(password),
+            ghana_card=account.get("ghana_card"),
+            onboarding_completed=False,
+            enabled=True,
+            created_at=datetime.now(timezone.utc),
+        )
+        self.db.add(db_user)
+        self.db.commit()
+        self.db.refresh(db_user)
+        try:
+            from core.credits.service.credit_service import CreditService
+
+            CreditService(self.db).grant_starter_credits(db_user.id)
+        except Exception as exc:
+            logger.warning("Starter credits not granted for adopted user %s: %s", db_user.id, exc)
+        self._publish_green_account(db_user)
+        return db_user
+
+    def _unique_fullname(self, preferred: str) -> str:
+        base = (preferred or "Green Account").strip() or "Green Account"
+        candidate = base
+        suffix = 2
+        while (
+            self.db.query(User)
+            .filter(func.lower(User.fullname) == candidate.lower())
+            .first()
+            is not None
+        ):
+            candidate = f"{base} {suffix}"
+            suffix += 1
+        return candidate
 
     def unlink_managed_account(self, db_user: User) -> bool:
         """Clear managed_by so the account can sign in independently. Returns True if it was linked."""
@@ -445,6 +530,7 @@ class AuthService:
             db_user.hashed_password = self.hash_password(request.new_password)
             self.unlink_managed_account(db_user)
             self.db.commit()
+            self._publish_green_account(db_user)
             
             # Invalidate all existing tokens
             self.session_driver.remove_tokens(email)
@@ -519,6 +605,7 @@ class AuthService:
                 db_user.enabled = True
             self.unlink_managed_account(db_user)
             self.db.commit()
+            self._publish_green_account(db_user)
             if db_user.email:
                 self.session_driver.remove_tokens(db_user.email)
 
