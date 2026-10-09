@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from fastapi import status
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from core.auth.service.sessiondriver import SessionDriver
 from core.exceptions.AuthException import InvalidCredentialsError, LinkedBusinessLoginError
 from core.exceptions.UserException import UserAlreadyExistsError
@@ -17,6 +18,7 @@ from core.notification.model.Notification import (
     NotificationType,
 )
 from core.otp.service.otpservice import OTPService
+import re
 import secrets
 import string
 import logging
@@ -50,14 +52,56 @@ class AuthService:
         alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for i in range(20))
 
+    @staticmethod
+    def resolve_signup_email(email: Optional[str], phone: Optional[str]) -> str:
+        """Never persist a blank email. JWT subject is the email, and a blank
+        subject is rejected by onboarding and other authenticated routes.
+        """
+        cleaned = (email or "").strip()
+        if cleaned:
+            if "@" not in cleaned or cleaned.startswith("@") or cleaned.endswith("@"):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A valid email is required",
+                )
+            return cleaned
+        digits = re.sub(r"\D", "", phone or "")
+        if len(digits) < 9:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email or phone is required",
+            )
+        return f"{digits}@phone.useautobus.com"
+
+    @staticmethod
+    def session_subject(user: User) -> str:
+        """Subject stored in access and refresh tokens. Never blank."""
+        email = (getattr(user, "email", None) or "").strip()
+        if email:
+            return email
+        user_id = (getattr(user, "id", None) or "").strip()
+        if user_id:
+            return user_id
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Could not issue a session",
+        )
+
     def _generate_notification_id(self) -> str:
         alphabet = string.ascii_letters + string.digits
         return "".join(secrets.choice(alphabet) for i in range(16))
 
     def create_user(self, request: BaseModel):
         """Create a new user in the database."""
-        email = (request.email or "").strip()
+        email = self.resolve_signup_email(request.email, request.phone)
         username = (request.fullname or "").strip()
+        provided_email = (request.email or "").strip()
+        if not provided_email and getattr(request, "phone", None):
+            existing_phone = (
+                self.db.query(User).filter(User.phone == request.phone).first()
+            )
+            if existing_phone:
+                raise UserAlreadyExistsError(field="phone")
         existing_user = (
             self.db.query(User)
             .filter(
@@ -79,7 +123,7 @@ class AuthService:
             id=user_id,
             fullname=request.fullname,
             phone=request.phone,
-            email=request.email,
+            email=email,
             hashed_password=self.hash_password(request.password),
             profile_picture_url=request.profile_picture_url,
             
@@ -195,11 +239,16 @@ class AuthService:
         self.db.commit()
         self.db.refresh(user)
 
-        return {
+        payload = {
             "success": True,
             "message": "Phone number verified successfully. Your account is now active.",
-            "user_id": user.id
+            "user_id": user.id,
         }
+        try:
+            payload.update(self.issue_session_tokens(user, user.id, status="Phone verified"))
+        except Exception as e:
+            logger.error("Could not issue session after OTP for %s: %s", user.id, e)
+        return payload
            
     def authenticate_user(self, identifier: str, password: str):
         identifier = identifier.strip()
@@ -231,7 +280,7 @@ class AuthService:
 
     def issue_session_tokens(self, user: User, manager_id: str, status: str = "Login successful"):
         """Mint access + refresh tokens with active-business `sub` and session `mgr`."""
-        claims = {"sub": user.email, "mgr": manager_id}
+        claims = {"sub": self.session_subject(user), "mgr": manager_id}
         access_token = self.session_driver.create_access_token(
             data=claims,
             expires_delta=timedelta(minutes=self.session_driver.ACCESS_TOKEN_EXPIRE_MINUTES),

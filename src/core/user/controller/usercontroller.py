@@ -15,6 +15,7 @@ from core.auth.dependencies import (
     get_current_user as get_current_user_orm,
     require_admin,
     require_self_or_admin,
+    resolve_user_from_jwt,
 )
 
 # Re-export for callers that historically imported validate_token / get_db from here
@@ -61,13 +62,9 @@ def get_db():
 
 @user_routes.get("/me", response_model=UserResponse)
 def get_current_user_endpoint(authjwt: AuthJWT = Depends(validate_token), db: Session = Depends(get_db)):
-    # Get the current user's email/subject from the JWT
-    current_user_email = authjwt.get_jwt_subject()
-    
+    user = resolve_user_from_jwt(authjwt, db)
     user_service = UserService(db)
-    
-    # Use the email to get the user
-    return user_service.get_current_user(current_user_email)
+    return user_service.get_current_user(user.id)
 
 
 @user_routes.get("/me/emails/sent", response_model=SentEmailsResponse)

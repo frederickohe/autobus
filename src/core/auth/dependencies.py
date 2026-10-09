@@ -107,9 +107,15 @@ def resolve_session_manager(authjwt: AuthJWT, db: Session, current_user: User) -
 
 
 def resolve_user_from_jwt(authjwt: AuthJWT, db: Session) -> User:
-    subject = authjwt.get_jwt_subject()
+    subject = (authjwt.get_jwt_subject() or "").strip()
     if not subject:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
+        # Phone-only signups used to mint tokens with an empty email subject.
+        # The session manager id (`mgr`) is still the account id.
+        subject = str(get_jwt_claims(authjwt).get("mgr") or "").strip()
+        if subject:
+            logger.warning("JWT subject was blank; resolved the session from the mgr claim")
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
     user = db.query(User).filter(User.email == subject).first()
     if not user:
         user = db.query(User).filter(User.id == subject).first()
