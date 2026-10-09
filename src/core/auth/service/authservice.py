@@ -95,7 +95,17 @@ class AuthService:
         """Create a new user in the database."""
         email = self.resolve_signup_email(request.email, request.phone)
         if self._green_account_email_exists(email):
-            raise GreenAccountExistsError()
+            adopted = self._adopt_green_account(email, request.password)
+            if adopted is None:
+                raise GreenAccountExistsError()
+            self._keep_signup_extras(adopted, request)
+            return {
+                "message": "Your Green Account is on Autobus. You can add the rest of your business details next.",
+                "user_id": adopted.id,
+                "verification_required": False,
+                "adopted": True,
+                "otp_sent": False,
+            }
         username = (request.fullname or "").strip()
         existing_user = (
             self.db.query(User)
@@ -304,6 +314,28 @@ class AuthService:
             self._publish_green_account(db_user)
         payload = self.issue_session_tokens(db_user, db_user.id)
         return JSONResponse(status_code=200, content=payload)
+
+    def _keep_signup_extras(self, db_user: User, request: BaseModel) -> None:
+        """Keep Autobus-only answers from the form. Identity stays with Green Account."""
+        changed = False
+        company = (getattr(request, "company", None) or "").strip()
+        if company and not (db_user.company or "").strip():
+            db_user.company = company
+            changed = True
+        phone = (getattr(request, "phone", None) or "").strip()
+        if phone and not (db_user.phone or "").strip():
+            db_user.phone = phone
+            changed = True
+        card = (getattr(request, "ghana_card", None) or "").strip()
+        if card and not card.startswith("GHA--") and not (db_user.ghana_card or "").strip():
+            db_user.ghana_card = card
+            changed = True
+        if not changed:
+            return
+        db_user.updated_at = datetime.now(timezone.utc)
+        self.db.commit()
+        self.db.refresh(db_user)
+        self._publish_green_account(db_user)
 
     def _green_account_email_exists(self, email: str) -> bool:
         if "@" not in (email or "") or email.lower().endswith("@phone.useautobus.com"):
