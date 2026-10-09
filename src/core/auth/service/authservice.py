@@ -95,13 +95,6 @@ class AuthService:
         """Create a new user in the database."""
         email = self.resolve_signup_email(request.email, request.phone)
         username = (request.fullname or "").strip()
-        phone = (getattr(request, "phone", None) or "").strip()
-        if phone:
-            existing_phone = (
-                self.db.query(User).filter(User.phone == phone).first()
-            )
-            if existing_phone:
-                raise UserAlreadyExistsError(field="phone")
         existing_user = (
             self.db.query(User)
             .filter(
